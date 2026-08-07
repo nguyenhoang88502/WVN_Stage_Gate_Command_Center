@@ -110,6 +110,11 @@ const UK = 'wvn-epm-user';
 function getUser() { try { return localStorage.getItem(UK) || ''; } catch (e) { return ''; } }
 function setUser(v) { try { localStorage.setItem(UK, v); } catch (e) { } }
 function isAdmin() { return (getUser() || '').toLowerCase() === 'admin'; }
+function isModerator() {
+  const u = (getUser() || '').toLowerCase();
+  return (CFG.moderators || []).some(function(m) { return String(m).toLowerCase() === u; });
+}
+function isPrivileged() { return isAdmin() || isModerator(); }
 
 async function refresh() {
   const d = await API.data();
@@ -858,8 +863,9 @@ function gateState(project, proc, step) {
   else if (gate && gate.status === 'InProgress') status = 'IN_PROGRESS';
   else if (active.length && missing.length < active.length) status = 'IN_PROGRESS';
   const done = !!(approval || bypass);
-  const canApprove = gated && !approval && missing.length === 0 && blocking.length === 0 && whOk && !priorOpen.length;
-  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, needWh, whOk, gated, status, done, canApprove, priorOpen };
+  const priorBlocks = priorOpen.length > 0 && !isPrivileged();
+  const canApprove = gated && !approval && missing.length === 0 && blocking.length === 0 && whOk && !priorBlocks;
+  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, needWh, whOk, gated, status, done, canApprove, priorOpen, priorBlocks };
 }
 function progressOf(project) {
   const proc = project.process, steps = stepsOf(proc, project);
@@ -2065,7 +2071,7 @@ function openDrawer(project, step, focusDocCode) {
   stageClaimWrap.appendChild(makeClaimButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(who, role) {
     // Badges are already rendered by makeClaimButton; no manual update needed
   }));
-  if (isAdmin()) {
+  if (isPrivileged()) {
     // makeAssignButton mutates gateRow in place but has no DOM of its own to
     // refresh - makeClaimButton's badges are a closure-private renderBadges()
     // it doesn't expose, so the simplest correct refresh is to reopen this
@@ -2192,7 +2198,7 @@ function openDrawer(project, step, focusDocCode) {
       // Claim button per deliverable — writes owner_pic/claimed_by on the existing row
       var delClaimBtn = makeClaimButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(who) {});
       tr.lastChild.appendChild(delClaimBtn);
-      if (isAdmin()) {
+      if (isPrivileged()) {
         var delAssignBtn = makeAssignButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(target, isPrimary, admin) {
           if (isPrimary) {
             delClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
@@ -2299,7 +2305,7 @@ function openDrawer(project, step, focusDocCode) {
       var dzRow = TRK.lb_deliverables.find(function(d) { return d.project_id === project.project_id && d.step_key === sk && d.doc_code === code; }) || { project_id: project.project_id, step_key: sk, doc_code: code };
       dz.appendChild(el('br'));
       dz.appendChild(makeClaimButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function(who, role) {}));
-      if (isAdmin()) {
+      if (isPrivileged()) {
         dz.appendChild(makeAssignButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() {
           openDrawer(project, step, code);
         }));
@@ -2489,7 +2495,7 @@ function openDrawer(project, step, focusDocCode) {
       div.innerHTML = '• <b>Issue</b> ' + esc(i.description) + (i.owner ? ' — ' + esc(i.owner) : '');
       var issueClaimBtn = makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function(who) {});
       div.appendChild(issueClaimBtn);
-      if (isAdmin()) {
+      if (isPrivileged()) {
         div.appendChild(makeAssignButton('Issue', 'lb_issues', i, ['issue_id'], function(target, isPrimary, admin) {
           if (isPrimary) {
             issueClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
@@ -4068,7 +4074,7 @@ function gateActions(project, proc, step, g, redraw) {
       const ap = el('button', g.canApprove ? 'primary' : '', 'Approve step ' + step.step_id);
       ap.disabled = !g.canApprove;
       ap.title = g.canApprove ? 'Sign this gate'
-        : g.priorOpen.length ? 'step ' + g.priorOpen.map(s => s.step_id).join(', ') + ' must close first'
+        : g.priorBlocks ? 'step ' + g.priorOpen.map(s => s.step_id).join(', ') + ' must close first'
         : !g.whOk ? 'warehouse clearance outstanding'
         : g.missing.length ? g.missing.length + ' required document(s) missing'
         : 'blocking issue open';
@@ -4153,11 +4159,17 @@ function stepCard(project, proc, step, redraw) {
       '<br>Reason: ' + esc(g.bypass.reason) + '<br>Mitigation: ' + esc(g.bypass.mitigation) + (g.bypass.supersede_by ? '<br>Expected superseded by ' + esc(g.bypass.supersede_by) : '');
     body.appendChild(bb);
   }
-  if (g.priorOpen.length && !g.done) {
+  if (g.priorBlocks) {
     const pb = el('div', 'banner warn');
     pb.innerHTML = '<b>Blocked by an earlier gate.</b> Step ' + g.priorOpen.map(s => s.step_id + ' (' + esc(s.step_name) + ')').join(', ') +
       ' must be signed or bypassed before this one can close.';
     body.appendChild(pb);
+  }
+  if (g.priorOpen.length && !g.done && !g.priorBlocks) {
+    const sw = el('div', 'banner warn');
+    sw.innerHTML = '<b>Prior Step Open</b> Step ' + g.priorOpen.map(s => s.step_id + ' (' + esc(s.step_name) + ')').join(', ') +
+      ' — approval is still permitted because the user is a moderator/admin.';
+    body.appendChild(sw);
   }
   if (g.needWh) {
     const w = el('div', 'banner ' + (g.whOk ? '' : 'warn'));
@@ -4631,20 +4643,21 @@ function viewSettings(root) {
     const t = el('div', 'tagrow');
     t.innerHTML = '<span><b>' + esc(d.doctype_id) + '</b> — ' + esc(d.name) +
       ' <span class="note">· required at: ' + esc(d.stage_required || 'not gated') + '</span></span>';
-    // Template file selector (per-doctype)
-    var tmplSel = el('select');
-    tmplSel.style.cssText = 'margin-left:8px;font-size:12px;min-width:160px;height:26px';
-    tmplSel.innerHTML = '<option value="">(no template)</option>' +
-      TEMPLATES.map(function(tm) { return '<option value="' + esc(tm.name) + '"' + (d.template_file === tm.name ? ' selected' : '') + '>' + esc(tm.name) + '</option>'; }).join('');
-    tmplSel.onchange = async function() {
-      var who = requireName(); if (!who) { tmplSel.value = d.template_file || ''; return; }
-      try {
-        var updated = Object.assign({}, d, { template_file: tmplSel.value || null });
-        await API.doctype('add', updated, null, who);
-        await redrawAfterWrite();
-      } catch (e) { alert('Could not save: ' + e.message); }
-    };
-    t.appendChild(tmplSel);
+    if (isPrivileged()) {
+      var tmplSel = el('select');
+      tmplSel.style.cssText = 'margin-left:8px;font-size:12px;min-width:160px;height:26px';
+      tmplSel.innerHTML = '<option value="">(no template)</option>' +
+        TEMPLATES.map(function(tm) { return '<option value="' + esc(tm.name) + '"' + (d.template_file === tm.name ? ' selected' : '') + '>' + esc(tm.name) + '</option>'; }).join('');
+      tmplSel.onchange = async function() {
+        var who = requireName(); if (!who) { tmplSel.value = d.template_file || ''; return; }
+        try {
+          var updated = Object.assign({}, d, { template_file: tmplSel.value || null });
+          await API.doctype('add', updated, null, who);
+          await redrawAfterWrite();
+        } catch (e) { alert('Could not save: ' + e.message); }
+      };
+      t.appendChild(tmplSel);
+    }
     const edit = el('button', null, '✎');
     edit.title = 'Edit this document type';
     edit.style.color = 'var(--blue)';
@@ -4714,6 +4727,56 @@ function viewSettings(root) {
   dpBody.appendChild(daddBtn);
   dpBody.appendChild(dCancelBtn);
   dp.appendChild(dpBody); root.appendChild(dp);
+
+  /* ---- moderators ---- */
+  const mp = el('div', 'card');
+  const mpHdr = el('div', 'card-header'); mpHdr.appendChild(el('h3', 'card-title', 'Moderators')); mp.appendChild(mpHdr);
+  const mpBody = el('div', 'card-body');
+  mpBody.appendChild(el('p', 'note', 'Moderators inherit admin rights: parallel gate sign-off, task assignment, and settings edits.'));
+  var modList = el('div', 'taglist');
+  (CFG.moderators || []).forEach(function(m) {
+    var row = el('div', 'tagrow');
+    row.innerHTML = '<span><b>' + esc(m) + '</b></span>';
+    if (isAdmin()) {
+      var rmBtn = el('button', null, '×');
+      rmBtn.title = 'Remove moderator';
+      rmBtn.onclick = function() {
+        confirmModal('Remove Moderator', 'Remove <b>' + esc(m) + '</b> from moderators?', 'Remove', async function() {
+          var newList = (CFG.moderators || []).filter(function(x) { return x !== m; });
+          try {
+            var r = await API.post('/api/config/moderators', { user: getUser(), moderators: newList });
+            CFG.moderators = r.moderators || [];
+            viewSettings(root);
+          } catch (e) { alert('Could not save: ' + e.message); }
+        });
+      };
+      row.appendChild(rmBtn);
+    }
+    modList.appendChild(row);
+  });
+  mpBody.appendChild(modList);
+  if (isAdmin()) {
+    var addRow = el('div');
+    addRow.style.cssText = 'margin-top:8px;display:flex;gap:6px;';
+    var modInput = el('input');
+    modInput.placeholder = 'Enter user name';
+    modInput.style.cssText = 'flex:1';
+    var modAddBtn = el('button', 'primary', 'Add');
+    modAddBtn.onclick = async function() {
+      var name = modInput.value.trim();
+      if (!name) return;
+      try {
+        var newList = (CFG.moderators || []).concat([name]);
+        var r = await API.post('/api/config/moderators', { user: getUser(), moderators: newList });
+        CFG.moderators = r.moderators || [];
+        viewSettings(root);
+      } catch (e) { alert('Could not save: ' + e.message); }
+    };
+    addRow.appendChild(modInput);
+    addRow.appendChild(modAddBtn);
+    mpBody.appendChild(addRow);
+  }
+  mp.appendChild(mpBody); root.appendChild(mp);
 
   /* ---- issue tracker CSV header labels ---- */
   const hp = el('div', 'card');
