@@ -1126,3 +1126,12 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
     display: none !important;
   }
 }
+
+/* v4.1 — removed (soft-deleted) requirement, and the in-dropzone blank
+   template download link. Both are additive; neither restyles anything. */
+.matrix-removed { text-decoration: line-through; opacity: .7; }
+.dz-template-btn {
+  margin-left: 8px; font-size: 12px; color: var(--blue);
+  text-decoration: none; border: 1px solid var(--line);
+  padding: 4px 10px; border-radius: var(--r1); display: inline-block;
+}
