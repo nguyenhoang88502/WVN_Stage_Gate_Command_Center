@@ -108,6 +108,7 @@ const WH_AREAS = ['Assembly', 'Blade', 'Molding (material)', 'Mold storage', 'Fi
 const UK = 'wvn-epm-user';
 function getUser() { try { return localStorage.getItem(UK) || ''; } catch (e) { return ''; } }
 function setUser(v) { try { localStorage.setItem(UK, v); } catch (e) { } }
+function isAdmin() { return (getUser() || '').toLowerCase() === 'admin'; }
 
 async function refresh() {
   const d = await API.data();
@@ -183,17 +184,23 @@ function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
   var ownerBadge = null;
   var supporterBadge = null;
 
+  // Owner/Supporter badges carry an "(Assigned by X)" suffix instead of the
+  // plain "Claimed by"/"Supporter:" wording whenever assigned_by is set -
+  // i.e. an admin placed this person here rather than them self-claiming.
   function renderBadges() {
     if (ownerBadge) { ownerBadge.remove(); ownerBadge = null; }
     if (supporterBadge) { supporterBadge.remove(); supporterBadge = null; }
     const own = row.owner_pic || row.claimed_by || '';
     const sup = row.supporter_pic || row.supporter_by || '';
+    const assignedBy = row.assigned_by || '';
     if (own) {
-      ownerBadge = el('span', 'claim-badge ' + badgeClass('FILED'), 'Owner: ' + own);
+      const ownerText = assignedBy ? 'Owner: ' + own + ' (Assigned by ' + assignedBy + ')' : 'Owner: ' + own;
+      ownerBadge = el('span', 'claim-badge ' + badgeClass('FILED'), ownerText);
       wrap.appendChild(ownerBadge);
     }
     if (sup) {
-      supporterBadge = el('span', 'claim-badge badge bg-teal-lt', 'Supporter: ' + sup);
+      const supText = assignedBy ? 'Supporter: ' + sup + ' (Assigned by ' + assignedBy + ')' : 'Supporter: ' + sup;
+      supporterBadge = el('span', 'claim-badge badge bg-teal-lt', supText);
       wrap.appendChild(supporterBadge);
     }
   }
@@ -272,6 +279,64 @@ function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
     btn.disabled = false;
   };
   return wrap;
+}
+/* ---- admin assign button builder -----------------------------------------
+   When isAdmin() is true, renders an "Assign Task" button next to each claim
+   button.  On click it prompts for a target user and whether they become
+   Primary Owner or Supporter, then writes the assignment via API.action. */
+function makeAssignButton(objType, store, row, upsertKeys, onAfterAssign) {
+  const btn = el('button', '', 'Assign Task');
+  btn.style.cssText = 'margin-left:4px';
+  btn.onclick = async function() {
+    const admin = requireName(); if (!admin) return;
+    const target = prompt('Assign to whom? Enter the target user\'s name:');
+    if (!target || !target.trim()) return;
+    const targetName = target.trim();
+    const isPrimary = confirm('Assign as Primary Owner?\n\nOK = Primary Owner\nCancel = Supporter');
+    btn.disabled = true;
+    const now = new Date().toISOString();
+    try {
+      const rowData = Object.assign({}, row);
+      if (isPrimary) {
+        rowData.owner_pic = targetName;
+        rowData.claimed_by = targetName;
+        rowData.claimed_utc = now;
+      } else {
+        rowData.supporter_pic = targetName;
+        rowData.supporter_by = targetName;
+        rowData.supporter_utc = now;
+      }
+      rowData.assigned_by = admin;
+      rowData.assigned_utc = now;
+      if (store === 'lb_gates') {
+        if (!rowData.process) rowData.process = '';
+        if (!rowData.step_num) rowData.step_num = '';
+        if (!rowData.step_name) rowData.step_name = '';
+        if (!rowData.status) rowData.status = 'NotStarted';
+        rowData.updated_utc = new Date().toISOString();
+      }
+      await API.action(store, rowData, {
+        upsertKeys: upsertKeys,
+        audit: { user: admin, action: 'Assign_Task_Admin', projectId: row.project_id, objType: objType,
+          objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+          from: '', to: targetName, detail: isPrimary ? 'Primary Owner' : 'Supporter' }
+      });
+      if (isPrimary) {
+        row.owner_pic = targetName;
+        row.claimed_by = targetName;
+        row.claimed_utc = now;
+      } else {
+        row.supporter_pic = targetName;
+        row.supporter_by = targetName;
+        row.supporter_utc = now;
+      }
+      row.assigned_by = admin;
+      row.assigned_utc = now;
+      if (onAfterAssign) onAfterAssign(targetName, isPrimary, admin);
+    } catch (e) { alert('Assignment failed: ' + e.message); }
+    btn.disabled = false;
+  };
+  return btn;
 }
 const projectsOf = proc => TRK.lb_projects.filter(p => p.process === proc);
 const projById = id => TRK.lb_projects.find(p => p.project_id === id);
@@ -1623,6 +1688,16 @@ function openDrawer(project, step, focusDocCode) {
   stageClaimWrap.appendChild(makeClaimButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(who, role) {
     // Badges are already rendered by makeClaimButton; no manual update needed
   }));
+  if (isAdmin()) {
+    // makeAssignButton mutates gateRow in place but has no DOM of its own to
+    // refresh - makeClaimButton's badges are a closure-private renderBadges()
+    // it doesn't expose, so the simplest correct refresh is to reopen this
+    // same drawer, which rebuilds everything (including the button above)
+    // from the now-updated gateRow/project state.
+    stageClaimWrap.appendChild(makeAssignButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function() {
+      openDrawer(project, step, focusDocCode);
+    }));
+  }
   d.appendChild(stageClaimWrap);
   if (step.source_note) {
     const sn = el('p', 'note'); sn.innerHTML = '<b>Source note:</b> ' + esc(step.source_note); d.appendChild(sn);
@@ -1730,6 +1805,15 @@ function openDrawer(project, step, focusDocCode) {
       // Claim button per deliverable — writes owner_pic/claimed_by on the existing row
       var delClaimBtn = makeClaimButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(who) {});
       tr.lastChild.appendChild(delClaimBtn);
+      if (isAdmin()) {
+        var delAssignBtn = makeAssignButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(target, isPrimary, admin) {
+          if (isPrimary) {
+            delClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
+            delClaimBtn.className = 'claimed-btn';
+          }
+        });
+        tr.lastChild.appendChild(delAssignBtn);
+      }
       tb.appendChild(tr);
       // Preview card for filed evidence (non-link rows only)
       var viewerUrl = evidenceViewerUrl(x.file_path);
@@ -1895,7 +1979,16 @@ function openDrawer(project, step, focusDocCode) {
     iss.forEach(function(i) {
       var div = el('div', 'note claim-issue-row');
       div.innerHTML = '• <b>Issue</b> ' + esc(i.description) + (i.owner ? ' — ' + esc(i.owner) : '');
-      div.appendChild(makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function(who) {}));
+      var issueClaimBtn = makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function(who) {});
+      div.appendChild(issueClaimBtn);
+      if (isAdmin()) {
+        div.appendChild(makeAssignButton('Issue', 'lb_issues', i, ['issue_id'], function(target, isPrimary, admin) {
+          if (isPrimary) {
+            issueClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
+            issueClaimBtn.className = 'claimed-btn';
+          }
+        }));
+      }
       ul.appendChild(div);
     });
     tks.forEach(k => ul.insertAdjacentHTML('beforeend', '<div class="note">• <b>Ticket ' + esc(k.ticket_id) + '</b> ' + esc(k.title) + ' — ' + esc(k.assigned_dept || 'unassigned') + ' (' + esc(k.status) + ')</div>'));
@@ -1980,7 +2073,8 @@ function viewClaimed(root) {
       priorityOrder: 2,
       status: g.status || 'NotStarted',
       step: step || { step_id: 0, step_name: '' },
-      project: prj
+      project: prj,
+      assignedBy: g.assigned_by || ''
     });
   });
 
@@ -2007,7 +2101,8 @@ function viewClaimed(root) {
       priorityOrder: 2,
       status: d.approved === 'YES' ? 'APPROVED' : 'FILED',
       step: step || { step_id: 0, step_name: '' },
-      project: prj
+      project: prj,
+      assignedBy: d.assigned_by || ''
     });
   });
 
@@ -2027,7 +2122,8 @@ function viewClaimed(root) {
       priorityOrder: PRIORITY_ORDER[prio] != null ? PRIORITY_ORDER[prio] : 4,
       status: i.status || 'Open',
       step: null,
-      project: prj || null
+      project: prj || null,
+      assignedBy: i.assigned_by || ''
     });
   });
 
@@ -2054,7 +2150,8 @@ function viewClaimed(root) {
       priorityOrder: PRIORITY_ORDER[prio] != null ? PRIORITY_ORDER[prio] : 4,
       status: i.status || 'Open',
       step: step || null,
-      project: prj || null
+      project: prj || null,
+      assignedBy: i.assigned_by || ''
     });
   });
 
@@ -2091,7 +2188,7 @@ function viewClaimed(root) {
 
     tr.innerHTML = '<td><b>' + esc(item.projectId) + '</b></td>' +
       '<td><span class="note">' + esc(item.type) + '</span></td>' +
-      '<td>' + esc(item.label) + '</td>' +
+      '<td>' + esc(item.label) + (item.assignedBy ? ' <span class="badge bg-primary" style="font-size:10px">Assigned by Admin</span>' : '') + '</td>' +
       '<td class="' + (overdue ? 'claimed-overdue' : '') + '">' + esc(twDisplay) + '</td>' +
       '<td>' + esc(item.priority) + '</td>' +
       '<td><span class="' + badgeClass(item.status) + '">' + esc(item.status.replace(/_/g, ' ')) + '</span></td>';
