@@ -887,6 +887,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
   white-space: nowrap; vertical-align: middle;
 }
 
+/* -- matrix cell percentage — bold first-line summary of step/doc completion -- */
+.matrix-pct { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; line-height: 1.3 }
+.matrix-pct strong { font-weight: 750; letter-spacing: -.02em }
+.matrix-pct-sub { font-size: 10.5px; font-weight: 400; color: var(--muted) }
+.matrix-pct-na { font-size: 11px; font-weight: 500; color: var(--muted); font-style: italic }
+
 /* -- dark theme overrides ------------------------------------------------ */
 html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hover) }
 
