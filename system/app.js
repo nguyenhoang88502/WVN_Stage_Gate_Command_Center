@@ -1516,6 +1516,17 @@ async function uploadEvidence(project, stepKey, docCode, file) {
   }, { audit: { user: who, action: 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: 'MISSING', to: 'Filed', detail: docCode } });
 }
 
+/* ---- evidence viewer URL builder ---------------------------------------- */
+function evidenceViewerUrl(filePath) {
+  if (!filePath || !PATHS.vault) return null;
+  var abs = filePath.replace(/\\/g, '/');
+  var vault = PATHS.vault.replace(/\\/g, '/');
+  if (abs.indexOf(vault) !== 0) return null;
+  var rel = abs.slice(vault.length).replace(/^\//, '');
+  var encoded = rel.split('/').map(function(s) { return encodeURIComponent(s); }).join('/');
+  return '/api/vault/view/' + encoded;
+}
+
 /* ---- executive inspection drawer ---------------------------------------- */
 function closeDrawer() {
   const d = $('#drawer'); if (d) d.remove();
@@ -1664,6 +1675,35 @@ function openDrawer(project, step, focusDocCode) {
       var delClaimBtn = makeClaimButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(who) {});
       tr.lastChild.appendChild(delClaimBtn);
       tb.appendChild(tr);
+      // Preview card for filed evidence (non-link rows only)
+      var viewerUrl = evidenceViewerUrl(x.file_path);
+      if (viewerUrl) {
+        var ext = (x.file_name || x.original_name || '').split('.').pop().toLowerCase();
+        var imgExts = { jpg: 1, jpeg: 1, png: 1, webp: 1, gif: 1 };
+        var pr = el('tr');
+        var ptd = el('td');
+        ptd.colSpan = 5;
+        ptd.style.padding = '6px 0 10px 0';
+        if (imgExts[ext]) {
+          var aLink = el('a', 'evidence-thumb');
+          aLink.href = viewerUrl; aLink.target = '_blank'; aLink.rel = 'noopener';
+          var img = el('img');
+          img.src = viewerUrl;
+          img.style.cssText = 'max-width:100%;max-height:180px;object-fit:contain;display:block';
+          img.alt = x.file_name || 'evidence';
+          aLink.appendChild(img);
+          ptd.appendChild(aLink);
+        } else {
+          var fLink = el('a', 'evidence-filecard');
+          fLink.href = viewerUrl; fLink.target = '_blank'; fLink.rel = 'noopener';
+          fLink.innerHTML = '<span class="evidence-filecard-ext">' + esc(ext.toUpperCase() || 'FILE') + '</span>' +
+            '<span class="evidence-filecard-name">' + esc(x.file_name || x.original_name || '') + '</span>' +
+            '<span class="evidence-filecard-type">' + esc(x.doc_code) + '</span>';
+          ptd.appendChild(fLink);
+        }
+        pr.appendChild(ptd);
+        tb.appendChild(pr);
+      }
       const notes = commentsFor(project.project_id, x.deliverable_id);
       if (notes.length) {
         const nr = el('tr');

@@ -951,6 +951,36 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 /* model custom label in evidence lists */
 .custom-mark { font-style: italic; }
 
+/* evidence preview cards in sidebar drawer */
+.evidence-thumb {
+  display: inline-block; border: 1px solid var(--line);
+  border-radius: var(--r2); overflow: hidden;
+  transition: box-shadow .12s;
+}
+.evidence-thumb:hover { box-shadow: 0 0 0 2px var(--blue2); }
+.evidence-thumb img { vertical-align: bottom; }
+
+.evidence-filecard {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  border: 1px solid var(--line); border-radius: var(--r2);
+  padding: var(--s2) var(--s3); text-decoration: none;
+  color: var(--ink); background: var(--soft);
+  transition: box-shadow .12s;
+}
+.evidence-filecard:hover { box-shadow: 0 0 0 2px var(--blue2); }
+.evidence-filecard-ext {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 40px; height: 28px; padding: 0 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+  color: #fff; background: var(--steel); border-radius: 3px;
+}
+.evidence-filecard-name {
+  font-size: 12px; font-weight: 600; color: var(--ink);
+}
+.evidence-filecard-type {
+  font-size: 11px; color: var(--muted);
+}
+
 /* claimed-work overdue row */
 .claimed-overdue {
   color: var(--bad); font-weight: 600;
