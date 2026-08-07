@@ -952,11 +952,29 @@ function Get-ReportData {
   $config = Get-Config
   $nowWeek = Get-NowWeek
 
+  # The dashboard slicers are multi-select (v4.1), so each filter arrives as a
+  # comma-separated list. Compared as a single literal, "A,B" matched nothing
+  # and a two-value slicer selection silently produced an empty report.
+  function Convert-FilterSet { param([string]$Raw)
+    if (-not $Raw) { return $null }
+    $set = @{}
+    foreach ($v in ($Raw -split ',')) {
+      $t = $v.Trim()
+      if ($t) { $set[$t] = $true }
+    }
+    if ($set.Count -eq 0) { return $null }
+    return $set
+  }
+  $famSet   = Convert-FilterSet $FamFilter
+  $modelSet = Convert-FilterSet $ModelFilter
+  $startSet = Convert-FilterSet $StartFilter
+  $endSet   = Convert-FilterSet $EndFilter
+
   $projects = @(Read-Store 'lb_projects')
-  if ($FamFilter)    { $projects = @($projects | Where-Object { $_.prod_family -eq $FamFilter }) }
-  if ($ModelFilter)  { $projects = @($projects | Where-Object { $_.family -eq $ModelFilter }) }
-  if ($StartFilter)  { $projects = @($projects | Where-Object { (ConvertTo-IsoWeek $_.prf_date) -eq $StartFilter }) }
-  if ($EndFilter)    { $projects = @($projects | Where-Object { (ConvertTo-IsoWeek $_.target_date) -eq $EndFilter }) }
+  if ($famSet)   { $projects = @($projects | Where-Object { $famSet.ContainsKey([string]$_.prod_family) }) }
+  if ($modelSet) { $projects = @($projects | Where-Object { $modelSet.ContainsKey([string]$_.family) }) }
+  if ($startSet) { $projects = @($projects | Where-Object { $startSet.ContainsKey([string](ConvertTo-IsoWeek $_.prf_date)) }) }
+  if ($endSet)   { $projects = @($projects | Where-Object { $endSet.ContainsKey([string](ConvertTo-IsoWeek $_.target_date)) }) }
 
   # Pre-read stores for per-project computation
   $allApprovals = @(Read-Store 'lb_approvals')
