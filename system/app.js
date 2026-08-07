@@ -791,21 +791,30 @@ function cellStateFor(project, step) {
     else if (x.ev.level === 'FILED') filed.push(x.code);
     else missing.push(x.code);
   });
+  const percent = g.ev.length ? Math.round(100 * (done.length + filed.length) / g.ev.length) : null;
   // an approved or bypassed gate promotes everything filed under it to done —
   // a signature is what turns filed paper into an accepted deliverable
   if (g.approval) { done.push.apply(done, filed.splice(0)); }
-  return { g, done, filed, missing, customSet, started: !!(done.length || filed.length || g.gate) };
+  return { g, done, filed, missing, customSet, started: !!(done.length || filed.length || g.gate), percent };
 }
 
 function matrixCell(project, step) {
   const c = cellStateFor(project, step);
   const td = el('td', 'mcell');
-  if (!c.started && !c.missing.length) { td.innerHTML = '<span class="' + badgeClass('NO_DATA') + '">not started</span>'; return { td, c }; }
   const bits = [];
+  // Completion percentage — always rendered as the first line
+  if (c.percent !== null) {
+    const filedOrApproved = c.done.length + c.filed.length;
+    const total = filedOrApproved + c.missing.length;
+    bits.push('<div class="matrix-pct"><strong>' + c.percent + '%</strong> <span class="matrix-pct-sub">(' + filedOrApproved + '/' + total + ' docs)</span></div>');
+  } else {
+    bits.push('<div class="matrix-pct matrix-pct-na">n/a</div>');
+  }
+  if (!c.started && !c.missing.length) { bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>'); td.innerHTML = bits.join('<br>'); return { td, c }; }
   if (c.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + c.done.map(esc).join(', ') + '</span>');
   if (c.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + c.filed.map(esc).join(', ') + '</span>');
   if (c.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + c.missing.map(esc).join(', ') + '</span>');
-  if (!bits.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
+  if (!c.done.length && !c.filed.length && !c.missing.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
   if (c.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
   const nc = cellNoteCount(project, stepKeyOf(project.process, step));
   if (nc) bits.push('<span class="matrix-note-indicator" title="' + nc + ' note(s)">💬 ' + nc + '</span>');
@@ -1203,13 +1212,20 @@ function viewDashboard(root) {
           } else {
             const gcs = groupCellStateFor(project, group);
             const td = el('td', 'mcell');
-            if (!gcs.started && !gcs.missing.length) { td.innerHTML = '<span class="' + badgeClass('NO_DATA') + '">not started</span>'; }
+            const bits = [];
+            // Percentage across all steps in the gate group
+            const groupTotal = gcs.done.length + gcs.filed.length + gcs.missing.length;
+            if (groupTotal) {
+              bits.push('<div class="matrix-pct"><strong>' + Math.round(100 * (gcs.done.length + gcs.filed.length) / groupTotal) + '%</strong> <span class="matrix-pct-sub">(' + (gcs.done.length + gcs.filed.length) + '/' + groupTotal + ' docs)</span></div>');
+            } else {
+              bits.push('<div class="matrix-pct matrix-pct-na">n/a</div>');
+            }
+            if (!gcs.started && !gcs.missing.length) { bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>'); }
             else {
-              const bits = [];
               if (gcs.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + gcs.done.map(esc).join(', ') + '</span>');
               if (gcs.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + gcs.filed.map(esc).join(', ') + '</span>');
               if (gcs.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + gcs.missing.map(esc).join(', ') + '</span>');
-              if (!bits.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
+              if (!gcs.done.length && !gcs.filed.length && !gcs.missing.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
               if (gcs.g && gcs.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
               let groupNoteCount = 0;
               group.steps.forEach(function(gs) {
@@ -1218,8 +1234,8 @@ function viewDashboard(root) {
                 }
               });
               if (groupNoteCount) bits.push('<span class="matrix-note-indicator" title="' + groupNoteCount + ' note(s)">💬 ' + groupNoteCount + '</span>');
-              td.innerHTML = bits.join('<br>');
             }
+            td.innerHTML = bits.join('<br>');
 
             // Issue badge for steps within this gate group
             let groupIssueCount = 0;
