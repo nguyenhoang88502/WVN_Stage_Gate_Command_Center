@@ -1,102 +1,13 @@
 log_id,timestamp_utc,user,action,project_id,object_type,object_id,change_from,change_to,detail,result
-LOG-000006,2025-08-07T09:30:00.0000000Z,Dang Quoc Bao,Create_Project,NPI-5612,Project,NPI-5612,,Active,Type E - target 2026-W24,OK
-LOG-000044,2025-08-11T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000045,2025-08-15T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000046,2025-08-19T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000047,2025-08-23T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000048,2025-08-27T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-5,OPEN,CLEARED,Step 5 Process Set-up cleared,OK
-LOG-000049,2025-08-31T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-6,OPEN,CLEARED,Step 6 Trial Production cleared,OK
-LOG-000050,2025-09-04T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5612,Gate,NPI-7,OPEN,CLEARED,Step 7 Production Ramp-Up cleared,OK
-LOG-000001,2025-09-18T09:30:00.0000000Z,Tran Minh Quan,Create_Project,NPI-9649LP,Project,NPI-9649LP,,Active,Type E - target 2026-W28,OK
-LOG-000027,2025-09-22T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000028,2025-09-26T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000029,2025-09-30T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000030,2025-10-04T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000031,2025-10-08T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-5,OPEN,CLEARED,Step 5 Process Set-up cleared,OK
-LOG-000032,2025-10-12T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-6,OPEN,CLEARED,Step 6 Trial Production cleared,OK
-LOG-000018,2025-10-16T09:30:00.0000000Z,Nguyen Thi Lan,Create_Project,NPI-2983L,Project,NPI-2983L,,Active,Type E - target 2026-W25,OK
-LOG-000033,2025-10-16T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-9649LP,Gate,NPI-7,OPEN,CLEARED,Step 7 Production Ramp-Up cleared,OK
-LOG-000082,2025-10-20T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-2983L,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000083,2025-10-24T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-2983L,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000084,2025-10-28T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-2983L,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000010,2025-10-30T09:30:00.0000000Z,Nguyen Thi Lan,Create_Project,NPI-6275,Project,NPI-6275,,Active,Type C - target 2026-W30,OK
-LOG-000057,2025-11-03T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000058,2025-11-07T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000059,2025-11-11T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000012,2025-11-13T09:30:00.0000000Z,Le Hoang Nam,Create_Project,NPI-9855,Project,NPI-9855,,Active,Type E - target 2026-W27,OK
-LOG-000060,2025-11-15T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000067,2025-11-17T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,NPI-9855,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000061,2025-11-19T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-5,OPEN,CLEARED,Step 5 Process Set-up cleared,OK
-LOG-000068,2025-11-21T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,NPI-9855,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000062,2025-11-23T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-6,OPEN,CLEARED,Step 6 Trial Production cleared,OK
-LOG-000069,2025-11-25T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,NPI-9855,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000016,2025-11-27T09:30:00.0000000Z,Hoang Kim Chi,Create_Project,NPI-5546S,Project,NPI-5546S,,Active,Type D - target 2026-W26,OK
-LOG-000063,2025-11-27T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-6275,Gate,NPI-7,OPEN,CLEARED,Step 7 Production Ramp-Up cleared,OK
-LOG-000074,2025-12-01T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-5546S,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000075,2025-12-09T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-5546S,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000008,2025-12-11T09:30:00.0000000Z,Hoang Kim Chi,Create_Project,NPI-09155-1701,Project,NPI-09155-1701,,Active,Type B - target 2026-W26,OK
-LOG-000076,2025-12-13T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-5546S,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000055,2025-12-15T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-09155-1701,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000077,2025-12-17T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-5546S,Gate,NPI-5,OPEN,CLEARED,Step 5 Process Set-up cleared,OK
-LOG-000078,2025-12-21T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-5546S,Gate,NPI-6,OPEN,CLEARED,Step 6 Trial Production cleared,OK
-LOG-000079,2025-12-25T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-5546S,Gate,NPI-7,OPEN,CLEARED,Step 7 Production Ramp-Up cleared,OK
-LOG-000056,2025-12-31T09:30:00.0000000Z,Hoang Kim Chi,Gate_Approve,NPI-09155-1701,Gate,NPI-5,OPEN,CLEARED,Step 5 Process Set-up cleared,OK
-LOG-000003,2026-01-08T09:30:00.0000000Z,Pham Van Duc,Create_Project,NPI-9655N,Project,NPI-9655N,,Active,Type C - target 2026-W29,OK
-LOG-000038,2026-01-12T09:30:00.0000000Z,Pham Van Duc,Gate_Approve,NPI-9655N,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000039,2026-01-16T09:30:00.0000000Z,Pham Van Duc,Gate_Approve,NPI-9655N,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000040,2026-01-20T09:30:00.0000000Z,Pham Van Duc,Gate_Approve,NPI-9655N,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000020,2026-01-22T09:30:00.0000000Z,Le Hoang Nam,Create_Project,ECN-5612C,Project,ECN-5612C,,Active,Type C - target 2026-W29,OK
-LOG-000022,2026-02-05T09:30:00.0000000Z,Dang Quoc Bao,Create_Project,ECN-4501,Project,ECN-4501,,Active,Type B - target 2026-W28,OK
-LOG-000085,2026-02-07T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,ECN-5612C,Gate,ECN-4,OPEN,CLEARED,Step 4 BOM / MWER & Customer Approval cleared,OK
-LOG-000025,2026-02-19T09:30:00.0000000Z,Tran Minh Quan,Create_Project,ECN-5640,Project,ECN-5640,,Active,Type D - target 2026-W27,OK
-LOG-000089,2026-02-21T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,ECN-4501,Gate,ECN-4,OPEN,CLEARED,Step 4 BOM / MWER & Customer Approval cleared,OK
-LOG-000002,2026-03-05T09:30:00.0000000Z,Nguyen Thi Lan,Create_Project,NPI-9639,Project,NPI-9639,,Active,Type E - target 2026-W42,OK
-LOG-000086,2026-03-07T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,ECN-5612C,Gate,ECN-11,OPEN,CLEARED,Step 11 Trial Production Execution cleared,OK
-LOG-000091,2026-03-07T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,ECN-5640,Gate,ECN-4,OPEN,CLEARED,Step 4 BOM / MWER & Customer Approval cleared,OK
-LOG-000034,2026-03-09T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-9639,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000087,2026-03-11T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,ECN-5612C,Gate,ECN-12,OPEN,CLEARED,Step 12 Mass Production Handover cleared,OK
-LOG-000035,2026-03-13T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-9639,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000036,2026-03-17T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-9639,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000037,2026-03-21T09:30:00.0000000Z,Nguyen Thi Lan,Gate_Approve,NPI-9639,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000007,2026-04-02T09:30:00.0000000Z,Bui Thanh Ha,Create_Project,NPI-7067,Project,NPI-7067,,Active,Type C - target 2026-W38,OK
-LOG-000092,2026-04-04T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,ECN-5640,Gate,ECN-11,OPEN,CLEARED,Step 11 Trial Production Execution cleared,OK
-LOG-000051,2026-04-06T09:30:00.0000000Z,Bui Thanh Ha,Gate_Approve,NPI-7067,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000093,2026-04-08T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,ECN-5640,Gate,ECN-12,OPEN,CLEARED,Step 12 Mass Production Handover cleared,OK
-LOG-000052,2026-04-10T09:30:00.0000000Z,Bui Thanh Ha,Gate_Approve,NPI-7067,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000053,2026-04-14T09:30:00.0000000Z,Bui Thanh Ha,Gate_Approve,NPI-7067,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000014,2026-04-16T09:30:00.0000000Z,Dang Quoc Bao,Create_Project,NPI-5619,Project,NPI-5619,,Active,Type C - target 2026-W39,OK
-LOG-000054,2026-04-18T09:30:00.0000000Z,Bui Thanh Ha,Gate_Approve,NPI-7067,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000070,2026-04-20T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5619,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000071,2026-04-24T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5619,Gate,NPI-2,OPEN,CLEARED,Step 2 Basic Design cleared,OK
-LOG-000072,2026-04-28T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5619,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000004,2026-04-30T09:30:00.0000000Z,Le Hoang Nam,Create_Project,NPI-2983LP,Project,NPI-2983LP,,Active,Type D - target 2026-W40,OK
-LOG-000073,2026-05-02T09:30:00.0000000Z,Dang Quoc Bao,Gate_Approve,NPI-5619,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000041,2026-05-04T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,NPI-2983LP,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000021,2026-05-07T09:30:00.0000000Z,Vo Thi Hong,Create_Project,ECN-9649P,Project,ECN-9649P,,Active,Type D - target 2026-W39,OK
-LOG-000042,2026-05-12T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,NPI-2983LP,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000011,2026-05-14T09:30:00.0000000Z,Pham Van Duc,Create_Project,NPI-5537,Project,NPI-5537,,Active,Type D - target 2026-W41,OK
-LOG-000043,2026-05-16T09:30:00.0000000Z,Le Hoang Nam,Gate_Approve,NPI-2983LP,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000064,2026-05-18T09:30:00.0000000Z,Pham Van Duc,Gate_Approve,NPI-5537,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000088,2026-05-23T09:30:00.0000000Z,Vo Thi Hong,Gate_Approve,ECN-9649P,Gate,ECN-4,OPEN,CLEARED,Step 4 BOM / MWER & Customer Approval cleared,OK
-LOG-000065,2026-05-26T09:30:00.0000000Z,Pham Van Duc,Gate_Approve,NPI-5537,Gate,NPI-3,OPEN,CLEARED,Step 3 Detail Design cleared,OK
-LOG-000017,2026-05-28T09:30:00.0000000Z,Tran Minh Quan,Create_Project,NPI-5560N,Project,NPI-5560N,,Active,Type B - target 2026-W44,OK
-LOG-000066,2026-05-30T09:30:00.0000000Z,Pham Van Duc,Gate_Approve,NPI-5537,Gate,NPI-4,OPEN,CLEARED,Step 4 Prototype Validation cleared,OK
-LOG-000080,2026-06-01T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-5560N,Gate,NPI-1,OPEN,CLEARED,Step 1 Project Planning cleared,OK
-LOG-000023,2026-06-11T09:30:00.0000000Z,Bui Thanh Ha,Create_Project,ECN-3282,Project,ECN-3282,,Active,Type A - target 2026-W43,OK
-LOG-000081,2026-06-17T09:30:00.0000000Z,Tran Minh Quan,Gate_Approve,NPI-5560N,Gate,NPI-5,OPEN,CLEARED,Step 5 Process Set-up cleared,OK
-LOG-000090,2026-06-27T09:30:00.0000000Z,Bui Thanh Ha,Gate_Approve,ECN-3282,Gate,ECN-4,OPEN,CLEARED,Step 4 BOM / MWER & Customer Approval cleared,OK
-LOG-000094,2026-07-02T09:30:00.0000000Z,Dang Quoc Bao,Gate_Bypass,NPI-9655N,Gate,NPI-4,OPEN,BYPASSED,Prototype validation waived - tooling rework pushed T1 samples beyond the gate date,OK
-LOG-000013,2026-07-16T09:30:00.0000000Z,Vo Thi Hong,Create_Project,NPI-9893LP,Project,NPI-9893LP,,Active,Type A - target 2026-W47,OK
-LOG-000095,2026-07-16T09:30:00.0000000Z,Bui Thanh Ha,Gate_Bypass,ECN-4501,Gate,ECN-11,OPEN,BYPASSED,Trial production executed at supplier site; WVN trial deferred,OK
-LOG-000005,2026-07-23T09:30:00.0000000Z,Vo Thi Hong,Create_Project,NPI-6245LP,Project,NPI-6245LP,,Active,Type E - target 2027-W05,OK
-LOG-000019,2026-07-23T09:30:00.0000000Z,Pham Van Duc,Create_Project,NPI-9865,Project,NPI-9865,,Active,Type A - target 2026-W50,OK
-LOG-000024,2026-07-23T09:30:00.0000000Z,Hoang Kim Chi,Create_Project,ECN-7065,Project,ECN-7065,,Active,Type C - target 2026-W46,OK
-LOG-000009,2026-07-30T09:30:00.0000000Z,Tran Minh Quan,Create_Project,NPI-3026452,Project,NPI-3026452,,Active,Type A - target 2026-W52,OK
-LOG-000015,2026-07-30T09:30:00.0000000Z,Bui Thanh Ha,Create_Project,NPI-7066,Project,NPI-7066,,Active,Type E - target 2027-W09,OK
-LOG-000026,2026-07-30T09:30:00.0000000Z,Nguyen Thi Lan,Create_Project,ECN-3193,Project,ECN-3193,,Active,Type B - target 2026-W48,OK
-LOG-0096,2026-08-06T05:22:31.7099424Z,final-regression,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
-LOG-0097,2026-08-06T12:47:37.7938050Z,intern,Clear_Inventory,NPI-9649LP,Warehouse,Blade,Pending,Cleared,NPI-5,Success
-LOG-0098,2026-08-06T12:47:38.4597893Z,intern,Clear_Inventory,NPI-9649LP,Warehouse,Molding (material),Pending,Cleared,NPI-5,Success
-LOG-0099,2026-08-06T14:55:43.6774004Z,fix-verification,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
-LOG-0100,2026-08-06T15:02:27.4583884Z,ui-review,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
-LOG-0101,2026-08-06T15:32:43.6139936Z,Demo Presenter,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
+LOG-0001,2026-08-07T01:25:02.1492897Z,intern,Create_Project_Batch,NPI-9611,Project,NPI-9611,,Active,Batch CSV import,Success
+LOG-0002,2026-08-07T01:25:02.1525355Z,intern,Create_Project_Batch,NPI-9622LP,Project,NPI-9622LP,,Active,Batch CSV import,Success
+LOG-0003,2026-08-07T01:25:02.2044974Z,intern,Create_Project_Batch,ECN-6301,Project,ECN-6301,,Active,Batch CSV import,Success
+LOG-0004,2026-08-07T01:25:02.2184226Z,intern,Create_Project_Batch,ECN-5698N,Project,ECN-5698N,,Active,Batch CSV import,Success
+LOG-0005,2026-08-07T01:25:02.2333880Z,intern,Create_Project_Batch,NPI-2905LP,Project,NPI-2905LP,,Active,Batch CSV import,Success
+LOG-0006,2026-08-07T01:25:02.2647423Z,intern,Create_Project_Batch,NPI-9944,Project,NPI-9944,,Active,Batch CSV import,Success
+LOG-0007,2026-08-07T01:25:02.2857188Z,intern,Create_Project_Batch,ECN-7788LC,Project,ECN-7788LC,,Active,Batch CSV import,Success
+LOG-0008,2026-08-07T01:25:02.3046890Z,intern,Create_Project_Batch,ECN-6612,Project,ECN-6612,,Active,Batch CSV import,Success
+LOG-0009,2026-08-07T01:25:02.3271674Z,intern,Create_Project_Batch,NPI-5501S,Project,NPI-5501S,,Active,Batch CSV import,Success
+LOG-0010,2026-08-07T01:25:02.3474126Z,intern,Create_Project_Batch,NPI-3390,Project,NPI-3390,,Active,Batch CSV import,Success
+LOG-0011,2026-08-07T01:25:02.3643176Z,intern,Import_Projects_Batch,,Project,,,,"10 accepted, 0 rejected of 10 row(s)",Success
+LOG-0012,2026-08-07T01:36:58.9397379Z,Stop_WVN_NPI_Command_Center.cmd,Stop_Server,,Server,port 8080,Listening,Stopped,,Success

@@ -1,3 +1,0 @@
-bypass_id,project_id,step_key,authorised_by,authorised_utc,reason,mitigation,supersede_by,closed_utc,closed_note
-BYP-0001,NPI-9655N,NPI-4,Dang Quoc Bao,2026-07-02T09:30:00.0000000Z,Prototype validation waived - tooling rework pushed T1 samples beyond the gate date,100% dimensional check on the first MP batch; PFMEA reviewed at step 5 instead,,,
-BYP-0002,ECN-4501,ECN-11,Bui Thanh Ha,2026-07-16T09:30:00.0000000Z,Trial production executed at supplier site; WVN trial deferred,Supplier trial report accepted; WVN trial to run before next PO,,,
