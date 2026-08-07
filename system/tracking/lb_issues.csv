@@ -1,2 +1,0 @@
-issue_id,project_id,step_key,raised_utc,raised_by,category,description,owner,due_date,status,resolution,closed_utc,owner_pic,claimed_by,claimed_utc,supporter_pic,supporter_by,supporter_utc,assigned_by,assigned_utc
-LFI-0001,NPI-9611,NPI-5,2026-08-07T08:46:34.6570834Z,admin,LFI,v4.2 smoke test - housing gap at parting line,,,Open,,,,,,,,,,

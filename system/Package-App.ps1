@@ -10,16 +10,19 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-# PS 5.1 does not load the compression assembly by default; without this
-# [System.IO.Compression.ZipFile] is an unknown type at zip time.
+# PS 5.1 does not load the compression assemblies by default; without these
+# [System.IO.Compression.ZipFile] and [...ZipArchiveMode] are unknown types at
+# zip time. They live in two different assemblies - FileSystem carries ZipFile
+# and ZipFileExtensions, the base one carries ZipArchive/ZipArchiveMode.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
 $ProgressPreference = 'SilentlyContinue'
 
 $ScriptDir = $PSScriptRoot
 if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $RootDir   = Split-Path -Parent $ScriptDir
 
-$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v4.1'
+$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v4.2'
 $OutZip    = Join-Path $RootDir "$ZipName.zip"
 
 # --- 1. Stage into a temp directory ---
@@ -142,7 +145,20 @@ Get-ChildItem -LiteralPath $StageDir -Recurse -Filter '*.ps1' | ForEach-Object {
 Write-Host ""
 Write-Host "Creating $ZipName.zip ..."
 if (Test-Path -LiteralPath $OutZip) { Remove-Item -LiteralPath $OutZip -Force }
-[System.IO.Compression.ZipFile]::CreateFromDirectory($StageDir, $OutZip)
+# Built entry-by-entry rather than with CreateFromDirectory. On Windows that
+# helper writes entry names with backslashes, which the ZIP spec does not allow
+# (APPNOTE 4.4.17.1 mandates forward slashes). Explorer and 7-Zip cope, but
+# anything else extracts a flat pile of files literally named "system\app.js",
+# and the tool will not run from that.
+$stageRoot = (Resolve-Path -LiteralPath $StageDir).Path.TrimEnd('\') + '\'
+$zipOut = [System.IO.Compression.ZipFile]::Open($OutZip, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+  Get-ChildItem -LiteralPath $StageDir -Recurse -File | ForEach-Object {
+    $rel = $_.FullName.Substring($stageRoot.Length).Replace('\', '/')
+    [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+      $zipOut, $_.FullName, $rel, [System.IO.Compression.CompressionLevel]::Optimal)
+  }
+} finally { $zipOut.Dispose() }
 $sizeKB = [math]::Round((Get-Item -LiteralPath $OutZip).Length / 1KB, 1)
 Write-Host "Done: $OutZip ($sizeKB KB)"
 

@@ -27,3 +27,50 @@
 [2026-08-07 14:42:24] [INFO] Report downloaded: lfi
 [2026-08-07 14:42:25] [INFO] Report downloaded: kpi
 [2026-08-07 14:42:25] [INFO] Report downloaded: transfer
+[2026-08-07 15:35:03] [WARN] Shutdown refused - content-type 'application/x-www-form-urlencoded'
+[2026-08-07 15:35:30] [INFO] Shutdown requested — stopping cleanly.
+[2026-08-07 15:35:31] [INFO] Stopped by user request.
+[2026-08-07 15:36:33] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 15:36:33] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 15:36:33] [INFO] Listening on http://localhost:8080/
+[2026-08-07 15:36:57] [INFO] Report downloaded: lfi
+[2026-08-07 15:36:58] [INFO] Report downloaded: transfer
+[2026-08-07 15:36:58] [INFO] Report downloaded: kpi
+[2026-08-07 15:36:58] [INFO] Report downloaded: ll
+[2026-08-07 15:36:58] [INFO] Report downloaded: trial
+[2026-08-07 15:45:14] [INFO] Shutdown requested — stopping cleanly.
+[2026-08-07 15:45:14] [INFO] Stopped by user request.
+[2026-08-07 15:45:18] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 15:45:18] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 15:45:18] [INFO] Listening on http://localhost:8080/
+[2026-08-07 15:45:26] [INFO] Report downloaded: transfer
+[2026-08-07 15:45:26] [INFO] Report downloaded: transfer
+[2026-08-07 15:45:26] [INFO] Report downloaded: transfer
+[2026-08-07 15:45:26] [INFO] Report downloaded: transfer
+[2026-08-07 15:45:27] [INFO] Report downloaded: transfer
+[2026-08-07 15:45:27] [INFO] Report downloaded: transfer
+[2026-08-07 15:46:34] [INFO] LFI created: LFI_9611_NPI-5_20260807-154634 for NPI-9611 / NPI-5
+[2026-08-07 15:51:49] [INFO] Shutdown requested — stopping cleanly.
+[2026-08-07 15:51:49] [INFO] Stopped by user request.
+[2026-08-07 15:51:52] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 15:51:53] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 15:51:53] [INFO] Listening on http://localhost:8080/
+[2026-08-07 15:54:23] [INFO] Report downloaded: transfer
+[2026-08-07 15:54:32] [INFO] Report downloaded: transfer
+[2026-08-07 15:54:32] [ERROR] Request failed: http://127.0.0.1:8080/app.js — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
+[2026-08-07 15:58:37] [INFO] Shutdown requested — stopping cleanly.
+[2026-08-07 15:58:37] [INFO] Stopped by user request.
+[2026-08-07 15:58:41] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 15:58:41] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 15:58:41] [INFO] Listening on http://localhost:8080/
+[2026-08-07 15:58:49] [ERROR] Request failed: http://127.0.0.1:8080/app.js — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
+[2026-08-07 15:58:49] [INFO] Report downloaded: kpi
+[2026-08-07 15:59:08] [INFO] Report downloaded: transfer
+[2026-08-07 15:59:08] [INFO] Report downloaded: transfer
+[2026-08-07 15:59:08] [INFO] Report downloaded: transfer
+[2026-08-07 15:59:09] [INFO] Report downloaded: transfer
+[2026-08-07 16:03:28] [INFO] Shutdown requested — stopping cleanly.
+[2026-08-07 16:03:29] [INFO] Stopped by user request.
+[2026-08-07 16:03:32] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 16:03:33] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 16:03:33] [INFO] Listening on http://localhost:8080/
