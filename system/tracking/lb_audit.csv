@@ -11,3 +11,5 @@ LOG-0009,2026-08-07T01:25:02.3271674Z,intern,Create_Project_Batch,NPI-5501S,Proj
 LOG-0010,2026-08-07T01:25:02.3474126Z,intern,Create_Project_Batch,NPI-3390,Project,NPI-3390,,Active,Batch CSV import,Success
 LOG-0011,2026-08-07T01:25:02.3643176Z,intern,Import_Projects_Batch,,Project,,,,"10 accepted, 0 rejected of 10 row(s)",Success
 LOG-0012,2026-08-07T01:36:58.9397379Z,Stop_WVN_NPI_Command_Center.cmd,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
+LOG-0013,2026-08-07T07:40:32.3720121Z,qa,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
+LOG-0014,2026-08-07T07:42:17.2946677Z,qa,Stop_Server,,Server,port 8080,Listening,Stopped,,Success

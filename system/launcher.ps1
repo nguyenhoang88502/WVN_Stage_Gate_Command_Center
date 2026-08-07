@@ -969,7 +969,10 @@ function Get-ReportData {
     foreach ($p in $projects) { $projIds[$p.project_id] = $true }
     $issues = @($allIssues | Where-Object { $projIds.ContainsKey($_.project_id) })
     $headers = @('Issue ID','Project ID','Step Key','Raised By','Raised UTC','Category','Description','Owner','Due Date','Status','Resolution','Closed UTC')
-    $rows = @($headers)
+    # @($headers) SPLATS the header array into N separate scalar elements,
+    # so each column name renders as its own one-cell row and the real data
+    # gets pushed down past it. The unary comma keeps it as ONE row.
+    $rows = @(,$headers)
     foreach ($row in $issues) {
       $rows += ,@(
         $row.issue_id, $row.project_id, $row.step_key, $row.raised_by, $row.raised_utc,
@@ -977,11 +980,17 @@ function Get-ReportData {
         $row.resolution, $row.closed_utc
       )
     }
-    return $rows
+    # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
+    # return, so a report with zero data rows hands the caller the header
+    # array's strings as N scalars and transposes the whole sheet.
+    return ,$rows
   }
   elseif ($Type -eq 'transfer') {
     $headers = @('Project ID','Process','Model','Product Family','Change Class','PRF Date','Target Date','Market Manager','Country','Customer Number','Status','Notes','Completion %')
-    $rows = @($headers)
+    # @($headers) SPLATS the header array into N separate scalar elements,
+    # so each column name renders as its own one-cell row and the real data
+    # gets pushed down past it. The unary comma keeps it as ONE row.
+    $rows = @(,$headers)
     foreach ($p in $projects) {
       $pr = $progressCache[$p.project_id]
       $rows += ,@(
@@ -990,11 +999,17 @@ function Get-ReportData {
         $p.status, $p.notes, "$($pr.pct)%"
       )
     }
-    return $rows
+    # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
+    # return, so a report with zero data rows hands the caller the header
+    # array's strings as N scalars and transposes the whole sheet.
+    return ,$rows
   }
   elseif ($Type -eq 'kpi') {
     $headers = @('Project ID','Process','Model','Product Family','Target Week','Completion %','Open Issues','On-Time')
-    $rows = @($headers)
+    # @($headers) SPLATS the header array into N separate scalar elements,
+    # so each column name renders as its own one-cell row and the real data
+    # gets pushed down past it. The unary comma keeps it as ONE row.
+    $rows = @(,$headers)
     foreach ($p in $projects) {
       $pr = $progressCache[$p.project_id]
       $targetWeek = ConvertTo-IsoWeek $p.target_date
@@ -1007,7 +1022,10 @@ function Get-ReportData {
         "$($pr.pct)%", [string]$openCount, $onTime
       )
     }
-    return $rows
+    # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
+    # return, so a report with zero data rows hands the caller the header
+    # array's strings as N scalars and transposes the whole sheet.
+    return ,$rows
   }
   return @()
 }

@@ -1,2 +1,29 @@
 ﻿[2026-08-06 22:37:34] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Stage_Gate_ModelOnly\dist\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
 [2026-08-06 22:37:34] [WARN] Another instance is already running — exiting.
+[2026-08-07 14:35:56] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 14:35:56] [WARN] Another instance is already running — exiting.
+[2026-08-07 14:38:12] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 14:38:12] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 14:38:12] [INFO] Listening on http://localhost:8080/
+[2026-08-07 14:38:45] [INFO] Report downloaded: kpi
+[2026-08-07 14:38:45] [INFO] Report downloaded: KPI
+[2026-08-07 14:38:45] [INFO] Report downloaded: transfer
+[2026-08-07 14:39:10] [INFO] Report downloaded: kpi
+[2026-08-07 14:39:10] [INFO] Report downloaded: lfi
+[2026-08-07 14:39:11] [INFO] Report downloaded: transfer
+[2026-08-07 14:40:32] [INFO] Shutdown requested by qa — stopping cleanly.
+[2026-08-07 14:40:32] [INFO] Stopped by user request.
+[2026-08-07 14:40:35] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 14:40:35] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 14:40:35] [INFO] Listening on http://localhost:8080/
+[2026-08-07 14:40:40] [INFO] Report downloaded: kpi
+[2026-08-07 14:41:01] [INFO] Report downloaded: lfi
+[2026-08-07 14:41:01] [INFO] Report downloaded: transfer
+[2026-08-07 14:42:17] [INFO] Shutdown requested by qa — stopping cleanly.
+[2026-08-07 14:42:17] [INFO] Stopped by user request.
+[2026-08-07 14:42:20] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center_v3.5_FullBundle
+[2026-08-07 14:42:20] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-07 14:42:20] [INFO] Listening on http://localhost:8080/
+[2026-08-07 14:42:24] [INFO] Report downloaded: lfi
+[2026-08-07 14:42:25] [INFO] Report downloaded: kpi
+[2026-08-07 14:42:25] [INFO] Report downloaded: transfer
