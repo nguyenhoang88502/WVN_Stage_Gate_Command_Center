@@ -944,6 +944,32 @@ function viewDashboard(root) {
   const expBtn = el('button', 'primary', 'Download Management Report');
   expBtn.onclick = () => exportManagementReport();
   toolbar.appendChild(expBtn);
+
+  /* Report template download — pick a pre-made XLSX template, fill it with
+     live data respecting the current slicer filters, and download it. */
+  const reportSel = el('select'); reportSel.id = 'dashReportSelect';
+  reportSel.style.cssText = 'padding:6px 10px;border:1px solid #ccc;border-radius:4px;margin-left:8px;min-width:180px';
+  reportSel.innerHTML = '<option value="">— XLSX Report —</option>' +
+    '<option value="lfi">Late Found Issue Report</option>' +
+    '<option value="transfer">Project Transfer Report</option>' +
+    '<option value="kpi">KPI Report</option>';
+  toolbar.appendChild(reportSel);
+
+  const rptBtn = el('button', 'primary', 'Download');
+  rptBtn.onclick = () => {
+    const type = reportSel.value;
+    if (!type) { alert('Select a report type first.'); return; }
+    const p = new URLSearchParams({ type });
+    if (dashFamFilter) p.set('fam', dashFamFilter);
+    if (dashModelFilter) p.set('model', dashModelFilter);
+    if (dashStartWeekFilter) p.set('start', dashStartWeekFilter);
+    if (dashEndWeekFilter) p.set('end', dashEndWeekFilter);
+    const a = document.createElement('a');
+    a.href = '/api/reports/download?' + p.toString();
+    a.download = '';
+    a.click();
+  };
+  toolbar.appendChild(rptBtn);
   execWrap.appendChild(toolbar);
 
   /* =====================================================================
