@@ -5,7 +5,7 @@ const el = (t, c, x) => { const n = document.createElement(t); if (c) n.classNam
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const BADGE_CLASS = {
   COMPLETE:'bg-success', DONE:'bg-success', APPROVED:'bg-success', Cleared:'bg-success', Connected:'bg-success',
-  IN_PROGRESS:'bg-primary', FILED:'bg-primary', Open:'bg-primary',
+  IN_PROGRESS:'bg-primary', FILED:'bg-primary', ON_GOING:'bg-primary', Open:'bg-primary',
   AT_RISK:'bg-danger', MISSING:'bg-danger', BLOCKED:'bg-danger', Offline:'bg-danger',
   NOT_STARTED:'bg-warning', Pending:'bg-warning',
   NO_DATA:'bg-secondary', NONE:'bg-secondary', TRACK:'bg-secondary', REMOVED:'bg-secondary',
@@ -674,6 +674,23 @@ function stepDone(pid, proc, step) {
   return TRK.lb_bypasses.some(b => b.project_id === pid && b.step_key === sk && !b.closed_utc);
 }
 
+// Checks whether a deliverable has been claimed, supported, or assigned even
+// though no file has been filed yet. Also checks the parent gate row.
+function isDeliverableClaimed(pid, stepKey, code) {
+  var rows = TRK.lb_deliverables.filter(function(r) {
+    return r.project_id === pid && r.step_key === stepKey && r.doc_code === code;
+  });
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r.owner_pic || r.claimed_by || r.supporter_pic || r.supporter_by || r.assigned_by) return true;
+  }
+  var gate = TRK.lb_gates.find(function(g) {
+    return g.project_id === pid && g.step_key === stepKey;
+  });
+  if (gate && (gate.owner_pic || gate.claimed_by || gate.supporter_pic || gate.supporter_by || gate.assigned_by)) return true;
+  return false;
+}
+
 function evidenceFor(pid, stepKey, docCode) {
   var rows = TRK.lb_deliverables.filter(function(r) {
     return r.project_id === pid && r.step_key === stepKey && r.doc_code === docCode;
@@ -689,6 +706,8 @@ function evidenceFor(pid, stepKey, docCode) {
   var del = realRows.length ? realRows[realRows.length - 1] : null;
   if (del && del.approved === 'YES') return { level: 'APPROVED', del };
   if (del) return { level: 'FILED', del };
+  // No file — check if someone has claimed, been assigned, or is supporting
+  if (isDeliverableClaimed(pid, stepKey, docCode)) return { level: 'ON_GOING', del: null };
   return { level: 'MISSING', del: null };
 }
 function whRows(pid, stepKey) { return TRK.lb_warehouse.filter(w => w.project_id === pid && w.step_key === stepKey); }
@@ -789,23 +808,29 @@ function picsFor(pid, stepKey) {
 
 function cellStateFor(project, step) {
   const g = gateState(project, project.process, step);
-  const done = [], filed = [], missing = [], removed = [], customSet = new Set();
+  const done = [], filed = [], ongoing = [], missing = [], removed = [], customSet = new Set();
   g.ev.forEach(x => {
     if (x.custom) customSet.add(x.code);
     if (x.ev.level === 'APPROVED') done.push(x.code);
     else if (x.ev.level === 'FILED') filed.push(x.code);
     else if (x.ev.level === 'REMOVED') removed.push(x.code);
+    else if (x.ev.level === 'ON_GOING') ongoing.push(x.code);
     else missing.push(x.code);
   });
   // Removed documents are excluded from BOTH sides of the ratio: marking a
   // requirement as not-applicable should raise completion, not leave a
-  // permanent hole that can never be closed.
-  const countable = done.length + filed.length + missing.length;
+  // permanent hole that can never be closed. On-going ones ARE counted in
+  // the denominator - somebody claiming a document does not make the
+  // requirement go away, it just means work has started.
+  const countable = done.length + filed.length + ongoing.length + missing.length;
   const percent = countable ? Math.round(100 * (done.length + filed.length) / countable) : null;
   // an approved or bypassed gate promotes everything filed under it to done —
   // a signature is what turns filed paper into an accepted deliverable
   if (g.approval) { done.push.apply(done, filed.splice(0)); }
-  return { g, done, filed, missing, removed, customSet, started: !!(done.length || filed.length || removed.length || g.gate), percent };
+  return {
+    g, done, filed, ongoing, missing, removed, customSet, percent,
+    started: !!(done.length || filed.length || ongoing.length || removed.length || g.gate)
+  };
 }
 
 function matrixCell(project, step) {
@@ -825,6 +850,7 @@ function matrixCell(project, step) {
   if (!c.started && !c.missing.length && !c.removed.length) { bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>'); td.innerHTML = bits.join('<br>'); return { td, c }; }
   if (c.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + c.done.map(esc).join(', ') + '</span>');
   if (c.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + c.filed.map(esc).join(', ') + '</span>');
+  if (c.ongoing.length) bits.push('<span class="' + badgeClass('ON_GOING') + '" title="claimed or assigned, no file yet">On Going: ' + c.ongoing.map(esc).join(', ') + '</span>');
   if (c.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + c.missing.map(esc).join(', ') + '</span>');
   if (c.removed.length) bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + c.removed.map(esc).join(', ') + '</span>');
   // bits always holds the percentage line, so test the real content instead
@@ -862,7 +888,7 @@ function ecnGateGroups() {
 function groupCellStateFor(project, group) {
   const proc = project.process;
   const applicableSteps = group.steps.filter(function(s) { return stepsOf(proc, project).indexOf(s) >= 0; });
-  const done = [], filed = [], missing = [], removed = [];
+  const done = [], filed = [], ongoing = [], missing = [], removed = [];
   let anyStarted = false, anyGateObj = null;
   applicableSteps.forEach(function(step) {
     const c = cellStateFor(project, step);
@@ -870,12 +896,18 @@ function groupCellStateFor(project, group) {
     if (step === group.gate) anyGateObj = c.g;
     c.done.forEach(function(x) { if (done.indexOf(x) < 0) done.push(x); });
     c.filed.forEach(function(x) { if (filed.indexOf(x) < 0) filed.push(x); });
+    c.ongoing.forEach(function(x) { if (ongoing.indexOf(x) < 0) ongoing.push(x); });
     c.missing.forEach(function(x) { if (missing.indexOf(x) < 0) missing.push(x); });
     c.removed.forEach(function(x) { if (removed.indexOf(x) < 0) removed.push(x); });
   });
   const filedFinal = filed.filter(function(x) { return done.indexOf(x) < 0; });
-  const missingFinal = missing.filter(function(x) { return done.indexOf(x) < 0 && filedFinal.indexOf(x) < 0 && removed.indexOf(x) < 0; });
-  return { done: done, filed: filedFinal, missing: missingFinal, removed: removed, started: anyStarted, g: anyGateObj, applicableSteps: applicableSteps };
+  // Precedence when the same doc code appears at several folded-in steps:
+  // done > filed > on-going > removed > missing.
+  const ongoingFinal = ongoing.filter(function(x) { return done.indexOf(x) < 0 && filedFinal.indexOf(x) < 0; });
+  const missingFinal = missing.filter(function(x) {
+    return done.indexOf(x) < 0 && filedFinal.indexOf(x) < 0 && ongoingFinal.indexOf(x) < 0 && removed.indexOf(x) < 0;
+  });
+  return { done: done, filed: filedFinal, ongoing: ongoingFinal, missing: missingFinal, removed: removed, started: anyStarted, g: anyGateObj, applicableSteps: applicableSteps };
 }
 
 function viewDashboard(root) {
@@ -1276,10 +1308,11 @@ function viewDashboard(root) {
             } else {
               bits.push('<div class="matrix-pct matrix-pct-na">n/a</div>');
             }
-            if (!gcs.started && !gcs.missing.length && !gcs.removed.length) { bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>'); }
+            if (!gcs.started && !gcs.missing.length && !gcs.removed.length && !(gcs.ongoing && gcs.ongoing.length)) { bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>'); }
             else {
               if (gcs.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + gcs.done.map(esc).join(', ') + '</span>');
               if (gcs.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + gcs.filed.map(esc).join(', ') + '</span>');
+              if (gcs.ongoing && gcs.ongoing.length) bits.push('<span class="' + badgeClass('ON_GOING') + '" title="claimed or assigned, no file yet">On Going: ' + gcs.ongoing.map(esc).join(', ') + '</span>');
               if (gcs.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + gcs.missing.map(esc).join(', ') + '</span>');
               if (gcs.removed.length) bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + gcs.removed.map(esc).join(', ') + '</span>');
               if (!gcs.done.length && !gcs.filed.length && !gcs.missing.length && !gcs.removed.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
