@@ -639,6 +639,25 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
   gap: var(--s3); flex-wrap: wrap;
 }
 
+/* Responsive step grid — 3 cols wide, 2 medium, 1 narrow.
+   Each card uses its own column, so all 7/12 steps are visible without scrolling. */
+.step-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s3);
+  margin-top: var(--s3);
+}
+
+/* Collapsible step body — hidden by default when .collapsed is added.
+   The header remains visible and clickable at all times. */
+.stepbody { overflow: hidden }
+.stepbody.collapsed { display: none }
+
+.step-toggle-arrow {
+  font-size: 10px; margin-right: 2px;
+  display: inline-block; transition: transform var(--t-fast);
+}
+
 /* family / FG tree (v2.6). Was never given rules of its own — it inherited
    spacing from .treeg and looked unstructured next to the cards around it. */
 .ftree { display: flex; flex-direction: column; gap: 2px }
@@ -1001,8 +1020,10 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 /* == 18. RESPONSIVE RULES ================================================ */
 @media (max-width: 1024px) {
   .famchart-row { grid-template-columns: 160px minmax(80px, 1fr) 240px }
+  .step-grid { grid-template-columns: repeat(2, 1fr) }
 }
 @media (max-width: 768px) {
+  .step-grid { grid-template-columns: 1fr }
   .app { padding: 0 var(--s3) 48px }
   /* same reasoning as .stepcard: any wide table in a card scrolls inside the
      card rather than dragging the document width out with it */

@@ -3136,7 +3136,7 @@ function familyFgTree(root, proc, state, onPick) {
   fRow.appendChild(weekSel);
   pBody.appendChild(fRow);
 
-  /* ---- tree of families → project cards (redrawn on every filter change) -- */
+  /* ---- flat project list (redrawn on every filter change) -- */
   function renderTree() {
     // Sync family pill button classes
     $$('button', famPicks).forEach(b => {
@@ -3153,6 +3153,7 @@ function familyFgTree(root, proc, state, onPick) {
     if (q) {
       filtered = filtered.filter(x => {
         if ((x.project_id || '').toLowerCase().indexOf(q) >= 0) return true;
+        if ((x.prod_family || '').toLowerCase().indexOf(q) >= 0) return true;
         const fam = familyById(x.prod_family) || {};
         if ((fam.prod_family_name || '').toLowerCase().indexOf(q) >= 0) return true;
         if ((x.market_manager || '').toLowerCase().indexOf(q) >= 0) return true;
@@ -3172,84 +3173,54 @@ function familyFgTree(root, proc, state, onPick) {
       });
     }
 
-    // Group by family. Projects whose family doesn't resolve via familyById() go
-    // under a literal "Unassigned" bucket so they are never silently dropped.
-    const groups = {};
-    filtered.forEach(x => {
-      const key = famKeyOf(x);
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(x);
-    });
-
-    const famKeys = Object.keys(groups).sort((a, b) => {
-      if (a === '__unassigned__') return 1;
-      if (b === '__unassigned__') return -1;
-      return a.localeCompare(b);
-    });
-
-    if (!famKeys.length) {
+    if (!filtered.length) {
       tree.appendChild(el('p', 'note', 'No project matches the current filters.'));
     }
 
-    famKeys.forEach(famId => {
-      const famProjs = groups[famId];
-      const fam = familyById(famId);
-      const famName = famId === '__unassigned__' ? 'Unassigned' : (fam ? fam.prod_family_name : 'Unassigned');
-      const expanded = !!state.expanded[famId];
+    // Flat list — no family group headers, no expand/collapse
+    filtered.forEach(x => {
+      const pr = progressOf(x);
+      const ct = changeTypeById(x.class_abcde);
+      const cs = certsOf(x);
+      const status = classifyProject(x);
 
-      const hdr = el('div', 'famhead');
-      hdr.innerHTML = (expanded ? '▾ ' : '▸ ') + esc(famName) + ' (' + famProjs.length + ')';
-      hdr.onclick = () => { state.expanded[famId] = !state.expanded[famId]; renderTree(); };
-      tree.appendChild(hdr);
+      const isActive = state.selected.has(x.project_id) && state.active === x.project_id;
+      const isMulti = state.selected.has(x.project_id) && !isActive;
 
-      if (!expanded) return;
+      let cls = 'pcard';
+      if (isActive) cls += ' on';
+      else if (isMulti) cls += ' multi';
 
-      const wrap = el('div', 'treeg');
-      famProjs.forEach(x => {
-        const pr = progressOf(x);
-        const ct = changeTypeById(x.class_abcde);
-        const cs = certsOf(x);
-        const status = classifyProject(x);
+      const chipStatus = status === 'LATE' ? 'AT_RISK' : status;
+      const chipLabel = status === 'LATE' ? 'Late' : status.replace(/_/g, ' ');
 
-        const isActive = state.selected.has(x.project_id) && state.active === x.project_id;
-        const isMulti = state.selected.has(x.project_id) && !isActive;
+      const c = el('div', cls);
+      c.innerHTML = '<b>' + esc(x.project_id) + '</b>' +
+        '<div style="margin-top:5px"><span class="bar"><i style="width:' + pr.pct + '%"></i></span> ' + pr.done + '/' + pr.total + ' gates</div>' +
+        '<div class="note">' + esc(x.market_manager || 'no owner') + (ct ? ' · type ' + esc(ct.type_id) + ' ' + esc(ct.name) : ' · no type') +
+        (x.target_date ? ' · target ' + esc(toWeek(x.target_date)) : '') + '</div>' +
+        '<div><span class="' + badgeClass(chipStatus) + '">' + chipLabel + '</span></div>' +
+        (cs.length ? '<div style="margin-top:4px">' + certChips(cs) + '</div>' : '');
 
-        let cls = 'pcard';
-        if (isActive) cls += ' on';
-        else if (isMulti) cls += ' multi';
-
-        const chipStatus = status === 'LATE' ? 'AT_RISK' : status;
-        const chipLabel = status === 'LATE' ? 'Late' : status.replace(/_/g, ' ');
-
-        const c = el('div', cls);
-        c.innerHTML = '<b>' + esc(x.project_id) + '</b>' +
-          '<div style="margin-top:5px"><span class="bar"><i style="width:' + pr.pct + '%"></i></span> ' + pr.done + '/' + pr.total + ' gates</div>' +
-          '<div class="note">' + esc(x.market_manager || 'no owner') + (ct ? ' · type ' + esc(ct.type_id) + ' ' + esc(ct.name) : ' · no type') +
-          (x.target_date ? ' · target ' + esc(toWeek(x.target_date)) : '') + '</div>' +
-          '<div><span class="' + badgeClass(chipStatus) + '">' + chipLabel + '</span></div>' +
-          (cs.length ? '<div style="margin-top:4px">' + certChips(cs) + '</div>' : '');
-
-        c.onclick = e => {
-          if (e.ctrlKey || e.metaKey) {
-            if (state.selected.has(x.project_id)) {
-              state.selected.delete(x.project_id);
-              if (state.active === x.project_id) {
-                state.active = state.selected.size ? [...state.selected][0] : null;
-              }
-            } else {
-              state.selected.add(x.project_id);
-              state.active = x.project_id;
+      c.onclick = e => {
+        if (e.ctrlKey || e.metaKey) {
+          if (state.selected.has(x.project_id)) {
+            state.selected.delete(x.project_id);
+            if (state.active === x.project_id) {
+              state.active = state.selected.size ? [...state.selected][0] : null;
             }
-            onPick(state.active, true);
           } else {
-            state.selected = new Set([x.project_id]);
+            state.selected.add(x.project_id);
             state.active = x.project_id;
-            onPick(x.project_id, false);
           }
-        };
-        wrap.appendChild(c);
-      });
-      tree.appendChild(wrap);
+          onPick(state.active, true);
+        } else {
+          state.selected = new Set([x.project_id]);
+          state.active = x.project_id;
+          onPick(x.project_id, false);
+        }
+      };
+      tree.appendChild(c);
     });
 
     pBody.appendChild(tree);
@@ -3459,44 +3430,55 @@ function stepCard(project, proc, step, redraw) {
   const g = gateState(project, proc, step);
   const card = el('div', 'stepcard s-' + g.status);
   const h = el('div', 'stephead');
+  h.style.cursor = 'pointer';
   h.innerHTML = '<div><b>Step ' + step.step_id + ' — ' + esc(step.step_name) + '</b>' +
     '<div class="note">' + esc(step.description || '') + ' · approver: ' + esc(step.mandatory_approver || step.responsible_dept || '') + '</div></div>' +
-    '<div><span class="' + badgeClass(g.gated ? g.status : 'TRACK') + '">' + (g.gated ? g.status.replace(/_/g, ' ') : 'tracked') + '</span></div>';
+    '<div><span class="step-toggle-arrow">&#9660;</span> <span class="' + badgeClass(g.gated ? g.status : 'TRACK') + '">' + (g.gated ? g.status.replace(/_/g, ' ') : 'tracked') + '</span></div>';
   card.appendChild(h);
 
-  if (g.approval) card.appendChild(el('p', 'note', 'Signed by ' + g.approval.approved_by + ' on ' + (g.approval.approved_utc || '').slice(0, 16).replace('T', ' ') + (g.approval.comments ? ' · ' + g.approval.comments : '')));
+  const body = el('div', 'stepbody');
+
+  if (g.approval) body.appendChild(el('p', 'note', 'Signed by ' + g.approval.approved_by + ' on ' + (g.approval.approved_utc || '').slice(0, 16).replace('T', ' ') + (g.approval.comments ? ' · ' + g.approval.comments : '')));
   if (g.bypass) {
     const bb = el('div', 'banner bad');
     bb.innerHTML = '<b>Bypass authorised — this step counts as complete for the steps after it.</b><br>' +
       'By ' + esc(g.bypass.authorised_by) + ' on ' + esc((g.bypass.authorised_utc || '').slice(0, 10)) +
       '<br>Reason: ' + esc(g.bypass.reason) + '<br>Mitigation: ' + esc(g.bypass.mitigation) + (g.bypass.supersede_by ? '<br>Expected superseded by ' + esc(g.bypass.supersede_by) : '');
-    card.appendChild(bb);
+    body.appendChild(bb);
   }
   if (g.priorOpen.length && !g.done) {
     const pb = el('div', 'banner warn');
     pb.innerHTML = '<b>Blocked by an earlier gate.</b> Step ' + g.priorOpen.map(s => s.step_id + ' (' + esc(s.step_name) + ')').join(', ') +
       ' must be signed or bypassed before this one can close.';
-    card.appendChild(pb);
+    body.appendChild(pb);
   }
   if (g.needWh) {
     const w = el('div', 'banner ' + (g.whOk ? '' : 'warn'));
     w.innerHTML = '<b>Warehouse clearance ' + (g.whOk ? 'complete' : 'outstanding') + '.</b> ' + (g.whOk ? 'All areas cleared.' : 'Record clearance against this gate.');
-    card.appendChild(w);
+    body.appendChild(w);
   }
-  if (g.req.length || (g.cond && g.cond.length)) card.appendChild(evidenceTable(g, project, step, redraw));
-  else card.appendChild(el('p', 'note', 'No mandatory document defined for this step.'));
+  if (g.req.length || (g.cond && g.cond.length)) body.appendChild(evidenceTable(g, project, step, redraw));
+  else body.appendChild(el('p', 'note', 'No mandatory document defined for this step.'));
   if (step.source_note) {
     const sn = el('p', 'note');
     sn.innerHTML = '<b>Source note:</b> ' + esc(step.source_note);
-    card.appendChild(sn);
+    body.appendChild(sn);
   }
   if (g.blocking.length) {
     const ib = el('div', 'banner warn');
     ib.innerHTML = '<b>' + g.blocking.length + ' open issue(s) against this step.</b> ' + g.blocking.map(i => esc(i.description) + (i.owner ? ' (' + esc(i.owner) + ')' : '')).join(' · ');
-    card.appendChild(ib);
+    body.appendChild(ib);
   }
-  card.appendChild(gateActions(project, proc, step, g, redraw));
-  return { card, g };
+  body.appendChild(gateActions(project, proc, step, g, redraw));
+
+  h.onclick = () => {
+    body.classList.toggle('collapsed');
+    const arrow = h.querySelector('.step-toggle-arrow');
+    if (arrow) arrow.innerHTML = body.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+  };
+
+  card.appendChild(body);
+  return { card, g, body };
 }
 
 /* Trial batch sizes follow product complexity, not a fixed ladder. */
@@ -3570,11 +3552,21 @@ function viewNpi(root) {
     host.innerHTML = '';
     host.appendChild(packageBar(project));
     host.appendChild(scopeNote(project,'NPI'));
-    stepsOf('NPI', project).forEach(step => {
-      const { card } = stepCard(project, 'NPI', step, redraw);
-      if (step.trial_quantity) card.appendChild(trialConfig(project, 'NPI', step, redraw));
-      host.appendChild(card);
+    const grid = el('div', 'step-grid');
+    const steps = stepsOf('NPI', project);
+    let firstIncomplete = -1;
+    for (let i = 0; i < steps.length; i++) {
+      const g = gateState(project, 'NPI', steps[i]);
+      if (!g.done) { firstIncomplete = i; break; }
+    }
+    steps.forEach((step, idx) => {
+      const { card, body } = stepCard(project, 'NPI', step, redraw);
+      if (step.trial_quantity) body.appendChild(trialConfig(project, 'NPI', step, redraw));
+      const shouldExpand = (firstIncomplete >= 0 ? idx === firstIncomplete : idx === 0);
+      if (!shouldExpand) body.classList.add('collapsed');
+      grid.appendChild(card);
     });
+    host.appendChild(grid);
   };
   redraw();
 }
@@ -3663,12 +3655,21 @@ function viewEcn(root) {
       'ECN is driven by outside requests and several steps run close together, so the value here is visibility, not enforcement. ' +
       '<b>Warehouse readiness is mandatory before step 11, Trial Production Execution.</b>';
     host.appendChild(b);
-    steps.forEach(step => {
-      const { card } = stepCard(project, 'ECN', step, redraw);
-      if (/mwer/i.test(step.step_name)) card.appendChild(mwerSection(project, step, redraw));
-      if (/trial production execution/i.test(step.step_name)) card.appendChild(trialConfig(project, 'ECN', step, redraw));
-      host.appendChild(card);
+    const grid = el('div', 'step-grid');
+    let firstIncomplete = -1;
+    for (let i = 0; i < steps.length; i++) {
+      const g = gateState(project, 'ECN', steps[i]);
+      if (!g.done) { firstIncomplete = i; break; }
+    }
+    steps.forEach((step, idx) => {
+      const { card, body } = stepCard(project, 'ECN', step, redraw);
+      if (/mwer/i.test(step.step_name)) body.appendChild(mwerSection(project, step, redraw));
+      if (/trial production execution/i.test(step.step_name)) body.appendChild(trialConfig(project, 'ECN', step, redraw));
+      const shouldExpand = (firstIncomplete >= 0 ? idx === firstIncomplete : idx === 0);
+      if (!shouldExpand) body.classList.add('collapsed');
+      grid.appendChild(card);
     });
+    host.appendChild(grid);
   };
   redraw();
 }
