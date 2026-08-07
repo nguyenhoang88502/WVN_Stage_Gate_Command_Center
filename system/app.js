@@ -80,7 +80,6 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
   async changeTypes(changeTypes, user) { return API.post('/api/config/changetypes', { change_types: changeTypes, user }); },
   async importIssues(csv, user) { return API.post('/api/issues/import', { csv, user }); },
   async batchProjects(csv, user) { return API.post('/api/projects/batch', { csv, user }); },
-  async shutdown(user) { return API.post('/api/shutdown', { user }); },
   async post(path, body) {
     const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) throw await API.err(r);
@@ -3909,69 +3908,6 @@ function confirmModal(title, body, confirmLabel, onConfirm) {
   yes.focus();
 }
 
-function showStopped(detail) {
-  const s = $('#srvState');
-  if (s) { s.textContent = 'OFFLINE / TERMINATED'; s.className = badgeClass('Offline'); }
-  const b = $('#stopBtn'); if (b) b.disabled = true;
-  const w = el('div', 'stopped');
-  w.innerHTML = '<div class="card">' +
-    '<div class="mark">🛑</div>' +
-    '<div class="big">Server Stopped Cleanly</div>' +
-    '<p class="note">' + esc(detail || 'The port and every CSV file lock have been released.') + '</p>' +
-    '<p class="note">Nothing was lost — every submit is written and closed as it happens, so there is ' +
-    'no unsaved state in a running server.</p>' +
-    '<p class="note">To use the tool again, run <code>Open_WVN_NPI_Command_Center.cmd</code> and reload this page.</p>' +
-    '</div>';
-  document.body.appendChild(w);
-}
-
-function wireStopButton() {
-  const b = $('#stopBtn');
-  if (!b) return;
-  let stopping = false;                 // guards against a double-click
-  b.onclick = () => confirmModal(
-    'Stop the local server?',
-    '<p>Are you sure you want to stop the local server? Stopping the server will release all port and ' +
-    'CSV file locks.</p>' +
-    '<p class="note">Anyone else currently using this tool against this machine will lose their connection. ' +
-    'Their saved work is safe — only the server stops.</p>',
-    '🛑 Stop Server',
-    async () => {
-      if (stopping) return;
-      stopping = true;
-      b.disabled = true; b.textContent = 'Stopping…';
-      const srv = $('#srvState');
-      if (srv) { srv.textContent = 'stopping…'; srv.className = badgeClass('Pending'); }
-
-      // Await the real response rather than firing and forgetting it. A
-      // fire-and-forget send shows "Server Stopped Cleanly" no matter what
-      // actually happened server-side - on a machine where something (a VPN
-      // client, an EDR agent) interferes with the shutdown, that is a
-      // confirmed lie: the UI says stopped while the process is still up.
-      // A thrown fetch is also the NORMAL outcome of a genuine success,
-      // since the socket commonly dies mid-response right as the server
-      // goes down - so on failure, probe /api/data after a short delay to
-      // tell a real refusal apart from a success that just raced the reply.
-      try {
-        const r = await API.shutdown(getUser());
-        showStopped(r && r.message);
-      } catch (e) {
-        setTimeout(async () => {
-          try {
-            await fetch('/api/data', { cache: 'no-store' });
-            // still answering - the shutdown did not actually happen
-            stopping = false;
-            b.disabled = false; b.textContent = '🛑 Stop Server';
-            if (srv) { srv.textContent = 'connected'; srv.className = badgeClass('Connected'); }
-            alert('The server refused to stop: ' + e.message);
-          } catch (x) {
-            showStopped('The server stopped before it could reply — the port is closed.');
-          }
-        }, 600);
-      }
-    });
-}
-
 /* -------------------------------------------------------------- theme -- */
 const TK = 'wvn-epm-theme';
 function setTheme(t) {
@@ -4001,6 +3937,5 @@ $('#themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme =
   who.onchange = () => setUser(who.value.trim());
   $('#srvState').insertAdjacentElement('afterend', who);
 })();
-wireStopButton();
 
 boot();

@@ -265,20 +265,24 @@ $Stores = [ordered]@{
   lb_projects     = @('project_id','process','prod_family','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family','target_date','certifications')
   # v3.6 dropped warehouse_ready: dead since the Warehouse readiness tab and
   # its lb_warehouse store were removed - nothing read or wrote it any more.
-  lb_gates        = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','approved_by','approved_utc','evidence_cited','notes','updated_utc','owner_pic','claimed_by','claimed_utc')
+  # v4.0 appended supporter_pic/supporter_by/supporter_utc (second-claimer,
+  # two-tier ownership) and assigned_by/assigned_utc (admin-assigned tasks)
+  # to every store the claim engine already touched. No data migration
+  # needed: these four stores are all currently empty on disk.
+  lb_gates        = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','approved_by','approved_utc','evidence_cited','notes','updated_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
   # v2.2 appended kind..link_url. `kind` is 'file' for an uploaded document and
   # 'link' for a UNC path or URL that lives somewhere else and is only cited.
-  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc')
+  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
   lb_doc_comments = @('comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc')
   # v2.3 — shared with the standalone WVN_Ticketing_Center, which points at
   # this same tracking folder. lb_ticket_events is append-only by convention:
   # nothing in either app ever updates or deletes a row in it.
   lb_tickets      = @('ticket_id','project_id','step_key','doc_code','title','description','requested_by','requested_dept','requested_utc','assigned_dept','assigned_to','priority','due_date','status','fulfilled_by','fulfilled_utc','deliverable_id','sha256','close_note')
   lb_ticket_events= @('event_id','ticket_id','timestamp_utc','actor','actor_role','action','detail','sha256')
-  lb_sp_issues    = @('sp_id','project_id','title','description','raised_by','raised_utc','owner_dept','owner_pic','due_date','status','action_taken','remarks','attachment_name','attachment_path','last_message_by','last_message_utc','last_message','priority','assigned_dept','claimed_by','claimed_utc')
+  lb_sp_issues    = @('sp_id','project_id','title','description','raised_by','raised_utc','owner_dept','owner_pic','due_date','status','action_taken','remarks','attachment_name','attachment_path','last_message_by','last_message_utc','last_message','priority','assigned_dept','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
   lb_approvals    = @('approval_id','project_id','step_key','deliverable_id','approved_by','approved_utc','approval_type','evidence_count','comments')
   lb_bypasses     = @('bypass_id','project_id','step_key','authorised_by','authorised_utc','reason','mitigation','supersede_by','closed_utc','closed_note')
-  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc')
+  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
   lb_ppap         = @('ppap_id','project_id','part_number','customer','doc_code','required','submitted_utc','customer_approved','customer_approved_utc','notes')
   # v3.6 removed lb_d365 entirely: it was genuinely dead, left behind when the
   # D365 entry log tab was cut from Input — nothing ever read TRK.lb_d365.
@@ -1357,6 +1361,61 @@ try {
           $res.OutputStream.Write($bytes, 0, $bytes.Length)
           $res.OutputStream.Close()
           Write-Log ('Template downloaded: ' + $name)
+        }
+      }
+      elseif ($method -eq 'GET' -and $path -like '/api/vault/view/*') {
+        # Streams a filed evidence document back to the browser for inline
+        # preview (image thumbnail, PDF/Office file card) - v4.0.
+        #
+        # Unlike /api/templates/*, evidence genuinely lives in a nested
+        # [Family]\[DocType]\[file] structure under $EvidenceDir, so the
+        # request carries a whole relative path, not a bare file name - a
+        # GetFileName() flatten (the templates route's trick) would break
+        # every real evidence path. Safety instead comes entirely from
+        # canonicalizing the combined path and checking it still starts with
+        # $EvidenceDir's own canonical form: a crafted "..\..\windows\..."
+        # segment resolves outside the vault and gets rejected here exactly
+        # like it would for the templates route, no matter how deep the
+        # legitimate nesting goes.
+        #
+        # Content-Type is drawn from a fixed allowlist keyed on extension,
+        # defaulting to application/octet-stream for anything unrecognised -
+        # this is deliberate: serving an uploaded file back as text/html (or
+        # letting the browser sniff it into one) would let a maliciously
+        # crafted "evidence" file execute as script in this origin the
+        # moment someone previews it. An unknown type downloads instead of
+        # rendering; it never gets a free pass to be treated as markup.
+        $raw = [System.Uri]::UnescapeDataString($path.Substring('/api/vault/view/'.Length))
+        $relPath = $raw -replace '/', '\'
+        $file = Join-Path $EvidenceDir $relPath
+        $full = [System.IO.Path]::GetFullPath($file)
+        $vaultFull = [System.IO.Path]::GetFullPath($EvidenceDir)
+        if (-not $relPath -or -not $full.StartsWith($vaultFull, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
+          New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'evidence file not found' }
+        } else {
+          $viewExt = [System.IO.Path]::GetExtension($full).ToLowerInvariant()
+          $viewType = switch ($viewExt) {
+            '.png'  { 'image/png' }
+            '.jpg'  { 'image/jpeg' }
+            '.jpeg' { 'image/jpeg' }
+            '.webp' { 'image/webp' }
+            '.gif'  { 'image/gif' }
+            '.pdf'  { 'application/pdf' }
+            '.txt'  { 'text/plain; charset=utf-8' }
+            '.csv'  { 'text/plain; charset=utf-8' }
+            default { 'application/octet-stream' }
+          }
+          $bytes = [System.IO.File]::ReadAllBytes($full)
+          $res.StatusCode = 200
+          $res.ContentType = $viewType
+          # inline, not attachment: the point is an in-tab preview, and only
+          # the allowlisted types above are ever eligible to render as
+          # anything other than a download prompt anyway.
+          $res.AddHeader('Content-Disposition', 'inline; filename="' + [System.IO.Path]::GetFileName($full) + '"')
+          $res.Headers.Add('Cache-Control', 'no-store')
+          $res.ContentLength64 = $bytes.Length
+          $res.OutputStream.Write($bytes, 0, $bytes.Length)
+          $res.OutputStream.Close()
         }
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/templates/upload') {
