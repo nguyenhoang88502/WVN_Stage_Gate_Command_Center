@@ -4154,9 +4154,18 @@ function stepCard(project, proc, step, redraw) {
   const card = el('div', 'stepcard s-' + g.status);
   const h = el('div', 'stephead');
   h.style.cursor = 'pointer';
+  // The card body starts collapsed, so a warning that only lives down there is
+  // a warning nobody sees. The out-of-sequence flag rides in the always-visible
+  // header next to the status badge; the body banner still carries the detail.
+  const priorBadge = (g.priorOpen.length && !g.done)
+    ? '<span class="badge bg-warning prior-open-badge" title="Earlier gate' +
+      (g.priorOpen.length > 1 ? 's' : '') + ' still open: step ' +
+      esc(g.priorOpen.map(s => s.step_id).join(', ')) + '">Prior Step Open</span> '
+    : '';
   h.innerHTML = '<div><b>Step ' + step.step_id + ' — ' + esc(step.step_name) + '</b>' +
     '<div class="note">' + esc(step.description || '') + ' · approver: ' + esc(step.mandatory_approver || step.responsible_dept || '') + '</div></div>' +
-    '<div><span class="step-toggle-arrow">&#9660;</span> <span class="' + badgeClass(g.gated ? g.status : 'TRACK') + '">' + (g.gated ? g.status.replace(/_/g, ' ') : 'tracked') + '</span></div>';
+    '<div><span class="step-toggle-arrow">&#9660;</span> ' + priorBadge +
+    '<span class="' + badgeClass(g.gated ? g.status : 'TRACK') + '">' + (g.gated ? g.status.replace(/_/g, ' ') : 'tracked') + '</span></div>';
   card.appendChild(h);
 
   const body = el('div', 'stepbody');

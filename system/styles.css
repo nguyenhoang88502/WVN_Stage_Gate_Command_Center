@@ -932,6 +932,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
   background: var(--panel); color: var(--ink);
 }
 
+/* Out-of-sequence flag in the step card header. Deliberately smaller than the
+   status badge beside it - it qualifies the status, it does not replace it. */
+.prior-open-badge { font-size: 10.5px; margin-right: 4px }
+
 /* -- document link ------------------------------------------------------- */
 .doc-link {
   color: var(--blue); cursor: pointer; font-weight: 600;
