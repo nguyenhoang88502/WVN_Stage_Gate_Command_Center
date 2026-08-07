@@ -105,7 +105,6 @@ let CFG = null;                    // config.json (prod_families, change_types, 
 let TRK = {};                      // tracking store arrays, keyed by store name
 let PATHS = {};                    // resolved server-side paths (vault, templates, root)
 let TEMPLATES = [];                // blank company forms available for download
-const WH_AREAS = ['Assembly', 'Blade', 'Molding (material)', 'Mold storage', 'Fixture storage'];
 const UK = 'wvn-epm-user';
 function getUser() { try { return localStorage.getItem(UK) || ''; } catch (e) { return ''; } }
 function setUser(v) { try { localStorage.setItem(UK, v); } catch (e) { } }
@@ -217,7 +216,10 @@ function restoreUiState(state) {
   if (state.drawer) {
     var project = projById(state.drawer.projectId);
     if (project) {
-      var step = allStepsOf(project.process).find(function(s) {
+      // stepsOf(), not allStepsOf() - the step list is filtered by the
+      // project's change type, and reopening on a step this project does not
+      // actually run would render a drawer for a gate that is not in its flow.
+      var step = stepsOf(project.process, project).find(function(s) {
         return s.step_id === state.drawer.stepId;
       });
       if (step) {
@@ -225,11 +227,22 @@ function restoreUiState(state) {
       }
     }
   }
-  requestAnimationFrame(function() {
+  // One requestAnimationFrame is not enough. The drawer is re-created by
+  // openDrawer() and slides in over .18s, so for the first few frames it has
+  // no scrollable height and scrollTop silently clamps back to 0 - the reload
+  // looked like it worked and dropped the user at the top of the drawer every
+  // time. Re-apply until the value sticks, then stop. Bounded so a genuinely
+  // unscrollable drawer (short content) does not spin forever.
+  var attempts = 0;
+  (function applyScroll() {
+    attempts++;
     window.scrollTo(0, state.pageY);
     var d = $('#drawer');
     if (d) d.scrollTop = state.drawerScroll;
-  });
+    var pageSettled = Math.abs(window.scrollY - state.pageY) < 2;
+    var drawerSettled = !d || Math.abs(d.scrollTop - state.drawerScroll) < 2;
+    if ((!pageSettled || !drawerSettled) && attempts < 30) requestAnimationFrame(applyScroll);
+  })();
 }
 
 async function reloadPreservingState() {
@@ -648,7 +661,6 @@ function targetDateFor(classId, fromDate) {
   return addWeeks(fromWeek, weeks);
 }
 
-function warehouseRequired(proc, step) { return !!step.warehouse_gate_required; }
 function isGated(proc, step) { return proc === 'NPI' ? true : !!step.gate_clearance_required; }
 
 /* A step counts as done for downstream progression if it was signed OR if a
@@ -816,11 +828,6 @@ function evidenceFor(pid, stepKey, docCode) {
   if (isDeliverableClaimed(pid, stepKey, docCode)) return { level: 'ON_GOING', del: null };
   return { level: 'MISSING', del: null };
 }
-function whRows(pid, stepKey) { return TRK.lb_warehouse.filter(w => w.project_id === pid && w.step_key === stepKey); }
-function whReady(pid, stepKey) {
-  const rows = whRows(pid, stepKey);
-  return WH_AREAS.every(a => rows.some(r => r.area === a && r.status === 'Cleared'));
-}
 function gateRowOf(pid, stepKey) { return TRK.lb_gates.find(g => g.project_id === pid && g.step_key === stepKey); }
 
 function gateState(project, proc, step) {
@@ -847,8 +854,6 @@ function gateState(project, proc, step) {
   const bypasses = TRK.lb_bypasses.filter(b => b.project_id === project.project_id && b.step_key === sk && !b.closed_utc);
   const bypass = bypasses[bypasses.length - 1];
   const gate = gateRowOf(project.project_id, sk);
-  const needWh = warehouseRequired(proc, step);
-  const whOk = !needWh || whReady(project.project_id, sk);
   const gated = isGated(proc, step);
 
   // Stage gates run in order: a gate cannot be signed while an earlier
@@ -864,8 +869,8 @@ function gateState(project, proc, step) {
   else if (active.length && missing.length < active.length) status = 'IN_PROGRESS';
   const done = !!(approval || bypass);
   const priorBlocks = priorOpen.length > 0 && !isPrivileged();
-  const canApprove = gated && !approval && missing.length === 0 && blocking.length === 0 && whOk && !priorBlocks;
-  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, needWh, whOk, gated, status, done, canApprove, priorOpen, priorBlocks };
+  const canApprove = gated && !approval && missing.length === 0 && blocking.length === 0 && !priorBlocks;
+  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, gated, status, done, canApprove, priorOpen, priorBlocks };
 }
 function progressOf(project) {
   const proc = project.process, steps = stepsOf(proc, project);
@@ -1064,10 +1069,17 @@ function viewDashboard(root) {
     const type = reportSel.value;
     if (!type) { alert('Select a report type first.'); return; }
     const p = new URLSearchParams({ type });
-    if (dashFamFilter) p.set('fam', dashFamFilter);
-    if (dashModelFilter) p.set('model', dashModelFilter);
-    if (dashStartWeekFilter) p.set('start', dashStartWeekFilter);
-    if (dashEndWeekFilter) p.set('end', dashEndWeekFilter);
+    // .length, not truthiness - these are arrays since the slicers went
+    // multi-select, and an empty array is truthy, so every download was
+    // sending fam=&model=&start=&end= regardless of what was selected.
+    if (dashFamFilter.length) p.set('fam', dashFamFilter.join(','));
+    if (dashModelFilter.length) p.set('model', dashModelFilter.join(','));
+    if (dashStartWeekFilter.length) p.set('start', dashStartWeekFilter.join(','));
+    if (dashEndWeekFilter.length) p.set('end', dashEndWeekFilter.join(','));
+    // Cache buster. The server sends no-store now, but a stable download URL
+    // is exactly the shape browsers are most eager to re-serve, and a stale
+    // workbook is indistinguishable from a report that ignored your edits.
+    p.set('_ts', String(Date.now()));
     const a = document.createElement('a');
     a.href = '/api/reports/download?' + p.toString();
     a.download = '';
@@ -2062,8 +2074,7 @@ function openDrawer(project, step, focusDocCode) {
     (project.market_manager ? 'owner ' + esc(project.market_manager) : '') +
     '<br>Certifications: ' + certChips(certsOf(project)) +
     '<br>Status: <span class="' + badgeClass(g.status) + '">' + g.status.replace(/_/g, ' ') + '</span>' +
-    (g.approval ? ' signed by <b>' + esc(g.approval.approved_by) + '</b> on ' + esc((g.approval.approved_utc || '').slice(0, 10)) : '') +
-    (g.needWh ? ' · warehouse ' + (g.whOk ? 'cleared' : '<b style="color:var(--bad)">outstanding</b>') : '');
+    (g.approval ? ' signed by <b>' + esc(g.approval.approved_by) + '</b> on ' + esc((g.approval.approved_utc || '').slice(0, 10)) : '');
   d.appendChild(sub);
   // Stage/gate claim — the gate row may not exist yet if nobody has touched this step
   var gateRow = gateRowOf(project.project_id, sk) || { project_id: project.project_id, step_key: sk };
@@ -4075,7 +4086,6 @@ function gateActions(project, proc, step, g, redraw) {
       ap.disabled = !g.canApprove;
       ap.title = g.canApprove ? 'Sign this gate'
         : g.priorBlocks ? 'step ' + g.priorOpen.map(s => s.step_id).join(', ') + ' must close first'
-        : !g.whOk ? 'warehouse clearance outstanding'
         : g.missing.length ? g.missing.length + ' required document(s) missing'
         : 'blocking issue open';
       ap.onclick = async () => {
@@ -4159,22 +4169,23 @@ function stepCard(project, proc, step, redraw) {
       '<br>Reason: ' + esc(g.bypass.reason) + '<br>Mitigation: ' + esc(g.bypass.mitigation) + (g.bypass.supersede_by ? '<br>Expected superseded by ' + esc(g.bypass.supersede_by) : '');
     body.appendChild(bb);
   }
-  if (g.priorBlocks) {
-    const pb = el('div', 'banner warn');
+  // Both banners carry !g.done: once this gate is signed or bypassed, an
+  // earlier open gate is a fact about the project, not an obstacle to
+  // anything, and telling the user a closed gate is "blocked" is just wrong.
+  if (g.priorBlocks && !g.done) {
+    const pb = el('div', 'banner bad');
     pb.innerHTML = '<b>Blocked by an earlier gate.</b> Step ' + g.priorOpen.map(s => s.step_id + ' (' + esc(s.step_name) + ')').join(', ') +
       ' must be signed or bypassed before this one can close.';
     body.appendChild(pb);
   }
+  // Privileged users get the same information as a warning rather than a
+  // block. It has to stay visible - signing out of sequence is allowed here,
+  // not encouraged, and the badge is the only thing that says so.
   if (g.priorOpen.length && !g.done && !g.priorBlocks) {
     const sw = el('div', 'banner warn');
-    sw.innerHTML = '<b>Prior Step Open</b> Step ' + g.priorOpen.map(s => s.step_id + ' (' + esc(s.step_name) + ')').join(', ') +
-      ' — approval is still permitted because the user is a moderator/admin.';
+    sw.innerHTML = '<b>Prior Step Open.</b> Step ' + g.priorOpen.map(s => s.step_id + ' (' + esc(s.step_name) + ')').join(', ') +
+      ' is still open. You may sign this gate out of sequence because you are an admin or moderator.';
     body.appendChild(sw);
-  }
-  if (g.needWh) {
-    const w = el('div', 'banner ' + (g.whOk ? '' : 'warn'));
-    w.innerHTML = '<b>Warehouse clearance ' + (g.whOk ? 'complete' : 'outstanding') + '.</b> ' + (g.whOk ? 'All areas cleared.' : 'Record clearance against this gate.');
-    body.appendChild(w);
   }
   if (g.req.length || (g.cond && g.cond.length)) body.appendChild(evidenceTable(g, project, step, redraw));
   else body.appendChild(el('p', 'note', 'No mandatory document defined for this step.'));
@@ -4259,7 +4270,7 @@ function viewNpi(root) {
   const pBody = el('div', 'card-body');
   const b = el('div', 'banner');
   b.innerHTML = '<b>NPI gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
-    'warehouse clearance is done where required, and a named person signs. Otherwise use <b>Authorise bypass</b> — it is recorded separately and stays visible.';
+    'and a named person signs. Otherwise use <b>Authorise bypass</b> — it is recorded separately and stays visible.';
   pBody.appendChild(b);
   const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.prod_family) || {}).prod_family_name || project.prod_family));
   activeHead.id = 'npiActiveHead';
@@ -4371,8 +4382,7 @@ function viewEcn(root) {
     const steps = stepsOf('ECN', project);
     const gatedIds = steps.filter(s => s.gate_clearance_required).map(s => s.step_id).join(', ');
     b.innerHTML = '<b>ECN gates are lighter than NPI.</b> Only steps <b>' + gatedIds + '</b> are signed milestones; the rest are tracked. ' +
-      'ECN is driven by outside requests and several steps run close together, so the value here is visibility, not enforcement. ' +
-      '<b>Warehouse readiness is mandatory before step 11, Trial Production Execution.</b>';
+      'ECN is driven by outside requests and several steps run close together, so the value here is visibility, not enforcement.';
     host.appendChild(b);
     const grid = el('div', 'step-grid');
     let firstIncomplete = -1;
@@ -4744,9 +4754,11 @@ function viewSettings(root) {
         confirmModal('Remove Moderator', 'Remove <b>' + esc(m) + '</b> from moderators?', 'Remove', async function() {
           var newList = (CFG.moderators || []).filter(function(x) { return x !== m; });
           try {
-            var r = await API.post('/api/config/moderators', { user: getUser(), moderators: newList });
-            CFG.moderators = r.moderators || [];
-            viewSettings(root);
+            await API.post('/api/config/moderators', { user: getUser(), moderators: newList });
+            // redrawAfterWrite, NOT viewSettings(root) - viewSettings appends
+            // to root and never clears it, so calling it again stacks a second
+            // copy of the whole Settings page under the first.
+            await redrawAfterWrite();
           } catch (e) { alert('Could not save: ' + e.message); }
         });
       };
@@ -4767,9 +4779,10 @@ function viewSettings(root) {
       if (!name) return;
       try {
         var newList = (CFG.moderators || []).concat([name]);
-        var r = await API.post('/api/config/moderators', { user: getUser(), moderators: newList });
-        CFG.moderators = r.moderators || [];
-        viewSettings(root);
+        await API.post('/api/config/moderators', { user: getUser(), moderators: newList });
+        // The server trims, de-duplicates and strips 'admin', so re-read the
+        // config rather than rendering the list we hoped it would store.
+        await redrawAfterWrite();
       } catch (e) { alert('Could not save: ' + e.message); }
     };
     addRow.appendChild(modInput);

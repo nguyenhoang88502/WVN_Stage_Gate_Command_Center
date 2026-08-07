@@ -3,14 +3,14 @@
                         "version":  "3.5.0",
                         "app_name":  "WVN NPI \u0026 ECN Command Center",
                         "deployment_path":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\WVN_Stage_Gate_Command_Center_v3.5_FullBundle",
-                        "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam Ã¢â‚¬â€Ã‚Â WOS Pillar 09",
+                        "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â WOS Pillar 09",
                         "compiled_from":  [
                                               "QA-SOP-NPI-0001-05 New Product Introduction (Rev 05, Aug 2020)",
                                               "QA-SOP-NPI-0002-03 ECN Procedure (Rev 03)",
                                               "QA-SOP-NPI-0003 NPI Management RACI Matrix (Aug 2025)",
                                               "0.EPM_Nov.2025_final.pptx + 0.EPM-VN_Jul.2026.pptx (EPM pillar decks)",
-                                              "Wahl Operating System Ã¢â‚¬â€Ã‚Â Technical Pillars Criteria.xlsx",
-                                              "WOS Assessment Scoring Summary (Vietnam Ã¢â‚¬â€Ã‚Â Q4 2025).xlsx",
+                                              "Wahl Operating System ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â Technical Pillars Criteria.xlsx",
+                                              "WOS Assessment Scoring Summary (Vietnam ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â Q4 2025).xlsx",
                                               "Forms_Used_in_EPM_EEM_Process.md (DeepSeek extraction, 2026-07-31)",
                                               "01_Current_State_and_Gap_Analysis.md (thesis diagnosis)",
                                               "7_Steps_of_EPM_Pillar.html (compiled pillar reference)",
@@ -101,7 +101,7 @@
                           {
                               "prod_family_id":  "SHAVER",
                               "prod_family_name":  "Shaver (Foil / Rotary)",
-                              "description":  "Electric shavers Ã¢â‚¬â€Ã‚Â foil and rotary head types",
+                              "description":  "Electric shavers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â foil and rotary head types",
                               "sample_fg_ids":  [
                                                     "5619",
                                                     "7066",
@@ -687,7 +687,7 @@
                                "form_code":  null,
                                "owner_dept":  "Production",
                                "source":  "Production dashboard",
-                               "description":  "Daily output vs. class-based ramp-up target; Class E target ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¤ 15 days to full capacity",
+                               "description":  "Daily output vs. class-based ramp-up target; Class E target ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¤ 15 days to full capacity",
                                "stage_required":  "NPI 7",
                                "keywords":  [
                                                 "ramp up",
@@ -811,7 +811,6 @@
                                                                ],
                                            "trial_quantity":  null,
                                            "gate_criteria":  "Gantt chart approved; IR submitted; design checklist signed off by NB team; product class assigned",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
                                                                                  "DESIGN-CHK"
                                                                              ],
@@ -842,7 +841,6 @@
                                                                ],
                                            "trial_quantity":  null,
                                            "gate_criteria":  "DFM signed off; tear-down findings documented; routing/layout draft started",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -873,7 +871,6 @@
                                                                ],
                                            "trial_quantity":  null,
                                            "gate_criteria":  "PFMEA draft complete; mold fabrication started; EP sample plan defined",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -905,7 +902,6 @@
                                                                ],
                                            "trial_quantity":  null,
                                            "gate_criteria":  "T0/T1/T2 samples pass functional test; mold approved for production; supplier capability confirmed",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -940,7 +936,6 @@
                                                                ],
                                            "trial_quantity":  null,
                                            "gate_criteria":  "EP sample approved by customer; Inspection Standard signed off; Control Plan finalized; SOPs ready for training",
-                                           "warehouse_gate_required":  true,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -982,7 +977,6 @@
                                                                   "note":  "Trial quantities per QA-SOP-NPI-0001-05 Rev 05; may change with departmental alignment"
                                                               },
                                            "gate_criteria":  "Trial Request signed by all departments; all trial issues logged and closed; PPAP package submitted; training records complete",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
                                                                                  "PPAP",
                                                                                  "8D-CAPA"
@@ -1018,7 +1012,6 @@
                                                                ],
                                            "trial_quantity":  null,
                                            "gate_criteria":  "Capacity target achieved within class-based timeline; NPI Closure Validation signed; project transferred to Supply Chain",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1041,7 +1034,6 @@
                                            "responsible_dept":  "WCC / WVN / Customer",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "QA-F-GEN-0011/0024 Engineering Change Request form submitted",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1058,7 +1050,6 @@
                                            "responsible_dept":  "Production, QC, R\u0026D, Finance",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "5M impact analysis completed by all relevant departments",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1076,7 +1067,6 @@
                                            "responsible_dept":  "Production, QC, R\u0026D, Finance",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "4M Change Evaluation (QA-F-GEN-0017) completed for each affected dimension",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1094,7 +1084,6 @@
                                            "responsible_dept":  "Project Leader",
                                            "gate_clearance_required":  true,
                                            "gate_criteria":  "Approved QA-F-GEN-0011/0024 with MWER and Customer sign-off",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1111,7 +1100,6 @@
                                            "responsible_dept":  "Project Leader",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "Kick-off meeting minutes documented; project team roster confirmed",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1130,7 +1118,6 @@
                                            "responsible_dept":  "Project Leader",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "EC implementation plan approved; kick-off minutes signed; drawings and EC record distributed to all stakeholders",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1149,7 +1136,6 @@
                                            "responsible_dept":  "Production, QC, Sourcing, Lean, Finance",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "BOM updated; Master Data updated; Route updated; Cost Roll Up executed; new quotation sent to Customer",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1168,7 +1154,6 @@
                                            "responsible_dept":  "Sourcing, Material Planning, Finance",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "EC issued to suppliers; trial material orders placed; debit note issued if applicable",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1186,7 +1171,6 @@
                                            "responsible_dept":  "Warehouse, Logistics",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "Stock assessment complete; disposition (running change/quarantine/scrap) decided per item; departments notified",
-                                           "warehouse_gate_required":  true,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1207,7 +1191,6 @@
                                            "responsible_dept":  "Material Planning, Production, QC, R\u0026D",
                                            "gate_clearance_required":  false,
                                            "gate_criteria":  "Trial production scheduled; 4M evaluation completed post-change; 4M update (WI, process) documented",
-                                           "warehouse_gate_required":  false,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1228,7 +1211,6 @@
                                            "responsible_dept":  "Production, QC",
                                            "gate_clearance_required":  true,
                                            "gate_criteria":  "At least 3 trial batches complete (2000/5000/10000); trial report approved; all issues closed or action plan in place",
-                                           "warehouse_gate_required":  true,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1251,7 +1233,6 @@
                                            "responsible_dept":  "Production, QC",
                                            "gate_clearance_required":  true,
                                            "gate_criteria":  "All EC documentation closed; SOP/WI updated; mass production running; project archived",
-                                           "warehouse_gate_required":  true,
                                            "conditional_evidence_doctypes":  [
 
                                                                              ],
@@ -1317,15 +1298,15 @@
                                    "raci_role":  "Responsible for routes, time study, line balancing"
                                },
                         "Production_Assembly":  {
-                                                    "full_name":  "Production Ã¢â‚¬â€Ã‚Â Assembly",
+                                                    "full_name":  "Production ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â Assembly",
                                                     "raci_role":  "Consulted/Informed on most tasks"
                                                 },
                         "Production_Blade":  {
-                                                 "full_name":  "Production Ã¢â‚¬â€Ã‚Â Blade",
+                                                 "full_name":  "Production ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â Blade",
                                                  "raci_role":  "Consulted/Informed on blade-related tasks"
                                              },
                         "Production_Mold":  {
-                                                "full_name":  "Production Ã¢â‚¬â€Ã‚Â Mold",
+                                                "full_name":  "Production ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â Mold",
                                                 "raci_role":  "Consulted/Informed on mold-related tasks"
                                             },
                         "Finance":  {
@@ -1398,7 +1379,7 @@
                                                           "on_time_pct_2025":  "81%",
                                                           "mold_tools_2024":  23,
                                                           "mold_tools_2025":  81,
-                                                          "note":  "PRF intake nearly doubled 2024ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢2025 (105ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢201); mold volume tripled (23ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢81)"
+                                                          "note":  "PRF intake nearly doubled 2024ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢2025 (105ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢201); mold volume tripled (23ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢81)"
                                                       }
                            },
     "file_system_resilience":  {
@@ -1459,10 +1440,10 @@
                                                                                          }
                                                                          }
                                                            },
-                                "gap_diagnosis_ref":  "01_Current_State_and_Gap_Analysis.md Ã¢â‚¬â€Ã‚Â five disconnected trackers, no shared project identity, 76-83% on-time for 6 years",
-                                "proposed_framework_ref":  "03_Proposed_Framework_1Month.md Ã¢â‚¬â€Ã‚Â thin coordination layer over existing trackers"
+                                "gap_diagnosis_ref":  "01_Current_State_and_Gap_Analysis.md ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â five disconnected trackers, no shared project identity, 76-83% on-time for 6 years",
+                                "proposed_framework_ref":  "03_Proposed_Framework_1Month.md ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â thin coordination layer over existing trackers"
                             },
     "moderators":  [
-
+                       "Hoang"
                    ]
 }

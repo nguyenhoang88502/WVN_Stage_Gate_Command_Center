@@ -286,17 +286,16 @@ $Stores = [ordered]@{
   lb_ppap         = @('ppap_id','project_id','part_number','customer','doc_code','required','submitted_utc','customer_approved','customer_approved_utc','notes')
   # v3.6 removed lb_d365 entirely: it was genuinely dead, left behind when the
   # D365 entry log tab was cut from Input — nothing ever read TRK.lb_d365.
-  # lb_warehouse looked dead by the same test (no Input-tab route writes to it
-  # any more either) but is NOT: app.js still reads TRK.lb_warehouse directly
-  # inside gateState()/whReady() to decide whether a step with
-  # warehouse_gate_required:true in config.json can be approved at all. Kept.
-  lb_warehouse    = @('wh_id','project_id','step_key','area','kind','status','cleared_by','cleared_date','reference','notes')
+  # v4.2 removed lb_warehouse for the same reason, one step later. It had been
+  # kept only because gateState()/whReady() still read it to decide whether a
+  # step with warehouse_gate_required could be approved; warehouse clearance
+  # is no longer a gate condition anywhere, so nothing reads or writes it.
   lb_mwer         = @('mwer_id','project_id','step_key','meeting_type','meeting_date','attendees','summary','evidence_file','evidence_body','decision','conditions','logged_by','logged_utc')
   lb_audit        = @('log_id','timestamp_utc','user','action','project_id','object_type','object_id','change_from','change_to','detail','result')
 }
 $IdPrefix = @{
   lb_gates='GATE'; lb_deliverables='DEL'; lb_approvals='APR'; lb_bypasses='BYP'; lb_issues='LFI';
-  lb_ppap='PPAP'; lb_warehouse='WH'; lb_mwer='MWER'; lb_audit='LOG'; lb_doc_comments='CMT'
+  lb_ppap='PPAP'; lb_mwer='MWER'; lb_audit='LOG'; lb_doc_comments='CMT'
   lb_tickets='TKT'; lb_ticket_events='EVT'; lb_sp_issues='SPI'
 }
 
@@ -800,6 +799,13 @@ function New-FileResponse {
   param([System.Net.HttpListenerResponse]$Response, [string]$Path, [string]$ContentType)
   $bytes = [System.IO.File]::ReadAllBytes($Path)
   $Response.StatusCode = 200
+  # app.js / styles.css / index.html are served from disk and change on every
+  # release. Without these the browser keeps its copy indefinitely - the tool
+  # is versionless from the cache's point of view (no ETag, no query hash), so
+  # an upgraded install keeps running the old frontend against the new API and
+  # every symptom points at the wrong file.
+  $Response.Headers.Add('Cache-Control', 'no-store, no-cache, must-revalidate')
+  $Response.Headers.Add('Pragma', 'no-cache')
   $Response.ContentType = $ContentType
   $Response.ContentLength64 = $bytes.Length
   $Response.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -2330,9 +2336,18 @@ try {
 
                       # Stream the result
                       $bytes = [System.IO.File]::ReadAllBytes($tempPath)
-                      $filename = 'Report_' + $typeKey + '_' + (Get-Date -Format 'yyyyMMdd') + '.xlsx'
+                      # Timestamp to the second, not the day. The download is a
+                      # plain GET on a stable URL, so two reports pulled on the
+                      # same day landed on the same filename and the browser
+                      # happily re-served the first one from cache - the report
+                      # appeared not to pick up any change made to a project.
+                      $filename = 'Report_' + $typeKey + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.xlsx'
                       $res.StatusCode = 200
                       $res.ContentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                      # Same reason: this response is generated per request from
+                      # live CSV state and must never be cached.
+                      $res.Headers.Add('Cache-Control', 'no-store, no-cache, must-revalidate')
+                      $res.Headers.Add('Pragma', 'no-cache')
                       $res.AddHeader('Content-Disposition', 'attachment; filename="' + $filename + '"')
                       $res.ContentLength64 = $bytes.Length
                       $res.OutputStream.Write($bytes, 0, $bytes.Length)
