@@ -16,7 +16,7 @@ $ScriptDir = $PSScriptRoot
 if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $RootDir   = Split-Path -Parent $ScriptDir
 
-$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v3.4'
+$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v4.1'
 $OutZip    = Join-Path $RootDir "$ZipName.zip"
 
 # --- 1. Stage into a temp directory ---
@@ -98,17 +98,25 @@ if (Test-Path -LiteralPath $VendorSrc) {
 }
 else { Write-Warning "  MISSING: system\vendor — packaged app.html will load with no styling" }
 
-# --- 2. Sanitise config.json — clear deployment_path ---
+# --- 2. Sanitise config.json — clear machine-specific paths ---
 Write-Host ""
-Write-Host "Sanitising config.json — clearing deployment_path ..."
+Write-Host "Sanitising config.json — clearing machine-specific paths ..."
 $StagedConfig = Join-Path $StageDir 'system\config.json'
 $config = Get-Content -Raw -LiteralPath $StagedConfig | ConvertFrom-Json
 $config.system_info.deployment_path = ''
+if ($config.deployment_defaults.PSObject.Properties.Name -contains 'evidence_vault_path') {
+  $config.deployment_defaults.evidence_vault_path = ''
+}
+if ($config.deployment_defaults.PSObject.Properties.Name -contains 'evidence_vault_root') {
+  $config.deployment_defaults.evidence_vault_root = ''
+}
 $json = $config | ConvertTo-Json -Depth 100
 # Preserve original encoding: source config.json is UTF-8 without BOM.
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($StagedConfig, $json, $utf8NoBom)
 Write-Host "  deployment_path set to ''"
+Write-Host "  evidence_vault_path set to ''"
+Write-Host "  evidence_vault_root set to ''"
 
 # --- 3. Assert UTF-8 BOM on every .ps1 file in the package ---
 #     PowerShell 5.1 will not parse a .ps1 file without a BOM.
