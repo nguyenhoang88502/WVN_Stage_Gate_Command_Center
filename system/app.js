@@ -881,7 +881,7 @@ function viewDashboard(root) {
   toolbar.className = 'no-print dash-toolbar';
 
   const pdfBtn = el('button', 'primary', 'Download PDF');
-  pdfBtn.onclick = () => window.print();
+  pdfBtn.onclick = () => buildPrintPackage();
   toolbar.appendChild(pdfBtn);
 
   const expBtn = el('button', 'primary', 'Download Management Report');
@@ -1614,6 +1614,294 @@ function exportManagementReport() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+/* ---- buildPrintPackage — 3-page A4 executive PDF (v4.1 Task 2) ---------
+   Populates the hidden #dashPrintPackage container from the CURRENTLY
+   FILTERED project set (respects the dashboard slicers), then calls
+   window.print(). Called by the Dashboard "Download PDF" button.  --------- */
+function buildPrintPackage() {
+  /* Re-implement the filter logic inline (global dash*Filter vars are
+     already set by the dashboard slicers; this mirrors the closure inside
+     viewDashboard exactly so the printed report matches the screen. */
+  function filteredByProcess(process) {
+    var list = projectsOf(process);
+    var any = dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter;
+    if (!any) return list;
+    return list.filter(function(p) {
+      if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
+      if (dashModelFilter && p.family !== dashModelFilter) return false;
+      if (dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
+      if (dashEndWeekFilter) {
+        var ew = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
+        if (!ew || ew !== dashEndWeekFilter) return false;
+      }
+      return true;
+    });
+  }
+
+  var filteredNpi = filteredByProcess('NPI');
+  var filteredEcn = filteredByProcess('ECN');
+  var allFiltered = filteredNpi.concat(filteredEcn);
+
+  var container = document.getElementById('dashPrintPackage');
+  if (!container) { container = document.createElement('div'); container.id = 'dashPrintPackage'; document.body.appendChild(container); }
+  container.innerHTML = '';
+
+  if (!allFiltered.length) { container.innerHTML = '<p style="padding:20px;font-size:12pt">No projects match the current filters.</p>'; var de = document.getElementById('dashExec'); if (de) de.style.display = 'none'; window.print(); if (de) de.style.display = ''; return; }
+
+  var now = new Date().toLocaleString();
+  var user = getUser() || '—';
+  var appName = CFG && CFG.system_info ? CFG.system_info.app_name : 'WAHL Vietnam NPI & ECN Stage Gate Command Center';
+  var appVer = CFG && CFG.system_info ? 'v' + CFG.system_info.version : '';
+
+  /* --- filter summary tag line --- */
+  var filterParts = [];
+  if (dashFamFilter) { var ff = familyById(dashFamFilter); filterParts.push('Family: ' + (ff ? ff.prod_family_name : dashFamFilter)); }
+  if (dashModelFilter) filterParts.push('Model: ' + dashModelFilter);
+  if (dashStartWeekFilter) filterParts.push('Start: ' + dashStartWeekFilter);
+  if (dashEndWeekFilter) filterParts.push('End: ' + dashEndWeekFilter);
+  var filterTag = filterParts.length
+    ? filterParts.map(function(f) { return '<span class="print-filter-tag">' + esc(f) + '</span>'; }).join(' ')
+    : '<span class="print-filter-tag">All projects</span>';
+
+  /* ====================================================================
+     PAGE 1 — Executive header, KPI tiles, SVG Gantt
+     ================================================================== */
+  var page1 = document.createElement('div'); page1.className = 'print-page';
+
+  var p1Banner = '<div class="print-banner">' +
+    '<h1>' + esc(appName) + ' ' + esc(appVer) + '</h1>' +
+    '<p>Generated: ' + esc(now) + ' &middot; Prepared by: ' + esc(user) + ' &middot; ' + filterTag + '</p></div>';
+
+  var kpis = computePortfolioKPIs();
+  var accentMap = { 'k-good': '#16703c', 'k-blue': '#14589f', 'k-warn': '#8a5800', 'k-bad': '#b02318' };
+  var kpiHtml = '<div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">';
+  kpis.forEach(function(k) {
+    var accent = accentMap[k.cssClass] || '#62748a';
+    kpiHtml += '<div style="flex:1;min-width:110px;background:#f5f8fb;border-top:3px solid ' + accent +
+      ';padding:6px 10px;border-radius:4px;border:1px solid #d7e0e9">' +
+      '<div style="font-size:7pt;font-weight:700;color:#5d6e83;text-transform:uppercase;letter-spacing:.05em">' + esc(k.label) + '</div>' +
+      '<div style="font-size:15pt;font-weight:700;color:#14202c;line-height:1.1">' + esc(k.value) + '</div>' +
+      '<div style="font-size:7pt;color:#5d6e83">' + esc(k.sub) + '</div></div>';
+  });
+  kpiHtml += '</div>';
+  page1.innerHTML = p1Banner + kpiHtml + '<div class="print-gantt-wrap"><h3>Project Schedule (Gantt)</h3>' + _buildSvgGantt(allFiltered) + '</div>';
+  container.appendChild(page1);
+
+  /* ====================================================================
+     PAGE 2 — NPI & ECN stage matrices with per-cell completion %
+     ================================================================== */
+  var page2 = document.createElement('div'); page2.className = 'print-page';
+
+  /* --- NPI matrix --- */
+  if (filteredNpi.length) {
+    var npiSteps = allStepsOf('NPI');
+    var npiH = '<div class="print-matrix"><h3>NPI Stage Matrix — Completion %</h3><table><thead><tr><th>Project</th>' +
+      npiSteps.map(function(s) { return '<th>' + esc(s.step_id) + '. ' + esc(s.step_name) + '</th>'; }).join('') +
+      '</tr></thead><tbody>';
+
+    filteredNpi.forEach(function(prj) {
+      var on = stepsOf('NPI', prj);
+      var fam = familyById(prj.prod_family);
+      var label = esc(prj.project_id) + (fam ? ' (' + esc(fam.prod_family_name) + ')' : '');
+      npiH += '<tr><td>' + label + '</td>';
+      npiSteps.forEach(function(step) {
+        if (on.indexOf(step) < 0) { npiH += '<td class="pct-na">n/a</td>'; return; }
+        var c = cellStateFor(prj, step);
+        var reqCount = c.done.length + c.filed.length + c.missing.length;
+        var doneCount = c.done.length + c.filed.length;
+        var pct = reqCount ? Math.round(100 * doneCount / reqCount) : 0;
+        var cls = pct === 100 ? 'pct-done' : (pct > 0 ? 'pct-partial' : 'pct-none');
+        npiH += '<td class="' + cls + '">' + pct + '%</td>';
+      });
+      npiH += '</tr>';
+    });
+    npiH += '</tbody></table></div>';
+    page2.innerHTML += npiH;
+  }
+
+  /* --- ECN matrix (gate-grouped + PPAP) --- */
+  if (filteredEcn.length) {
+    var groups = ecnGateGroups();
+    var ecnH = '<div class="print-matrix"><h3>ECN Stage Matrix — Completion %</h3><table><thead><tr><th>Project</th>' +
+      groups.map(function(g) { return '<th>' + esc(g.gate.step_id) + '. ' + esc(g.gate.step_name) + '</th>'; }).join('') +
+      '<th>PPAP</th></tr></thead><tbody>';
+
+    filteredEcn.forEach(function(prj) {
+      var on = stepsOf('ECN', prj);
+      var fam = familyById(prj.prod_family);
+      var label = esc(prj.project_id) + (fam ? ' (' + esc(fam.prod_family_name) + ')' : '');
+      ecnH += '<tr><td>' + label + '</td>';
+      groups.forEach(function(g) {
+        var anyApplicable = g.steps.some(function(s) { return on.indexOf(s) >= 0; });
+        if (!anyApplicable) { ecnH += '<td class="pct-na">n/a</td>'; return; }
+        var gc = groupCellStateFor(prj, g);
+        var reqCount = gc.done.length + gc.filed.length + gc.missing.length;
+        var doneCount = gc.done.length + gc.filed.length;
+        var pct = reqCount ? Math.round(100 * doneCount / reqCount) : 0;
+        var cls = pct === 100 ? 'pct-done' : (pct > 0 ? 'pct-partial' : 'pct-none');
+        ecnH += '<td class="' + cls + '">' + pct + '%</td>';
+      });
+      /* PPAP */
+      var ppapRows = (TRK.lb_ppap || []).filter(function(r) { return r.project_id === prj.project_id; });
+      var ppapApproved = ppapRows.filter(function(r) { return r.customer_approved && r.customer_approved !== 'NO'; }).length;
+      var ppapPct = ppapRows.length ? Math.round(100 * ppapApproved / ppapRows.length) : 0;
+      var ppapCls = ppapRows.length ? (ppapPct === 100 ? 'pct-done' : (ppapPct > 0 ? 'pct-partial' : 'pct-none')) : 'pct-na';
+      ecnH += '<td class="' + ppapCls + '">' + (ppapRows.length ? ppapPct + '%' : 'n/a') + '</td>';
+      ecnH += '</tr>';
+    });
+    ecnH += '</tbody></table></div>';
+    page2.innerHTML += ecnH;
+  }
+
+  if (!page2.innerHTML) page2.innerHTML = '<p style="padding:10px;color:#999">No filtered projects to display.</p>';
+  container.appendChild(page2);
+
+  /* ====================================================================
+     PAGE 3 — Project overview table
+     ================================================================== */
+  var page3 = document.createElement('div'); page3.className = 'print-page';
+  var ovH = '<div class="print-overview"><h3>Project Overview</h3>' +
+    '<table><thead><tr><th>Project ID</th><th>Model / Family</th><th>Prod. Family</th><th>Change Type</th>' +
+    '<th>PIC / Market Mgr</th><th>Start Week</th><th>Target Week</th><th>Completion</th><th>Open Issues</th></tr></thead><tbody>';
+
+  var allSorted = allFiltered.slice().sort(function(a, b) {
+    var sa = toWeek(a.prf_date); var sb = toWeek(b.prf_date);
+    if (!sa && !sb) return 0; if (!sa) return 1; if (!sb) return -1;
+    return sa < sb ? -1 : sa > sb ? 1 : 0;
+  });
+
+  allSorted.forEach(function(prj) {
+    var fam = familyById(prj.prod_family);
+    var ct = changeTypeById(prj.class_abcde);
+    var pr = progressOf(prj);
+    var cls = classifyProject(prj);
+    var openCount = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
+      .filter(function(i) { return i.project_id === prj.project_id && i.status !== 'Closed'; }).length;
+    var startW = toWeek(prj.prf_date) || '—';
+    var targetW = toWeek(prj.target_date) || targetDateFor(prj.class_abcde, prj.prf_date) || '—';
+
+    var rowCls = '';
+    if (cls === 'LATE') rowCls = ' style="background:#fdeceb"';
+    else if (cls === 'COMPLETE') rowCls = ' style="background:#e5f3ea"';
+
+    ovH += '<tr' + rowCls + '>' +
+      '<td><b>' + esc(prj.project_id) + '</b></td>' +
+      '<td>' + esc(prj.family || '—') + '</td>' +
+      '<td>' + esc(fam ? fam.prod_family_name + ' (' + fam.prod_family_id + ')' : (prj.prod_family || '—')) + '</td>' +
+      '<td>' + esc(ct ? ct.type_id + ' — ' + ct.name : (prj.class_abcde || '—')) + '</td>' +
+      '<td>' + esc(prj.market_manager || '—') + '</td>' +
+      '<td class="num">' + esc(startW) + '</td>' +
+      '<td class="num">' + esc(targetW) + '</td>' +
+      '<td class="num"><b>' + pr.pct + '%</b> <span style="font-size:7pt;color:#5d6e83">(' + pr.done + '/' + pr.total + ')</span></td>' +
+      '<td class="num">' + (openCount ? '<b style="color:#b02318">' + openCount + '</b>' : '0') + '</td>' +
+      '</tr>';
+  });
+  ovH += '</tbody></table></div>';
+  page3.innerHTML = ovH;
+  container.appendChild(page3);
+
+  /* Suppress the interactive #dashExec content during the print package
+     print so it does not overlay or bleed into the 3-page PDF. Restore
+     after the print dialog closes (window.print is blocking). */
+  var dashExec = document.getElementById('dashExec');
+  if (dashExec) dashExec.style.display = 'none';
+  window.print();
+  if (dashExec) dashExec.style.display = '';
+}
+
+/* ---- inline SVG Gantt chart (air-gapped — no Chart.js) ---------------
+   One bar per project: prf_date (start) → target_date (end). Week axis
+   on top, project-id labels on the left, bars coloured by status.  ----- */
+function _buildSvgGantt(projects) {
+  if (!projects.length) return '<p style="color:#999">No projects to chart.</p>';
+
+  /* Collect all [startDate, endDate] pairs in real dates */
+  var pairs = [];
+  projects.forEach(function(p) {
+    var sw = toWeek(p.prf_date);
+    var ew = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
+    var sd = weekToDate(sw);
+    var ed = weekToDate(ew);
+    if (sd && ed) {
+      /* end date inclusive — add 7 days so the bar spans the full target week */
+      ed = new Date(ed); ed.setDate(ed.getDate() + 6);
+      pairs.push({ project: p, startDate: sd, endDate: ed });
+    }
+  });
+  if (!pairs.length) return '<p style="color:#999">No projects with valid week ranges to chart.</p>';
+
+  /* Overall time span with small padding */
+  var allStarts = pairs.map(function(x) { return x.startDate.getTime(); });
+  var allEnds = pairs.map(function(x) { return x.endDate.getTime(); });
+  var minT = Math.min.apply(null, allStarts);
+  var maxT = Math.max.apply(null, allEnds);
+  var pad = 7 * 86400000; /* 1-week padding on each side */
+  minT -= pad; maxT += pad;
+  var spanMs = maxT - minT;
+
+  /* Build a sorted list of unique week labels for the axis */
+  var weekSet = new Map();
+  var cursor = new Date(minT);
+  while (cursor.getTime() <= maxT) {
+    var wk = isoWeek(cursor);
+    if (wk && !weekSet.has(wk)) {
+      var wd = weekToDate(wk);
+      if (wd) weekSet.set(wk, wd);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  var weekEntries = [];
+  weekSet.forEach(function(d, w) { weekEntries.push({ week: w, date: d }); });
+  weekEntries.sort(function(a, b) { return a.date - b.date; });
+
+  var leftMargin = 155;
+  var rightMargin = 12;
+  var topMargin = 48;
+  var rowH = 22;
+  var barH = 14;
+  var barYOff = Math.round((rowH - barH) / 2);
+  var chartW = 940 - leftMargin - rightMargin;
+  var totalH = topMargin + pairs.length * rowH + 8;
+
+  function xForDate(d) { return leftMargin + Math.round((d.getTime() - minT) / spanMs * chartW); }
+
+  var statusColors = { COMPLETE: '#16703c', IN_PROGRESS: '#14589f', LATE: '#b02318', NOT_STARTED: '#8a5800' };
+
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 ' + totalH + '" style="width:100%;height:auto;font-family:sans-serif">';
+
+  /* Axis grid — vertical lines and week labels */
+  var labelInterval = Math.max(1, Math.ceil(weekEntries.length / 26));
+  weekEntries.forEach(function(entry, i) {
+    var x = xForDate(entry.date);
+    var tickH = (i % labelInterval === 0) ? 12 : 6;
+    svg += '<line x1="' + x + '" y1="' + (topMargin - tickH) + '" x2="' + x + '" y2="' + (totalH - 4) + '" stroke="#d7e0e9" stroke-width="0.5"/>';
+  });
+
+  /* Week labels (only every labelInterval) */
+  weekEntries.forEach(function(entry, i) {
+    if (i % labelInterval !== 0) return;
+    var x = xForDate(entry.date);
+    svg += '<text x="' + x + '" y="' + (topMargin - 16) + '" text-anchor="middle" font-size="7" fill="#42556a">' + esc(entry.week) + '</text>';
+  });
+
+  /* Project bars */
+  pairs.forEach(function(pair, idx) {
+    var cls = classifyProject(pair.project);
+    var color = statusColors[cls] || '#62748a';
+    var x = xForDate(pair.startDate);
+    var w = Math.max(3, xForDate(pair.endDate) - x);
+    var y = topMargin + idx * rowH + barYOff;
+
+    svg += '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + barH + '" rx="3" ry="3" fill="' + color + '"/>';
+
+    /* Project label on the left */
+    svg += '<text x="' + (leftMargin - 6) + '" y="' + (y + barH - 2) + '" text-anchor="end" font-size="7.5" fill="#14202c" font-weight="600">' + esc(pair.project.project_id) + '</text>';
+  });
+
+  svg += '</svg>';
+  return svg;
+}
+
 /* ---- sidebar evidence upload helper ------------------------------------ */
 async function uploadEvidence(project, stepKey, docCode, file) {
   const who = requireName() || '(unnamed)';

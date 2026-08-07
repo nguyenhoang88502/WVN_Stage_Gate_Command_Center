@@ -1039,16 +1039,16 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 }
 
 /* == 20. PRINT RULES ===================================================== */
-/* The executive PDF is produced by the browser's own print-to-PDF against
-   #dashExec. Everything else is hidden rather than restyled. */
-@media print {
-  body * { visibility: hidden }
-  #dashExec, #dashExec * { visibility: visible }
-  #dashExec { position: absolute; left: 0; top: 0; width: 100% }
-  #dashExec .no-print { display: none !important }
-  .print-only { display: block }
+/* Two modes: the legacy #dashExec screen dump (kept intact) and the new
+   #dashPrintPackage multi-page executive PDF package built by
+   buildPrintPackage(). Only one of the two renders in print — the JS button
+   populates whichever target it intends to print. */
 
-  /* always a light report, whatever theme is on screen */
+/* — screen: hide the print package — */
+#dashPrintPackage { display: none }
+
+/* — shared light-report token overrides — */
+@media print {
   html[data-theme="dark"], :root {
     --bg: #fff; --panel: #fff; --soft: #fff; --grey2: #eee;
     --ink: #000; --ink2: #222; --muted: #444;
@@ -1061,26 +1061,127 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
     break-inside: avoid; page-break-inside: avoid;
   }
   .scroll { max-height: none !important; overflow: visible !important }
-  .kpi-grid { grid-template-columns: repeat(5, 1fr) }
-  .kpi-value { font-size: 18pt }
 
   /* nothing sticky in a printed page — it lands on top of the content */
   header.navbar, nav.tabs, .matrix th, .matrix th:first-child, .matrix td:first-child {
     position: static !important;
   }
-  thead { display: table-header-group }   /* repeat headers across pages */
+  thead { display: table-header-group }
   tr, img { break-inside: avoid; page-break-inside: avoid }
-  a[href]::after { content: "" }          /* no URL noise in the report */
-  button, input, select, textarea, .dz, .seg { display: none !important }
+  a[href]::after { content: "" }
+  button, input, select, textarea, .dz, .seg, .dashboard-slicers, .dash-toolbar {
+    display: none !important;
+  }
 }
 
-/* ---------------------------------------------------------------------------
-   Management PDF export — browser Print to PDF on the Dashboard tab.
-   Appends A4-landscape page geometry, colour-adjust so KPI/badge fills print,
-   break-inside guards on cards and matrix cells, and hides interactive chrome
-   (.no-print, every button, every select) without touching table content,
-   badges, or body text.
-   --------------------------------------------------------------------------- */
+/* — legacy #dashExec screen-dump print mode — */
+@media print {
+  body * { visibility: hidden }
+  #dashExec, #dashExec * { visibility: visible }
+  #dashExec { position: absolute; left: 0; top: 0; width: 100% }
+  #dashExec .no-print { display: none !important }
+  .print-only { display: block }
+  .kpi-grid { grid-template-columns: repeat(5, 1fr) }
+  .kpi-value { font-size: 18pt }
+}
+
+/* — new multi-page PDF print mode: #dashPrintPackage — */
+@media print {
+  /* When the print package exists and has content, show it instead of
+     the interactive UI. It only has content when buildPrintPackage()
+     was called by the Download PDF button. */
+  #dashPrintPackage {
+    display: block !important;
+    visibility: visible !important;
+    position: absolute; left: 0; top: 0; width: 100%;
+  }
+  #dashPrintPackage * { visibility: visible }
+
+  /* page-break support: each .print-page section starts a new page */
+  #dashPrintPackage .print-page {
+    break-after: page;
+    page-break-after: always;
+    padding: 0;
+    margin: 0;
+  }
+  #dashPrintPackage .print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  /* executive header banner inside the print package */
+  #dashPrintPackage .print-banner {
+    border-bottom: 2px solid #0f2438;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+  }
+  #dashPrintPackage .print-banner h1 {
+    font-size: 16pt; font-weight: 700; margin: 0 0 2px; color: #0f2438;
+  }
+  #dashPrintPackage .print-banner p {
+    font-size: 9pt; color: #444; margin: 0;
+  }
+  #dashPrintPackage .print-filter-tag {
+    display: inline-block; background: #e7f0fa; color: #14589f;
+    border: 1px solid #14589f; border-radius: 3px;
+    padding: 1px 6px; font-size: 8pt; margin: 1px 2px;
+  }
+
+  /* Gantt inside the print package */
+  #dashPrintPackage .print-gantt-wrap { margin-top: 10px }
+  #dashPrintPackage .print-gantt-wrap h3 {
+    font-size: 11pt; font-weight: 700; margin: 0 0 6px; color: #0f2438;
+  }
+
+  /* matrix tables inside the print package */
+  #dashPrintPackage .print-matrix { margin-bottom: 14px }
+  #dashPrintPackage .print-matrix h3 {
+    font-size: 10pt; font-weight: 700; margin: 0 0 4px; color: #0f2438;
+  }
+  #dashPrintPackage .print-matrix table {
+    width: 100%; border-collapse: collapse; font-size: 7.5pt;
+  }
+  #dashPrintPackage .print-matrix th,
+  #dashPrintPackage .print-matrix td {
+    padding: 3px 5px; border: 1px solid #999; text-align: center;
+    vertical-align: middle; line-height: 1.25;
+  }
+  #dashPrintPackage .print-matrix th {
+    background: #eef2f7; color: #222; font-weight: 700;
+    font-size: 7pt; letter-spacing: .03em; text-transform: uppercase;
+  }
+  #dashPrintPackage .print-matrix td:first-child {
+    text-align: left; font-weight: 600;
+  }
+  #dashPrintPackage .print-matrix .pct-done   { color: #16703c; font-weight: 700 }
+  #dashPrintPackage .print-matrix .pct-partial { color: #14589f; font-weight: 700 }
+  #dashPrintPackage .print-matrix .pct-none    { color: #8a5800 }
+  #dashPrintPackage .print-matrix .pct-na      { color: #999 }
+
+  /* project overview table */
+  #dashPrintPackage .print-overview { margin-top: 6px }
+  #dashPrintPackage .print-overview h3 {
+    font-size: 11pt; font-weight: 700; margin: 0 0 6px; color: #0f2438;
+  }
+  #dashPrintPackage .print-overview table {
+    width: 100%; border-collapse: collapse; font-size: 8pt;
+  }
+  #dashPrintPackage .print-overview th,
+  #dashPrintPackage .print-overview td {
+    padding: 4px 6px; border: 1px solid #999; text-align: left;
+    vertical-align: top; line-height: 1.3;
+  }
+  #dashPrintPackage .print-overview th {
+    background: #eef2f7; color: #222; font-weight: 700;
+    font-size: 7pt; letter-spacing: .03em; text-transform: uppercase;
+  }
+  #dashPrintPackage .print-overview td.num {
+    text-align: center; font-variant-numeric: tabular-nums;
+  }
+}
+
+/* A4-landscape page geometry and colour fidelity — applies to BOTH
+   print modes (#dashExec and #dashPrintPackage). */
 @media print {
   @page {
     size: A4 landscape;
