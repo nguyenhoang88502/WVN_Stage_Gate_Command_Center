@@ -933,7 +933,7 @@ function viewDashboard(root) {
     '<p>Prepared by ' + esc(getUser() || '—') + ' &middot; ' + esc(today()) + '</p>';
   execWrap.appendChild(titleBlock);
 
-  /* Toolbar: PDF + Management Report Export. Both kept off the printed page. */
+  /* Toolbar: PDF download, XLSX report selector, and download button. All kept off the printed page. */
   const toolbar = el('div', 'no-print');
   toolbar.className = 'no-print dash-toolbar';
 
@@ -941,18 +941,16 @@ function viewDashboard(root) {
   pdfBtn.onclick = () => buildPrintPackage();
   toolbar.appendChild(pdfBtn);
 
-  const expBtn = el('button', 'primary', 'Download Management Report');
-  expBtn.onclick = () => exportManagementReport();
-  toolbar.appendChild(expBtn);
-
   /* Report template download — pick a pre-made XLSX template, fill it with
      live data respecting the current slicer filters, and download it. */
   const reportSel = el('select'); reportSel.id = 'dashReportSelect';
-  reportSel.style.cssText = 'padding:6px 10px;border:1px solid #ccc;border-radius:4px;margin-left:8px;min-width:180px';
+  reportSel.className = 'dash-report-select';
   reportSel.innerHTML = '<option value="">— XLSX Report —</option>' +
-    '<option value="lfi">Late Found Issue Report</option>' +
+    '<option value="lfi">Late Found Issue Analytics</option>' +
     '<option value="transfer">Project Transfer Report</option>' +
-    '<option value="kpi">KPI Report</option>';
+    '<option value="kpi">KPI Report</option>' +
+    '<option value="ll">Lessons Learnt / LL Info Log</option>' +
+    '<option value="trial">NPI Trial Production Report</option>';
   toolbar.appendChild(reportSel);
 
   const rptBtn = el('button', 'primary', 'Download');
@@ -1600,118 +1598,6 @@ function computePortfolioKPIs() {
   ];
 }
 
-/* ---- exportManagementReport — downloads a single CSV with three clearly-titled
-       sections (Gantt schedule, KPI summary, stage matrix summary). Pure
-       client-side Blob download, same pattern as the issue tracker export.
-       UTF-8 BOM prefix so Excel reads Vietnamese text correctly. ---- */
-function exportManagementReport() {
-  const lines = [];
-  const allP = TRK.lb_projects;
-
-  /* SECTION 1 — GANTT SCHEDULE, one row per project */
-  lines.push('GANTT SCHEDULE');
-  lines.push('Project ID,Process,Family,Class,Start Week,Target Week,Cycle Duration (weeks),Progress %,Status');
-  allP.forEach(p => {
-    const startWeek = toWeek(p.prf_date);
-    const targetWeek = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date);
-    let cycle = '';
-    if (startWeek && targetWeek) {
-      const sw = weekToDate(startWeek);
-      const tw = weekToDate(targetWeek);
-      if (sw && tw) cycle = String(Math.round((tw - sw) / (7 * 86400000)));
-    }
-    const fam = familyById(p.prod_family);
-    const pr = progressOf(p);
-    const cls = classifyProject(p);
-    lines.push(csvCell(p.project_id) + ',' + csvCell(p.process) + ',' +
-      csvCell(fam ? fam.prod_family_name : (p.prod_family || '')) + ',' +
-      csvCell(p.class_abcde || '') + ',' + csvCell(startWeek) + ',' + csvCell(targetWeek) + ',' +
-      csvCell(cycle) + ',' + csvCell(pr.pct + '%') + ',' + csvCell(cls));
-  });
-
-  lines.push(''); // blank separator
-
-  /* SECTION 2 — PORTFOLIO KPI SUMMARY, computed from the same code path as
-     the dashboard bar so the export and the on-screen report never disagree. */
-  lines.push('PORTFOLIO KPI SUMMARY');
-  lines.push('Metric,Value,Basis');
-  computePortfolioKPIs().forEach(k => {
-    lines.push(csvCell(k.label) + ',' + csvCell(k.value) + ',' + csvCell(k.sub));
-  });
-
-  lines.push(''); // blank separator
-
-  /* SECTION 3 — STAGE MATRIX SUMMARY, one row per project with a short
-     status word per step/gate column derived from cellStateFor() /
-     groupCellStateFor(). */
-
-  lines.push('STAGE MATRIX SUMMARY');
-
-  // NPI rows
-  const npiProjs = allP.filter(p => p.process === 'NPI');
-  if (npiProjs.length) {
-    const npiSteps = allStepsOf('NPI');
-    const npiHdrs = ['Project ID','Process'];
-    npiSteps.forEach(s => npiHdrs.push(s.step_id + '. ' + s.step_name));
-    lines.push(npiHdrs.map(h => csvCell(h)).join(','));
-    npiProjs.forEach(p => {
-      const on = stepsOf('NPI', p);
-      const row = [p.project_id, 'NPI'];
-      npiSteps.forEach(s => {
-        if (on.indexOf(s) < 0) { row.push('n/a'); return; }
-        const c = cellStateFor(p, s);
-        if (c.g.bypass) row.push('bypassed');
-        else if (c.done.length && !c.missing.length && !c.filed.length) row.push('done');
-        else if (c.filed.length || c.done.length) row.push('filed');
-        else if (c.missing.length) row.push('missing');
-        else if (c.removed.length) row.push('removed');
-        else row.push('not-started');
-      });
-      lines.push(row.map(v => csvCell(v)).join(','));
-    });
-  }
-
-  // ECN rows (gate-grouped + PPAP)
-  const ecnProjs = allP.filter(p => p.process === 'ECN');
-  if (ecnProjs.length) {
-    const groups = ecnGateGroups();
-    const ecnHdrs = ['Project ID','Process'];
-    groups.forEach(g => ecnHdrs.push(g.gate.step_id + '. ' + g.gate.step_name));
-    ecnHdrs.push('PPAP');
-    lines.push(ecnHdrs.map(h => csvCell(h)).join(','));
-    ecnProjs.forEach(p => {
-      const on = stepsOf('ECN', p);
-      const row = [p.project_id, 'ECN'];
-      groups.forEach(g => {
-        const anyApplicable = g.steps.some(function(s) { return on.indexOf(s) >= 0; });
-        if (!anyApplicable) { row.push('n/a'); return; }
-        const gcs = groupCellStateFor(p, g);
-        if (gcs.g && gcs.g.bypass) row.push('bypassed');
-        else if (gcs.done.length && !gcs.missing.length && !gcs.filed.length) row.push('done');
-        else if (gcs.filed.length || gcs.done.length) row.push('filed');
-        else if (gcs.missing.length) row.push('missing');
-        else if (gcs.removed.length) row.push('removed');
-        else row.push('not-started');
-      });
-      // PPAP status word
-      const ppapRows = (TRK.lb_ppap || []).filter(r => r.project_id === p.project_id);
-      if (!ppapRows.length) row.push('no-items');
-      else {
-        const approved = ppapRows.filter(r => r.customer_approved && r.customer_approved !== 'NO').length;
-        row.push(approved >= ppapRows.length ? 'done' : (ppapRows.some(r => r.submitted_utc) ? 'filed' : 'not-started'));
-      }
-      lines.push(row.map(v => csvCell(v)).join(','));
-    });
-  }
-
-  const csv = '﻿' + lines.join('\r\n');   // UTF-8 BOM so Excel decodes Vietnamese text correctly
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'wvn_management_report_' + today() + '.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
 /* ---- buildPrintPackage — 3-page A4 executive PDF (v4.1 Task 2) ---------
    Populates the hidden #dashPrintPackage container from the CURRENTLY
    FILTERED project set (respects the dashboard slicers), then calls
