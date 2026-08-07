@@ -52,6 +52,17 @@ function addWeeks(weekStr, n) {
 
 function nowWeek() { return isoWeek(new Date()); }
 
+const MONTH_NAMES_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function weekRangeLabel(weekStr) {
+  if (!weekStr) return '(all weeks)';
+  var d = weekToDate(weekStr);
+  if (!d) return weekStr;
+  var mon = d, sun = new Date(d);
+  sun.setDate(d.getDate() + 6);
+  return weekStr + ' (' + MONTH_NAMES_SHORT[mon.getMonth()] + ' ' + mon.getDate() +
+    ' - ' + MONTH_NAMES_SHORT[sun.getMonth()] + ' ' + sun.getDate() + ')';
+}
+
 function toWeek(value) {
   const s = String(value || '').trim();
   if (!s) return '';
@@ -783,26 +794,33 @@ function viewDashboard(root) {
     return toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
   }
 
-  function buildWeekOptions(projects) {
+  function buildEndWeekOptions(projects) {
     const weeks = new Set();
     projects.forEach(function(p) { var w = projectTargetWeek(p); if (w) weeks.add(w); });
     return [...weeks].sort();
   }
 
-  function buildYearOptions(projects) {
-    const years = new Set();
-    projects.forEach(function(p) { var w = projectTargetWeek(p); if (w) years.add(w.slice(0, 4)); });
-    return [...years].sort();
+  function buildStartWeekOptions(projects) {
+    const weeks = new Set();
+    projects.forEach(function(p) { var w = toWeek(p.prf_date); if (w) weeks.add(w); });
+    return [...weeks].sort();
+  }
+
+  function distinctModels(projects) {
+    const models = new Set();
+    projects.forEach(function(p) { if (p.family) models.add(p.family); });
+    return [...models].sort();
   }
 
   function filterDashboardProjects(process) {
     var list = projectsOf(process);
-    if (!dashFamFilter && !dashYearFilter && !dashWeekFilter) return list;
+    var any = dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter;
+    if (!any) return list;
     return list.filter(function(p) {
       if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
-      var tw = projectTargetWeek(p);
-      if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
-      if (dashWeekFilter && tw !== dashWeekFilter) return false;
+      if (dashModelFilter && p.family !== dashModelFilter) return false;
+      if (dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
+      if (dashEndWeekFilter) { var ew = projectTargetWeek(p); if (!ew || ew !== dashEndWeekFilter) return false; }
       return true;
     });
   }
@@ -819,27 +837,41 @@ function viewDashboard(root) {
 
   function renderDashboardSlicers() {
     var allNpi = projectsOf('NPI');
-    var famFiltered = dashFamFilter ? allNpi.filter(function(p) { return p.prod_family === dashFamFilter; }) : allNpi;
-    var yearFiltered = (dashFamFilter || dashYearFilter)
-      ? allNpi.filter(function(p) {
-          if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
-          var tw = projectTargetWeek(p);
-          if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
-          return true;
-        })
-      : allNpi;
+
+    // Cascade: each slicer derives its options from projects matching the OTHER active filters
+    function filteredByOthers(keepFilter) {
+      return allNpi.filter(function(p) {
+        if (keepFilter !== 'fam' && dashFamFilter && p.prod_family !== dashFamFilter) return false;
+        if (keepFilter !== 'model' && dashModelFilter && p.family !== dashModelFilter) return false;
+        if (keepFilter !== 'start' && dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
+        if (keepFilter !== 'end' && dashEndWeekFilter) { var ew = projectTargetWeek(p); if (!ew || ew !== dashEndWeekFilter) return false; }
+        return true;
+      });
+    }
 
     dashSlicerWrap.innerHTML = '';
     var sel = el('div', 'dashboard-slicers');
-    sel.innerHTML = '<label class="dashboard-slicer">Family<select id="dashFamFilter"><option value="">All Families</option>' +
+
+    // Family
+    sel.innerHTML += '<label class="dashboard-slicer">Family<select id="dashFamFilter"><option value="">All Families</option>' +
       CFG.prod_families.map(function(f) { return '<option value="' + esc(f.prod_family_id) + '"' + (dashFamFilter === f.prod_family_id ? ' selected' : '') + '>' + esc(f.prod_family_name) + ' (' + esc(f.prod_family_id) + ')</option>'; }).join('') +
-      '</select></label>' +
-      '<label class="dashboard-slicer">Year<select id="dashYearFilter"><option value="">All Years</option>' +
-      buildYearOptions(famFiltered).map(function(y) { return '<option value="' + y + '"' + (dashYearFilter === y ? ' selected' : '') + '>' + y + '</option>'; }).join('') +
-      '</select></label>' +
-      '<label class="dashboard-slicer">Week<select id="dashWeekFilter"><option value="">All Weeks</option>' +
-      buildWeekOptions(yearFiltered).map(function(w) { return '<option value="' + w + '"' + (dashWeekFilter === w ? ' selected' : '') + '>' + w.slice(w.indexOf('-W') + 2) + '</option>'; }).join('') +
       '</select></label>';
+
+    // Model — derived from distinct p.family values of currently-visible projects
+    sel.innerHTML += '<label class="dashboard-slicer">Model<select id="dashModelFilter"><option value="">All Models</option>' +
+      distinctModels(filteredByOthers('model')).map(function(m) { return '<option value="' + esc(m) + '"' + (dashModelFilter === m ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') +
+      '</select></label>';
+
+    // Start Week (prf_date)
+    sel.innerHTML += '<label class="dashboard-slicer">Start Week<select id="dashStartWeekFilter"><option value="">All Start Weeks</option>' +
+      buildStartWeekOptions(filteredByOthers('start')).map(function(w) { return '<option value="' + w + '"' + (dashStartWeekFilter === w ? ' selected' : '') + '>' + weekRangeLabel(w) + '</option>'; }).join('') +
+      '</select></label>';
+
+    // End Week (target_date)
+    sel.innerHTML += '<label class="dashboard-slicer">End Week<select id="dashEndWeekFilter"><option value="">All End Weeks</option>' +
+      buildEndWeekOptions(filteredByOthers('end')).map(function(w) { return '<option value="' + w + '"' + (dashEndWeekFilter === w ? ' selected' : '') + '>' + weekRangeLabel(w) + '</option>'; }).join('') +
+      '</select></label>';
+
     dashSlicerWrap.appendChild(sel);
   }
 
@@ -876,7 +908,7 @@ function viewDashboard(root) {
     if (!list.length) {
       const emptyTr = el('tr'); const emptyTd = el('td');
       emptyTd.colSpan = 2 + steps.length;
-      emptyTd.textContent = (dashFamFilter || dashYearFilter || dashWeekFilter)
+      emptyTd.textContent = (dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter)
         ? 'No NPI projects match the current filter.'
         : 'No NPI projects registered yet.';
       emptyTr.appendChild(emptyTd); tb.appendChild(emptyTr);
@@ -994,7 +1026,7 @@ function viewDashboard(root) {
     if (!list.length) {
       const emptyTr = el('tr'); const emptyTd = el('td');
       emptyTd.colSpan = 3 + groups.length;
-      emptyTd.textContent = (dashFamFilter || dashYearFilter || dashWeekFilter)
+      emptyTd.textContent = (dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter)
         ? 'No ECN projects match the current filter.'
         : 'No ECN projects registered yet.';
       emptyTr.appendChild(emptyTd); tb.appendChild(emptyTr);
@@ -1152,7 +1184,7 @@ function viewDashboard(root) {
 
     /* container for the stage-cards section — rebuilt on filter change */
     const wrap = el('div'); wrap.id = 'npiStageWrap';
-    root.appendChild(wrap);
+    root.insertBefore(wrap, dashNpiMatrixWrap);
 
     /* proxy — delegates to the shared filterDashboardProjects at dashboard
        scope so the stage cards and both matrices always use the exact same
@@ -1186,7 +1218,7 @@ function viewDashboard(root) {
         const accent = pct === 100 ? 'var(--good)' : (pct === 0 ? 'var(--warn)' : 'var(--blue)');
 
         const card = el('div', 'card');
-        card.style.cssText = 'border-left:4px solid ' + accent + '; margin-bottom:8px; cursor:default';
+        card.style.cssText = 'border-left:4px solid ' + accent + '; cursor:default';
 
         const hdr = el('div');
         hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 14px';
@@ -1237,43 +1269,54 @@ function viewDashboard(root) {
       wrap.innerHTML = '';
       const h3 = el('h3', null, 'NPI Stage Completion');
       wrap.appendChild(h3);
-      const cardHost = el('div'); cardHost.id = 'npiStageCards';
+      const cardHost = el('div', 'stage-grid'); cardHost.id = 'npiStageCards';
       renderCards(cardHost);
       wrap.appendChild(cardHost);
 
       // Re-wire onchange handlers on the freshly rendered <select> elements
       const famSel = $('#dashFamFilter');
-      const yearSel = $('#dashYearFilter');
-      const weekSel = $('#dashWeekFilter');
-      if (famSel) famSel.onchange = () => {
+      const modelSel = $('#dashModelFilter');
+      const startSel = $('#dashStartWeekFilter');
+      const endSel = $('#dashEndWeekFilter');
+
+      function isFilterValid(forFilter) {
+        var projs = allNpi.filter(function(p) {
+          if (forFilter !== 'fam' && dashFamFilter && p.prod_family !== dashFamFilter) return false;
+          if (forFilter !== 'model' && dashModelFilter && p.family !== dashModelFilter) return false;
+          if (forFilter !== 'start' && dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
+          if (forFilter !== 'end' && dashEndWeekFilter) { var ew = projectTargetWeek(p); if (!ew || ew !== dashEndWeekFilter) return false; }
+          return true;
+        });
+        if (forFilter === 'model' && dashModelFilter) return projs.some(function(p) { return p.family === dashModelFilter; });
+        if (forFilter === 'start' && dashStartWeekFilter) return projs.some(function(p) { return toWeek(p.prf_date) === dashStartWeekFilter; });
+        if (forFilter === 'end' && dashEndWeekFilter) return projs.some(function(p) { return projectTargetWeek(p) === dashEndWeekFilter; });
+        return true;
+      }
+
+      function clearStaleFilters() {
+        if (!isFilterValid('model')) dashModelFilter = '';
+        if (!isFilterValid('start')) dashStartWeekFilter = '';
+        if (!isFilterValid('end')) dashEndWeekFilter = '';
+      }
+
+      if (famSel) famSel.onchange = function() {
         dashFamFilter = famSel.value;
-        if (dashWeekFilter) {
-          const weeks = buildWeekOptions(allNpi.filter(p => {
-            if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
-            const tw = projectTargetWeek(p);
-            if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
-            return true;
-          }));
-          if (!weeks.includes(dashWeekFilter)) dashWeekFilter = '';
-        }
+        clearStaleFilters();
         renderAll();
       };
-      if (yearSel) yearSel.onchange = () => {
-        dashYearFilter = yearSel.value;
-        const valid = filteredProjects();
-        const weeks = buildWeekOptions(dashFamFilter
-          ? allNpi.filter(p => {
-              if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
-              const tw = projectTargetWeek(p);
-              if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
-              return true;
-            })
-          : allNpi);
-        if (dashWeekFilter && !weeks.includes(dashWeekFilter)) dashWeekFilter = '';
+      if (modelSel) modelSel.onchange = function() {
+        dashModelFilter = modelSel.value;
+        clearStaleFilters();
         renderAll();
       };
-      if (weekSel) weekSel.onchange = () => {
-        dashWeekFilter = weekSel.value;
+      if (startSel) startSel.onchange = function() {
+        dashStartWeekFilter = startSel.value;
+        clearStaleFilters();
+        renderAll();
+      };
+      if (endSel) endSel.onchange = function() {
+        dashEndWeekFilter = endSel.value;
+        clearStaleFilters();
         renderAll();
       };
     }
@@ -2812,13 +2855,14 @@ function viewInput(root) {
 let justPickedTree = false;
 let dashMatrixOpen = true;
 let dashFamFilter = '';
-let dashYearFilter = '';
-let dashWeekFilter = '';
+let dashModelFilter = '';
+let dashStartWeekFilter = '';
+let dashEndWeekFilter = '';
 // last batch-import summary, so it survives the redraw a successful import triggers
 let lastBatchResult = null;
 let npiSel = null, ecnSel = null, ecnMode = 'steps';
-let npiTreeState = { q: '', familyFilter: [], statusFilter: '', expanded: {}, selected: new Set(), active: null };
-let ecnTreeState = { q: '', familyFilter: [], statusFilter: '', expanded: {}, selected: new Set(), active: null };
+let npiTreeState = { q: '', familyFilter: [], statusFilter: '', weekFilter: '', expanded: {}, selected: new Set(), active: null };
+let ecnTreeState = { q: '', familyFilter: [], statusFilter: '', weekFilter: '', expanded: {}, selected: new Set(), active: null };
 function familyFgTree(root, proc, state, onPick) {
   const list = projectsOf(proc);
   const p = el('div', 'card');
@@ -2878,6 +2922,17 @@ function familyFgTree(root, proc, state, onPick) {
     '<option value="LATE"' + (state.statusFilter === 'LATE' ? ' selected' : '') + '>Late</option>';
   statSel.onchange = () => { state.statusFilter = statSel.value; renderTree(); };
   fRow.appendChild(statSel);
+
+  // Week filter — shows only projects whose target week matches
+  const weekSel = el('select');
+  const allWeeks = new Set();
+  list.forEach(function(p) { var w = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date); if (w) allWeeks.add(w); });
+  var sortedWeeks = [...allWeeks].sort();
+  weekSel.innerHTML = '<option value="">(all weeks)</option>' +
+    sortedWeeks.map(function(w) { return '<option value="' + w + '"' + (state.weekFilter === w ? ' selected' : '') + '>' + weekRangeLabel(w) + '</option>'; }).join('');
+  weekSel.style.minWidth = '200px';
+  weekSel.onchange = function() { state.weekFilter = weekSel.value; renderTree(); };
+  fRow.appendChild(weekSel);
   pBody.appendChild(fRow);
 
   /* ---- tree of families → project cards (redrawn on every filter change) -- */
@@ -2908,6 +2963,12 @@ function familyFgTree(root, proc, state, onPick) {
     }
     if (state.statusFilter) {
       filtered = filtered.filter(x => classifyProject(x) === state.statusFilter);
+    }
+    if (state.weekFilter) {
+      filtered = filtered.filter(function(x) {
+        var w = toWeek(x.target_date) || targetDateFor(x.class_abcde, x.prf_date);
+        return w === state.weekFilter;
+      });
     }
 
     // Group by family. Projects whose family doesn't resolve via familyById() go
