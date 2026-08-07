@@ -8,7 +8,7 @@ const BADGE_CLASS = {
   IN_PROGRESS:'bg-primary', FILED:'bg-primary', Open:'bg-primary',
   AT_RISK:'bg-danger', MISSING:'bg-danger', BLOCKED:'bg-danger', Offline:'bg-danger',
   NOT_STARTED:'bg-warning', Pending:'bg-warning',
-  NO_DATA:'bg-secondary', NONE:'bg-secondary', TRACK:'bg-secondary',
+  NO_DATA:'bg-secondary', NONE:'bg-secondary', TRACK:'bg-secondary', REMOVED:'bg-secondary',
   BYPASSED:'bg-danger bg-bypassed-dashed'
 };
 function badgeClass(status) { return 'badge ' + (BADGE_CLASS[status] || 'bg-secondary'); }
@@ -678,6 +678,9 @@ function evidenceFor(pid, stepKey, docCode) {
   var rows = TRK.lb_deliverables.filter(function(r) {
     return r.project_id === pid && r.step_key === stepKey && r.doc_code === docCode;
   });
+  // A 'Removed' marker row means the requirement was deliberately excluded.
+  var removedRow = rows.find(function(r) { return r.status === 'Removed'; });
+  if (removedRow) return { level: 'REMOVED', del: removedRow };
   // Skip custom-doc marker rows that carry no actual evidence — those exist
   // only to declare a per-model requirement, not to represent a filed file.
   var realRows = rows.filter(function(r) {
@@ -708,6 +711,8 @@ function gateState(project, proc, step) {
   });
   const ev = req.map(code => ({ code, doc: docTypeById(code), ev: evidenceFor(project.project_id, sk, code), custom: customCodes.indexOf(code) >= 0 }));
   const missing = ev.filter(x => x.ev.level === 'MISSING');
+  const removed = ev.filter(x => x.ev.level === 'REMOVED');
+  const active = ev.filter(x => x.ev.level !== 'REMOVED');
   // Conditional evidence is tracked and shown but never blocks a gate — these
   // are documents the SOP does not actually mandate on every project.
   const cond = (step.conditional_evidence_doctypes || [])
@@ -731,10 +736,10 @@ function gateState(project, proc, step) {
   if (approval) status = 'COMPLETE';
   else if (bypass) status = 'BYPASSED';
   else if (gate && gate.status === 'InProgress') status = 'IN_PROGRESS';
-  else if (ev.length && missing.length < ev.length) status = 'IN_PROGRESS';
+  else if (active.length && missing.length < active.length) status = 'IN_PROGRESS';
   const done = !!(approval || bypass);
   const canApprove = gated && !approval && missing.length === 0 && blocking.length === 0 && whOk && !priorOpen.length;
-  return { sk, req, ev, cond, missing, blocking, approval, bypass, gate, needWh, whOk, gated, status, done, canApprove, priorOpen };
+  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, needWh, whOk, gated, status, done, canApprove, priorOpen };
 }
 function progressOf(project) {
   const proc = project.process, steps = stepsOf(proc, project);
@@ -784,27 +789,29 @@ function picsFor(pid, stepKey) {
 
 function cellStateFor(project, step) {
   const g = gateState(project, project.process, step);
-  const done = [], filed = [], missing = [], customSet = new Set();
+  const done = [], filed = [], missing = [], removed = [], customSet = new Set();
   g.ev.forEach(x => {
     if (x.custom) customSet.add(x.code);
     if (x.ev.level === 'APPROVED') done.push(x.code);
     else if (x.ev.level === 'FILED') filed.push(x.code);
+    else if (x.ev.level === 'REMOVED') removed.push(x.code);
     else missing.push(x.code);
   });
   // an approved or bypassed gate promotes everything filed under it to done —
   // a signature is what turns filed paper into an accepted deliverable
   if (g.approval) { done.push.apply(done, filed.splice(0)); }
-  return { g, done, filed, missing, customSet, started: !!(done.length || filed.length || g.gate) };
+  return { g, done, filed, missing, removed, customSet, started: !!(done.length || filed.length || removed.length || g.gate) };
 }
 
 function matrixCell(project, step) {
   const c = cellStateFor(project, step);
   const td = el('td', 'mcell');
-  if (!c.started && !c.missing.length) { td.innerHTML = '<span class="' + badgeClass('NO_DATA') + '">not started</span>'; return { td, c }; }
+  if (!c.started && !c.missing.length && !c.removed.length) { td.innerHTML = '<span class="' + badgeClass('NO_DATA') + '">not started</span>'; return { td, c }; }
   const bits = [];
   if (c.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + c.done.map(esc).join(', ') + '</span>');
   if (c.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + c.filed.map(esc).join(', ') + '</span>');
   if (c.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + c.missing.map(esc).join(', ') + '</span>');
+  if (c.removed.length) bits.push('<span class="' + badgeClass('REMOVED') + '" style="text-decoration:line-through;opacity:0.7" title="removed from requirements">Removed: ' + c.removed.map(esc).join(', ') + '</span>');
   if (!bits.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
   if (c.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
   const nc = cellNoteCount(project, stepKeyOf(project.process, step));
@@ -839,7 +846,7 @@ function ecnGateGroups() {
 function groupCellStateFor(project, group) {
   const proc = project.process;
   const applicableSteps = group.steps.filter(function(s) { return stepsOf(proc, project).indexOf(s) >= 0; });
-  const done = [], filed = [], missing = [];
+  const done = [], filed = [], missing = [], removed = [];
   let anyStarted = false, anyGateObj = null;
   applicableSteps.forEach(function(step) {
     const c = cellStateFor(project, step);
@@ -848,10 +855,11 @@ function groupCellStateFor(project, group) {
     c.done.forEach(function(x) { if (done.indexOf(x) < 0) done.push(x); });
     c.filed.forEach(function(x) { if (filed.indexOf(x) < 0) filed.push(x); });
     c.missing.forEach(function(x) { if (missing.indexOf(x) < 0) missing.push(x); });
+    c.removed.forEach(function(x) { if (removed.indexOf(x) < 0) removed.push(x); });
   });
   const filedFinal = filed.filter(function(x) { return done.indexOf(x) < 0; });
-  const missingFinal = missing.filter(function(x) { return done.indexOf(x) < 0 && filedFinal.indexOf(x) < 0; });
-  return { done: done, filed: filedFinal, missing: missingFinal, started: anyStarted, g: anyGateObj, applicableSteps: applicableSteps };
+  const missingFinal = missing.filter(function(x) { return done.indexOf(x) < 0 && filedFinal.indexOf(x) < 0 && removed.indexOf(x) < 0; });
+  return { done: done, filed: filedFinal, missing: missingFinal, removed: removed, started: anyStarted, g: anyGateObj, applicableSteps: applicableSteps };
 }
 
 function viewDashboard(root) {
@@ -1203,12 +1211,13 @@ function viewDashboard(root) {
           } else {
             const gcs = groupCellStateFor(project, group);
             const td = el('td', 'mcell');
-            if (!gcs.started && !gcs.missing.length) { td.innerHTML = '<span class="' + badgeClass('NO_DATA') + '">not started</span>'; }
+            if (!gcs.started && !gcs.missing.length && !gcs.removed.length) { td.innerHTML = '<span class="' + badgeClass('NO_DATA') + '">not started</span>'; }
             else {
               const bits = [];
               if (gcs.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + gcs.done.map(esc).join(', ') + '</span>');
               if (gcs.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + gcs.filed.map(esc).join(', ') + '</span>');
               if (gcs.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + gcs.missing.map(esc).join(', ') + '</span>');
+              if (gcs.removed.length) bits.push('<span class="' + badgeClass('REMOVED') + '" style="text-decoration:line-through;opacity:0.7" title="removed from requirements">Removed: ' + gcs.removed.map(esc).join(', ') + '</span>');
               if (!bits.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
               if (gcs.g && gcs.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
               let groupNoteCount = 0;
@@ -1336,7 +1345,8 @@ function viewDashboard(root) {
 
         let done = 0;
         applicable.forEach(p => {
-          if (docs.every(code => evidenceFor(p.project_id, sk, code).level === 'APPROVED')) done++;
+          var activeDocs = docs.filter(function(code) { return evidenceFor(p.project_id, sk, code).level !== 'REMOVED'; });
+          if (activeDocs.length && activeDocs.every(function(code) { return evidenceFor(p.project_id, sk, code).level === 'APPROVED'; })) done++;
         });
         const pct = Math.round(100 * done / total);
         const accent = pct === 100 ? 'var(--good)' : (pct === 0 ? 'var(--warn)' : 'var(--blue)');
@@ -1568,6 +1578,7 @@ function exportManagementReport() {
         else if (c.done.length && !c.missing.length && !c.filed.length) row.push('done');
         else if (c.filed.length || c.done.length) row.push('filed');
         else if (c.missing.length) row.push('missing');
+        else if (c.removed.length) row.push('removed');
         else row.push('not-started');
       });
       lines.push(row.map(v => csvCell(v)).join(','));
@@ -1593,6 +1604,7 @@ function exportManagementReport() {
         else if (gcs.done.length && !gcs.missing.length && !gcs.filed.length) row.push('done');
         else if (gcs.filed.length || gcs.done.length) row.push('filed');
         else if (gcs.missing.length) row.push('missing');
+        else if (gcs.removed.length) row.push('removed');
         else row.push('not-started');
       });
       // PPAP status word
@@ -1769,7 +1781,8 @@ function openDrawer(project, step, focusDocCode) {
   // Show only rows that carry actual evidence (file, link, or path), not custom-doc markers
   const dels = TRK.lb_deliverables.filter(function(x) {
     return x.project_id === project.project_id && x.step_key === sk &&
-      (x.file_name || x.link_url || x.file_path || x.approved === 'YES');
+      (x.file_name || x.link_url || x.file_path || x.approved === 'YES') &&
+      x.status !== 'Removed';
   });
   if (!dels.length) d.appendChild(el('p', 'note', 'Nothing filed here yet.'));
   else {
@@ -1781,6 +1794,7 @@ function openDrawer(project, step, focusDocCode) {
       if (focusDocCode && x.doc_code === focusDocCode) {
         tr.style.cssText = 'background:var(--blue2);outline:2px solid var(--blue);outline-offset:-1px';
       }
+      const isDelRemoved = x.status === 'Removed';
       const isLink = x.kind === 'link';
       const path = x.link_url || x.file_path || '';
       const dcEl = '<a class="doc-link" style="cursor:pointer;font-weight:700;color:var(--blue)" title="Click to focus — ' + esc(x.doc_code) + '">' + esc(x.doc_code) + '</a>';
@@ -1788,10 +1802,12 @@ function openDrawer(project, step, focusDocCode) {
         ? (isLink ? '<a href="' + esc(path) + '" target="_blank" class="note">' + esc(path) + '</a>'
                   : '<span class="note">' + esc(x.file_name) + '</span><br><a href="file:///' + esc(path.replace(/\\/g, '/')) + '" class="note" style="font-size:10px;word-break:break-all">📂 ' + esc(path) + '</a>')
         : '<span class="note">—</span>';
-      tr.innerHTML = '<td>' + dcEl + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
+      var removedMark = isDelRemoved ? ' <span class="badge bg-secondary" style="text-decoration:line-through;opacity:0.7">Removed</span>' : '';
+      tr.innerHTML = '<td>' + dcEl + removedMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
         '<td><code>' + esc(x.file_name) + '</code><div class="note">' + pathHtml + '</div></td>' +
         '<td>' + esc(x.uploaded_by) + '<div class="note">' + esc((x.uploaded_utc || '').slice(0, 10)) + '</div></td>' +
         '<td class="note" style="word-break:break-all;max-width:180px">' + (x.sha256 ? esc(x.sha256) : '<i>no hash — cited in place</i>') + '</td><td></td>';
+      if (isDelRemoved) tr.style.opacity = '0.65';
       // doc_code click → re-open drawer focused on this doc
       const dcLink = tr.querySelector('.doc-link');
       if (dcLink) dcLink.onclick = () => openDrawerForDoc(project, step, x.doc_code);
@@ -1814,6 +1830,48 @@ function openDrawer(project, step, focusDocCode) {
         });
         tr.lastChild.appendChild(delAssignBtn);
       }
+      // Remove / Restore control
+      var rmBtn = el('button', '', isDelRemoved ? 'Restore' : 'Remove');
+      rmBtn.style.cssText = 'margin-left:4px;color:' + (isDelRemoved ? 'var(--good)' : 'var(--bad)');
+      rmBtn.onclick = async function() {
+        var who = requireName(); if (!who) return;
+        if (isDelRemoved) {
+          confirmModal('Restore ' + esc(x.doc_code),
+            'Return this document to its normal state — it will count toward completion again.',
+            'Restore', async function() {
+              await API.action('lb_deliverables', {
+                project_id: project.project_id, step_key: sk, doc_code: x.doc_code,
+                deliverable_id: x.deliverable_id, status: ''
+              }, { upsertKeys: ['deliverable_id'], audit: { user: who, action: 'Restore_Document', projectId: project.project_id, objType: 'Deliverable', objId: x.doc_code, from: 'Removed', to: 'Restored', detail: x.doc_code } });
+              await refreshSilently();
+              var pageY = window.scrollY;
+              var drawerEl = $('#drawer');
+              var drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+              openDrawer(project, step, focusDocCode);
+              window.scrollTo(0, pageY);
+              var newDrawer = $('#drawer');
+              if (newDrawer) newDrawer.scrollTop = drawerScroll;
+            });
+        } else {
+          confirmModal('Remove ' + esc(x.doc_code),
+            'Mark <b>' + esc(x.doc_code) + '</b> as not applicable. The file on disk is untouched but the requirement will be excluded from completion counts.',
+            'Remove', async function() {
+              await API.action('lb_deliverables', {
+                project_id: project.project_id, step_key: sk, doc_code: x.doc_code,
+                deliverable_id: x.deliverable_id, status: 'Removed'
+              }, { upsertKeys: ['deliverable_id'], audit: { user: who, action: 'Remove_Document', projectId: project.project_id, objType: 'Deliverable', objId: x.doc_code, from: x.status || 'Filed', to: 'Removed', detail: x.doc_code } });
+              await refreshSilently();
+              var pageY = window.scrollY;
+              var drawerEl = $('#drawer');
+              var drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+              openDrawer(project, step, focusDocCode);
+              window.scrollTo(0, pageY);
+              var newDrawer = $('#drawer');
+              if (newDrawer) newDrawer.scrollTop = drawerScroll;
+            });
+        }
+      };
+      tr.lastChild.appendChild(rmBtn);
       tb.appendChild(tr);
       // Preview card for filed evidence (non-link rows only)
       var viewerUrl = evidenceViewerUrl(x.file_path);
@@ -1875,6 +1933,31 @@ function openDrawer(project, step, focusDocCode) {
           openDrawer(project, step, code);
         }));
       }
+      // "Mark as not applicable" button for missing docs
+      dz.appendChild(el('br'));
+      var naBtn = el('button', '', 'Mark as not applicable');
+      naBtn.style.color = 'var(--bad)';
+      naBtn.onclick = function(e) {
+        e.stopPropagation();
+        var who = requireName(); if (!who) return;
+        confirmModal('Remove ' + esc(code),
+          'Mark <b>' + esc(docTypeById(code).name) + '</b> as not applicable. This is a soft delete — the requirement will be excluded from completion counts.',
+          'Remove', async function() {
+            var rowData = { project_id: project.project_id, step_key: sk, doc_code: code, status: 'Removed', uploaded_by: who, uploaded_utc: new Date().toISOString() };
+            var keys = dzRow.deliverable_id ? ['deliverable_id'] : ['project_id','step_key','doc_code'];
+            if (dzRow.deliverable_id) rowData.deliverable_id = dzRow.deliverable_id;
+            await API.action('lb_deliverables', rowData, { upsertKeys: keys, audit: { user: who, action: 'Remove_Document', projectId: project.project_id, objType: 'Deliverable', objId: code, from: 'Missing', to: 'Removed', detail: docTypeById(code).name } });
+            await refreshSilently();
+            var pageY = window.scrollY;
+            var drawerEl = $('#drawer');
+            var drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+            openDrawer(project, step, code);
+            window.scrollTo(0, pageY);
+            var newDrawer = $('#drawer');
+            if (newDrawer) newDrawer.scrollTop = drawerScroll;
+          });
+      };
+      dz.appendChild(naBtn);
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
       dz.ondrop = async e => {
@@ -1909,6 +1992,45 @@ function openDrawer(project, step, focusDocCode) {
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
       d.appendChild(dz);
+    });
+  }
+
+  /* ---- documents marked as not applicable (soft-deleted) ---- */
+  if (c.removed.length) {
+    var rb = el('div', 'banner');
+    rb.innerHTML = '<b>Removed from requirements:</b> ' + c.removed.map(function(x) { return esc(docTypeById(x).name) + (c.customSet.has(x) ? ' <span class="note">(model custom)</span>' : ''); }).join(', ');
+    rb.style.opacity = '0.7';
+    d.appendChild(rb);
+    c.removed.forEach(function(code) {
+      var remRow = TRK.lb_deliverables.find(function(r) { return r.project_id === project.project_id && r.step_key === sk && r.doc_code === code && r.status === 'Removed'; });
+      if (!remRow) return;
+      var re = el('div', 'dz');
+      re.style.cssText = 'margin-bottom:8px;padding:8px 12px;opacity:0.65;border-left:3px solid var(--muted)';
+      re.innerHTML = '<span style="text-decoration:line-through">' + esc(docTypeById(code).name) + ' (' + esc(code) + ')</span>' + (c.customSet.has(code) ? ' <span class="note custom-mark">model custom</span>' : '') + ' <span class="badge bg-secondary" style="text-decoration:line-through">Removed</span>';
+      re.appendChild(el('br'));
+      var rstBtn = el('button', '', 'Restore');
+      rstBtn.style.color = 'var(--good)';
+      rstBtn.onclick = async function() {
+        var who = requireName(); if (!who) return;
+        confirmModal('Restore ' + esc(code),
+          'Return ' + esc(docTypeById(code).name) + ' to its normal state — it will count toward completion again.',
+          'Restore', async function() {
+            var rowData = { project_id: project.project_id, step_key: sk, doc_code: code, status: '' };
+            if (remRow.deliverable_id) rowData.deliverable_id = remRow.deliverable_id;
+            var keys = remRow.deliverable_id ? ['deliverable_id'] : ['project_id','step_key','doc_code'];
+            await API.action('lb_deliverables', rowData, { upsertKeys: keys, audit: { user: who, action: 'Restore_Document', projectId: project.project_id, objType: 'Deliverable', objId: code, from: 'Removed', to: 'Restored', detail: docTypeById(code).name } });
+            await refreshSilently();
+            var pageY = window.scrollY;
+            var drawerEl = $('#drawer');
+            var drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+            openDrawer(project, step, code);
+            window.scrollTo(0, pageY);
+            var newDrawer = $('#drawer');
+            if (newDrawer) newDrawer.scrollTop = drawerScroll;
+          });
+      };
+      re.appendChild(rstBtn);
+      d.appendChild(re);
     });
   }
 
@@ -3300,17 +3422,48 @@ function evidenceTable(g, project, step, redraw) {
     const tr = el('tr');
     // a missing conditional document is a blank, not a red flag
     const level = (!required && x.ev.level === 'MISSING') ? 'NONE' : x.ev.level;
-    const label = (!required && x.ev.level === 'MISSING') ? 'not filed' : x.ev.level;
+    const label = x.ev.level === 'REMOVED' ? 'Removed' : ((!required && x.ev.level === 'MISSING') ? 'not filed' : x.ev.level);
     const d = x.ev.del;
+    const isRemoved = x.ev.level === 'REMOVED';
     const isLink = d && d.kind === 'link';
+    const badgeStyle = isRemoved ? ' style="text-decoration:line-through;opacity:0.7"' : '';
     tr.innerHTML = '<td><a class="doc-link" style="cursor:pointer;font-weight:600;color:var(--blue)" title="Inspect ' + esc(x.doc.name) + '">' + esc(x.doc.name) + '</a>' + (x.doc.form_code ? ' <span class="note">(' + esc(x.doc.form_code) + ')</span>' : '') + (x.custom ? ' <span class="note custom-mark">(model custom)</span>' : '') + '</td>' +
       '<td>' + (required ? '<b>required</b>' : '<span class="note">if applicable</span>') + '</td>' +
-      '<td><span class="' + badgeClass(level) + '">' + label + '</span>' + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
-      '<td class="note">' + (d ? esc(d.uploaded_by) + '<br>' + esc(d.file_name) : '') + '</td><td></td>';
+      '<td><span class="' + badgeClass(level) + '"' + badgeStyle + '>' + label + '</span>' + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
+      '<td class="note">' + (d && !isRemoved ? esc(d.uploaded_by) + '<br>' + esc(d.file_name) : '') + '</td><td></td>';
     const docLink = tr.querySelector('.doc-link');
     if (docLink) docLink.onclick = () => openDrawerForDoc(project, step, x.code);
     const act = tr.lastChild;
-    if (d) {
+    // Remove / Restore control
+    var rmBtn = el('button', '', isRemoved ? 'Restore' : 'Remove');
+    if (isRemoved) rmBtn.style.color = 'var(--good)'; else rmBtn.style.color = 'var(--bad)';
+    rmBtn.onclick = async function() {
+      var who = requireName(); if (!who) return;
+      var sk = stepKeyOf(project.process, step);
+      if (isRemoved) {
+        confirmModal('Restore ' + esc(x.code),
+          'Return ' + esc(x.doc.name) + ' to its normal state — it will count toward completion again.',
+          'Restore', async function() {
+            var rowData = { project_id: project.project_id, step_key: sk, doc_code: x.code, status: '' };
+            if (d && d.deliverable_id) rowData.deliverable_id = d.deliverable_id;
+            var keys = (d && d.deliverable_id) ? ['deliverable_id'] : ['project_id','step_key','doc_code'];
+            await API.action('lb_deliverables', rowData, { upsertKeys: keys, audit: { user: who, action: 'Restore_Document', projectId: project.project_id, objType: 'Deliverable', objId: x.code, from: 'Removed', to: 'Restored', detail: x.doc.name } });
+            await redraw();
+          });
+      } else {
+        confirmModal('Remove ' + esc(x.code),
+          'Mark <b>' + esc(x.doc.name) + '</b> as not applicable. The requirement will be excluded from completion counts (soft delete).',
+          'Remove', async function() {
+            var rowData = { project_id: project.project_id, step_key: sk, doc_code: x.code, status: 'Removed', uploaded_by: who, uploaded_utc: new Date().toISOString() };
+            if (d && d.deliverable_id) rowData.deliverable_id = d.deliverable_id;
+            var keys = (d && d.deliverable_id) ? ['deliverable_id'] : ['project_id','step_key','doc_code'];
+            await API.action('lb_deliverables', rowData, { upsertKeys: keys, audit: { user: who, action: 'Remove_Document', projectId: project.project_id, objType: 'Deliverable', objId: x.code, from: x.ev.level, to: 'Removed', detail: x.doc.name } });
+            await redraw();
+          });
+      }
+    };
+    act.appendChild(rmBtn);
+    if (d && !isRemoved) {
       const path = d.link_url || d.file_path || '';
       const cp = el('button', '', 'Copy path');
       cp.title = path;
