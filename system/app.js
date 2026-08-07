@@ -87,6 +87,7 @@ const API = {
   async templates() { const r = await fetch('/api/templates', { cache: 'no-store' }); if (!r.ok) throw await API.err(r); return r.json(); },
   async previewName(body) { return API.post('/api/filename/preview', body); },
 async issueHeaders(headers, user) { return API.post('/api/config/issue-headers', { headers, user }); },
+  async lfi(body) { return API.post('/api/lfi', body); },
   async uploadTemplate(body) { return API.post('/api/templates/upload', body); },
   async changeTypes(changeTypes, user) { return API.post('/api/config/changetypes', { change_types: changeTypes, user }); },
   async importIssues(csv, user) { return API.post('/api/issues/import', { csv, user }); },
@@ -2049,6 +2050,12 @@ function openDrawer(project, step, focusDocCode) {
     }));
   }
   d.appendChild(stageClaimWrap);
+
+  // LFI button — visible on every step in the drawer
+  var lfiBtn = el('button', 'lfi-drawer-btn', '+ Late Found Issue (LFI)');
+  lfiBtn.onclick = function() { openLfiModal(project, step); };
+  d.appendChild(lfiBtn);
+
   if (step.source_note) {
     const sn = el('p', 'note'); sn.innerHTML = '<b>Source note:</b> ' + esc(step.source_note); d.appendChild(sn);
   }
@@ -4863,6 +4870,189 @@ function confirmModal(title, body, confirmLabel, onConfirm) {
   document.addEventListener('keydown', onEsc);
   document.body.appendChild(scrim);
   yes.focus();
+}
+
+/* ---- LFI (Late Found Issue) modal ---------------------------------------- */
+function openLfiModal(project, step) {
+  var proc = project.process;
+  var sk = stepKeyOf(proc, step);
+  var who = getUser();
+  var todayStr = today();
+
+  var scrim = el('div', 'modal-scrim');
+  var box = el('div', 'modal lfi-modal');
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'lfiModalTitle');
+
+  var h = '<h2 id="lfiModalTitle">+ Late Found Issue</h2>';
+  h += '<p class="note">' + esc(project.project_id) + ' · step ' + esc(step.step_id) + ' — ' + esc(step.step_name) + '</p>';
+
+  // Field rows
+  var fields = [
+    ['Title', 'text', 'lfiTitle', '', true],
+    ['Author', 'text', 'lfiAuthor', who, false],
+    ['Date', 'date', 'lfiDate', todayStr, false],
+    ['Plant', 'text', 'lfiPlant', 'WVN', false],
+    ['Impact', 'text', 'lfiImpact', '', false],
+    ['Description', 'textarea', 'lfiDesc', '', false],
+    ['Root Cause', 'textarea', 'lfiRootCause', '', false],
+    ['Remediation', 'textarea', 'lfiRemediation', '', false]
+  ];
+
+  fields.forEach(function(f) {
+    var isTextarea = f[1] === 'textarea';
+    h += '<div class="lfi-field"><label for="' + f[2] + '">' + esc(f[0]) + (f[4] ? ' <span class="lfi-required">*</span>' : '') + '</label>';
+    if (isTextarea) {
+      h += '<textarea id="' + f[2] + '" class="lfi-input" rows="3">' + esc(f[3]) + '</textarea>';
+    } else {
+      h += '<input id="' + f[2] + '" class="lfi-input" type="' + f[1] + '" value="' + esc(f[3]) + '">';
+    }
+    h += '</div>';
+  });
+
+  // Image attachment area
+  h += '<div class="lfi-field"><label>Attachments (.png, .jpg, .jpeg)</label>';
+  h += '<div class="lfi-attach-area">';
+  h += '<div id="lfiPreviews" class="lfi-previews"></div>';
+  h += '<label class="lfi-attach-btn">Choose files<input type="file" id="lfiFileInput" accept=".png,.jpg,.jpeg" multiple style="display:none"></label>';
+  h += '</div>';
+  h += '</div>';
+
+  // Error area
+  h += '<div id="lfiError" class="lfi-error" style="display:none"></div>';
+
+  // Actions
+  h += '<div class="acts"><button id="lfiCancel">Cancel</button><button id="lfiSubmit" class="primary">Submit LFI</button></div>';
+
+  box.innerHTML = h;
+  scrim.appendChild(box);
+
+  var imageFiles = [];
+
+  var close = function() {
+    scrim.remove();
+    document.removeEventListener('keydown', onEsc);
+  };
+
+  var onEsc = function(e) { if (e.key === 'Escape') close(); };
+
+  scrim.onclick = function(e) { if (e.target === scrim) close(); };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(scrim);
+
+  // Wire up buttons and file input
+  var cancelBtn = box.querySelector('#lfiCancel');
+  cancelBtn.onclick = close;
+
+  var fileInput = box.querySelector('#lfiFileInput');
+  fileInput.onchange = function() {
+    var previews = box.querySelector('#lfiPreviews');
+    for (var i = 0; i < fileInput.files.length; i++) {
+      var f = fileInput.files[i];
+      imageFiles.push(f);
+      var thumb = el('div', 'lfi-thumb');
+      var img = el('img');
+      img.alt = f.name;
+      thumb.appendChild(img);
+      var nameSpan = el('span', '', f.name);
+      thumb.appendChild(nameSpan);
+      var rmBtn = el('button', 'lfi-rm-thumb', 'x');
+      (function(idx) {
+        rmBtn.onclick = function() {
+          imageFiles.splice(idx, 1);
+          thumb.remove();
+          // re-index remaining thumbs
+          var allThumbs = box.querySelectorAll('.lfi-thumb');
+          allThumbs.forEach(function(t, j) {
+            var b = t.querySelector('.lfi-rm-thumb');
+            if (b) {
+              b.onclick = function() {
+                imageFiles.splice(j, 1);
+                t.remove();
+              };
+            }
+          });
+        };
+      })(imageFiles.length - 1);
+      thumb.appendChild(rmBtn);
+      previews.appendChild(thumb);
+      // Read as data URL for preview
+      var reader = new FileReader();
+      reader.onload = function(e) { img.src = e.target.result; };
+      reader.readAsDataURL(f);
+    }
+    fileInput.value = '';
+  };
+
+  var submitBtn = box.querySelector('#lfiSubmit');
+  submitBtn.onclick = async function() {
+    var titleVal = (box.querySelector('#lfiTitle').value || '').trim();
+    var errDiv = box.querySelector('#lfiError');
+
+    if (!titleVal) {
+      errDiv.textContent = 'Title is required.';
+      errDiv.style.display = 'block';
+      return;
+    }
+
+    // Read images as base64
+    var imagePayloads = [];
+    for (var i = 0; i < imageFiles.length; i++) {
+      var buf = await new Promise(function(resolve) {
+        var r = new FileReader();
+        r.onload = function(e) { resolve(e.target.result); };
+        r.readAsDataURL(imageFiles[i]);
+      });
+      imagePayloads.push({ name: imageFiles[i].name, data: buf });
+    }
+
+    var body = {
+      project_id: project.project_id,
+      family: project.family || '',
+      prod_family: project.prod_family || '',
+      step_key: sk,
+      step_id: step.step_id,
+      step_name: step.step_name,
+      title: titleVal,
+      author: (box.querySelector('#lfiAuthor').value || '').trim(),
+      date: (box.querySelector('#lfiDate').value || '').trim(),
+      plant: (box.querySelector('#lfiPlant').value || '').trim(),
+      impact: (box.querySelector('#lfiImpact').value || '').trim(),
+      description: (box.querySelector('#lfiDesc').value || '').trim(),
+      root_cause: (box.querySelector('#lfiRootCause').value || '').trim(),
+      remediation: (box.querySelector('#lfiRemediation').value || '').trim(),
+      raised_by: who,
+      images: imagePayloads
+    };
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+    errDiv.style.display = 'none';
+
+    try {
+      var result = await API.lfi(body);
+      close();
+      // Refresh drawer in-place — no page scroll, no viewport jump
+      var pageY = window.scrollY;
+      var drawerEl = $('#drawer');
+      var drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+      await refreshSilently();
+      openDrawer(project, step);
+      window.scrollTo(0, pageY);
+      var newDrawer = $('#drawer');
+      if (newDrawer) newDrawer.scrollTop = drawerScroll;
+    } catch (e) {
+      errDiv.textContent = 'Submit failed: ' + e.message;
+      errDiv.style.display = 'block';
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit LFI';
+    }
+  };
+
+  // Focus the title field
+  var titleInput = box.querySelector('#lfiTitle');
+  if (titleInput) titleInput.focus();
 }
 
 /* -------------------------------------------------------------- theme -- */

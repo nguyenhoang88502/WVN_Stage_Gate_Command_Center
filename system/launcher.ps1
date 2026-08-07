@@ -1749,6 +1749,168 @@ try {
           if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
         }
       }
+      elseif ($method -eq 'POST' -and $path -eq '/api/lfi') {
+        $body = Read-JsonBody -Request $req
+        $projectId  = [string]$body.project_id
+        $family     = [string]$body.family
+        $prodFamily = [string]$body.prod_family
+        $stepKey    = [string]$body.step_key
+        $stepId     = [string]$body.step_id
+        $stepName   = [string]$body.step_name
+        $title      = [string]$body.title
+        $author     = [string]$body.author
+        $dateVal    = [string]$body.date
+        $plant      = [string]$body.plant
+        $impact     = [string]$body.impact
+        $desc       = [string]$body.description
+        $rootCause  = [string]$body.root_cause
+        $remediation = [string]$body.remediation
+        $raisedBy   = [string]$body.raised_by
+        $images     = $body.images
+
+        $lfiNumber   = 'LFI-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $identifiedIn = "$projectId - $stepId $stepName"
+        $timestamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $stem        = "LFI_${family}_${stepKey}_${timestamp}"
+
+        $tempPath    = Join-Path $env:TEMP ('lfi_' + [guid]::NewGuid().ToString('N') + '.xlsx')
+        $templatePath = Join-Path $TemplatesDir 'LL_info.xlsx'
+        Copy-Item -LiteralPath $templatePath -Destination $tempPath
+
+        try {
+          $archive = [System.IO.Compression.ZipFile]::Open($tempPath, 2)   # 2 = ZipArchiveMode.Update
+          try {
+            # ---- sheet1: LL INFO ---------------------------------------------------
+            $s1entry = $null
+            foreach ($e in $archive.Entries) { if ($e.FullName -eq 'xl/worksheets/sheet1.xml') { $s1entry = $e; break } }
+            $s1rd = New-Object System.IO.StreamReader($s1entry.Open())
+            $s1xml = $s1rd.ReadToEnd(); $s1rd.Close()
+
+            function Set-InlineCell($xml, $ref, $val) {
+              $safe = [System.Security.SecurityElement]::Escape([string]$val)
+              $newCell = '<c r="' + $ref + '" t="inlineStr"><is><t>' + $safe + '</t></is></c>'
+              $pattern = '<c r="' + $ref + '"[^>]*t="n"[^>]*(?:></c>|/>)'
+              $m = [regex]::Match($xml, $pattern)
+              if ($m.Success) {
+                return $xml.Substring(0, $m.Index) + $newCell + $xml.Substring($m.Index + $m.Length)
+              }
+              return $xml
+            }
+
+            $s1xml = Set-InlineCell $s1xml 'Q1'  'LFI'
+            $s1xml = Set-InlineCell $s1xml 'W1'  'Open'
+            $s1xml = Set-InlineCell $s1xml 'B5'  $title
+            $s1xml = Set-InlineCell $s1xml 'B6'  $author
+            $s1xml = Set-InlineCell $s1xml 'G6'  $plant
+            $s1xml = Set-InlineCell $s1xml 'K6'  $dateVal
+            $s1xml = Set-InlineCell $s1xml 'N6'  $lfiNumber
+            $s1xml = Set-InlineCell $s1xml 'V6'  $impact
+            $s1xml = Set-InlineCell $s1xml 'C9'  $projectId
+            $s1xml = Set-InlineCell $s1xml 'H9'  "$stepId $stepName"
+            $s1xml = Set-InlineCell $s1xml 'R9'  $prodFamily
+            $s1xml = Set-InlineCell $s1xml 'C10' $family
+            $s1xml = Set-InlineCell $s1xml 'R10' $family
+            $s1xml = Set-InlineCell $s1xml 'C11' '1'
+            $s1xml = Set-InlineCell $s1xml 'U11' $identifiedIn
+            $s1xml = Set-InlineCell $s1xml 'B15' $desc
+            if ($rootCause) { $combinedSolution = "Root Cause:`r`n$rootCause`r`n`r`nRemediation:`r`n$remediation" } else { $combinedSolution = $remediation }
+            $s1xml = Set-InlineCell $s1xml 'N15' $combinedSolution
+
+            $s1entry.Delete()
+            $newS1 = $archive.CreateEntry('xl/worksheets/sheet1.xml')
+            $w1 = New-Object System.IO.StreamWriter($newS1.Open())
+            $w1.Write($s1xml); $w1.Close()
+
+            # ---- sheet2: List Issue -------------------------------------------------
+            $s2entry = $null
+            foreach ($e in $archive.Entries) { if ($e.FullName -eq 'xl/worksheets/sheet2.xml') { $s2entry = $e; break } }
+            $s2rd = New-Object System.IO.StreamReader($s2entry.Open())
+            $s2xml = $s2rd.ReadToEnd(); $s2rd.Close()
+
+            $rn = 3
+            $newRow = '<row r="' + $rn + '" ht="34.5" customHeight="1">' +
+              '<c r="A' + $rn + '" s="1"  t="inlineStr"><is><t>1</t></is></c>' +
+              '<c r="B' + $rn + '" s="37" t="inlineStr"><is><t>' + [System.Security.SecurityElement]::Escape($dateVal) + '</t></is></c>' +
+              '<c r="C' + $rn + '" s="38" t="inlineStr"><is><t>' + [System.Security.SecurityElement]::Escape($family) + '</t></is></c>' +
+              '<c r="D' + $rn + '" s="39" t="n"></c>' +
+              '<c r="E' + $rn + '" s="57" t="inlineStr"><is><t>' + [System.Security.SecurityElement]::Escape($title) + '</t></is></c>' +
+              '<c r="F' + $rn + '" s="40" t="inlineStr"><is><t>' + [System.Security.SecurityElement]::Escape($identifiedIn) + '</t></is></c>' +
+              '<c r="G' + $rn + '" s="40" t="inlineStr"><is><t>LFI</t></is></c>' +
+              '<c r="H' + $rn + '" s="41" t="n"></c>' +
+              '<c r="I' + $rn + '" s="58" t="n"></c>' +
+              '<c r="J' + $rn + '" s="38" t="n"></c>' +
+              '<c r="K' + $rn + '" s="38" t="n"></c>' +
+              '<c r="M' + $rn + '" s="59" t="n"></c>' +
+              '</row>'
+
+            $s2xml = [regex]::Replace($s2xml, '<row r="3"[^>]*>.*?</row>', $newRow, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            $s2entry.Delete()
+            $newS2 = $archive.CreateEntry('xl/worksheets/sheet2.xml')
+            $w2 = New-Object System.IO.StreamWriter($newS2.Open())
+            $w2.Write($s2xml); $w2.Close()
+
+          } finally {
+            $archive.Dispose()
+          }
+
+          $xlsxBytes = [System.IO.File]::ReadAllBytes($tempPath)
+          $savedXlsx = Save-Evidence -DocType 'LFI' -Family $family -PartId '' -FileName "${stem}.xlsx" -Bytes $xlsxBytes
+
+          $savedImages = @()
+          if ($images) {
+            for ($imgIdx = 0; $imgIdx -lt $images.Count; $imgIdx++) {
+              $img = $images[$imgIdx]
+              $imgName = [string]$img.name
+              $imgData = [string]$img.data
+              $base64 = ''
+              if ($imgData -match ';base64,(.+)$') { $base64 = $Matches[1] } else { $base64 = $imgData }
+              $imgBytes = [System.Convert]::FromBase64String($base64)
+              $ext = [System.IO.Path]::GetExtension($imgName)
+              if (-not $ext) { $ext = '.png' }
+              $imgFileName = "${stem}_$($imgIdx+1)$ext"
+              $imgSaved = Save-Evidence -DocType 'LFI' -Family $family -PartId '' -FileName $imgFileName -Bytes $imgBytes
+              $savedImages += @{ fileName = $imgSaved.fileName; path = $imgSaved.path }
+            }
+          }
+
+          Add-StoreRow -Store 'lb_issues' -IdField 'issue_id' -Row @{
+            project_id  = $projectId
+            step_key    = $stepKey
+            raised_utc  = (Get-Date).ToUniversalTime().ToString('o')
+            raised_by   = $raisedBy
+            category    = 'LFI'
+            description = $title
+            owner       = ''
+            status      = 'Open'
+          } | Out-Null
+
+          $result = @{
+            ok       = $true
+            filename = $savedXlsx.fileName
+            path     = $savedXlsx.path
+            images   = $savedImages
+          }
+          New-JsonResponse -Response $res -StatusCode 200 -Body $result
+          Write-Log ("LFI created: $stem for $projectId / $stepKey")
+
+        } catch {
+          Write-Log ("LFI failed: " + $_.Exception.Message) 'ERROR'
+          # If the archive is still open from the inner try, its Dispose()
+          # wasn't called.  The temp file is already locked; we can't recover
+          # it, but we MUST still return an error to the client and let the
+          # finally block clean up what it can.
+          if (Test-Path -LiteralPath $tempPath) {
+            # Best-effort: the file might still be locked by the ZipArchive.
+            # The finally below handles the second attempt after stream closure.
+          }
+          New-JsonResponse -Response $res -StatusCode 500 -Body @{ error = $_.Exception.Message }
+
+        } finally {
+          if (Test-Path -LiteralPath $tempPath) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+          }
+        }
+      }
       else {
         New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'not found' }
       }
