@@ -938,13 +938,13 @@ function viewDashboard(root) {
 
   function filterDashboardProjects(process) {
     var list = projectsOf(process);
-    var any = dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter;
+    var any = dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length;
     if (!any) return list;
     return list.filter(function(p) {
-      if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
-      if (dashModelFilter && p.family !== dashModelFilter) return false;
-      if (dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
-      if (dashEndWeekFilter) { var ew = projectTargetWeek(p); if (!ew || ew !== dashEndWeekFilter) return false; }
+      if (dashFamFilter.length && !dashFamFilter.includes(p.prod_family)) return false;
+      if (dashModelFilter.length && !dashModelFilter.includes(p.family)) return false;
+      if (dashStartWeekFilter.length) { var sw = toWeek(p.prf_date); if (!sw || !dashStartWeekFilter.includes(sw)) return false; }
+      if (dashEndWeekFilter.length) { var ew = projectTargetWeek(p); if (!ew || !dashEndWeekFilter.includes(ew)) return false; }
       return true;
     });
   }
@@ -961,40 +961,80 @@ function viewDashboard(root) {
 
   function renderDashboardSlicers() {
     var allNpi = projectsOf('NPI');
+    _msOpenPopover = null; // close any stale popover from a prior render
 
     // Cascade: each slicer derives its options from projects matching the OTHER active filters
     function filteredByOthers(keepFilter) {
       return allNpi.filter(function(p) {
-        if (keepFilter !== 'fam' && dashFamFilter && p.prod_family !== dashFamFilter) return false;
-        if (keepFilter !== 'model' && dashModelFilter && p.family !== dashModelFilter) return false;
-        if (keepFilter !== 'start' && dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
-        if (keepFilter !== 'end' && dashEndWeekFilter) { var ew = projectTargetWeek(p); if (!ew || ew !== dashEndWeekFilter) return false; }
+        if (keepFilter !== 'fam' && dashFamFilter.length && !dashFamFilter.includes(p.prod_family)) return false;
+        if (keepFilter !== 'model' && dashModelFilter.length && !dashModelFilter.includes(p.family)) return false;
+        if (keepFilter !== 'start' && dashStartWeekFilter.length) { var sw = toWeek(p.prf_date); if (!sw || !dashStartWeekFilter.includes(sw)) return false; }
+        if (keepFilter !== 'end' && dashEndWeekFilter.length) { var ew = projectTargetWeek(p); if (!ew || !dashEndWeekFilter.includes(ew)) return false; }
         return true;
       });
+    }
+
+    function clearStaleFilters() {
+      if (dashFamFilter.length) {
+        var famSet = new Set(filteredByOthers('fam').map(function(p) { return p.prod_family; }));
+        dashFamFilter = dashFamFilter.filter(function(v) { return famSet.has(v); });
+      }
+      if (dashModelFilter.length) {
+        var modelSet = new Set(filteredByOthers('model').map(function(p) { return p.family; }));
+        dashModelFilter = dashModelFilter.filter(function(v) { return modelSet.has(v); });
+      }
+      if (dashStartWeekFilter.length) {
+        var startSet = new Set(filteredByOthers('start').map(function(p) { return toWeek(p.prf_date); }).filter(Boolean));
+        dashStartWeekFilter = dashStartWeekFilter.filter(function(v) { return startSet.has(v); });
+      }
+      if (dashEndWeekFilter.length) {
+        var endSet = new Set(filteredByOthers('end').map(function(p) { return projectTargetWeek(p); }).filter(Boolean));
+        dashEndWeekFilter = dashEndWeekFilter.filter(function(v) { return endSet.has(v); });
+      }
     }
 
     dashSlicerWrap.innerHTML = '';
     var sel = el('div', 'dashboard-slicers');
 
-    // Family
-    sel.innerHTML += '<label class="dashboard-slicer">Family<select id="dashFamFilter"><option value="">All Families</option>' +
-      CFG.prod_families.map(function(f) { return '<option value="' + esc(f.prod_family_id) + '"' + (dashFamFilter === f.prod_family_id ? ' selected' : '') + '>' + esc(f.prod_family_name) + ' (' + esc(f.prod_family_id) + ')</option>'; }).join('') +
-      '</select></label>';
+    // Family — static list from config (not cascaded from other filters)
+    var famOptions = CFG.prod_families.map(function(f) {
+      return { value: f.prod_family_id, label: f.prod_family_name + ' (' + f.prod_family_id + ')' };
+    });
+    sel.appendChild(createMultiSelect({
+      label: 'Family', options: famOptions, value: dashFamFilter,
+      placeholder: 'All Families',
+      onChange: function() { clearStaleFilters(); renderAll(); }
+    }));
 
     // Model — derived from distinct p.family values of currently-visible projects
-    sel.innerHTML += '<label class="dashboard-slicer">Model<select id="dashModelFilter"><option value="">All Models</option>' +
-      distinctModels(filteredByOthers('model')).map(function(m) { return '<option value="' + esc(m) + '"' + (dashModelFilter === m ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') +
-      '</select></label>';
+    var modelOptions = distinctModels(filteredByOthers('model')).map(function(m) {
+      return { value: m, label: m };
+    });
+    sel.appendChild(createMultiSelect({
+      label: 'Model', options: modelOptions, value: dashModelFilter,
+      placeholder: 'All Models',
+      onChange: function() { clearStaleFilters(); renderAll(); }
+    }));
 
     // Start Week (prf_date)
-    sel.innerHTML += '<label class="dashboard-slicer">Start Week<select id="dashStartWeekFilter"><option value="">All Start Weeks</option>' +
-      buildStartWeekOptions(filteredByOthers('start')).map(function(w) { return '<option value="' + w + '"' + (dashStartWeekFilter === w ? ' selected' : '') + '>' + weekRangeLabel(w) + '</option>'; }).join('') +
-      '</select></label>';
+    var startOptions = buildStartWeekOptions(filteredByOthers('start')).map(function(w) {
+      return { value: w, label: weekRangeLabel(w) };
+    });
+    sel.appendChild(createMultiSelect({
+      label: 'Start Week', options: startOptions, value: dashStartWeekFilter,
+      placeholder: 'All Start Weeks',
+      onChange: function() { clearStaleFilters(); renderAll(); }
+    }));
 
     // End Week (target_date)
-    sel.innerHTML += '<label class="dashboard-slicer">End Week<select id="dashEndWeekFilter"><option value="">All End Weeks</option>' +
-      buildEndWeekOptions(filteredByOthers('end')).map(function(w) { return '<option value="' + w + '"' + (dashEndWeekFilter === w ? ' selected' : '') + '>' + weekRangeLabel(w) + '</option>'; }).join('') +
-      '</select></label>';
+    var endOptions = buildEndWeekOptions(filteredByOthers('end')).map(function(w) {
+      return { value: w, label: weekRangeLabel(w) };
+    });
+    sel.appendChild(createMultiSelect({
+      label: 'End Week', options: endOptions, value: dashEndWeekFilter,
+      placeholder: 'All End Weeks',
+      onChange: function() { clearStaleFilters(); renderAll(); }
+    }));
 
     dashSlicerWrap.appendChild(sel);
   }
@@ -1032,7 +1072,7 @@ function viewDashboard(root) {
     if (!list.length) {
       const emptyTr = el('tr'); const emptyTd = el('td');
       emptyTd.colSpan = 2 + steps.length;
-      emptyTd.textContent = (dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter)
+      emptyTd.textContent = (dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length)
         ? 'No NPI projects match the current filter.'
         : 'No NPI projects registered yet.';
       emptyTr.appendChild(emptyTd); tb.appendChild(emptyTr);
@@ -1150,7 +1190,7 @@ function viewDashboard(root) {
     if (!list.length) {
       const emptyTr = el('tr'); const emptyTd = el('td');
       emptyTd.colSpan = 3 + groups.length;
-      emptyTd.textContent = (dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter)
+      emptyTd.textContent = (dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length)
         ? 'No ECN projects match the current filter.'
         : 'No ECN projects registered yet.';
       emptyTr.appendChild(emptyTd); tb.appendChild(emptyTr);
@@ -1396,53 +1436,6 @@ function viewDashboard(root) {
       const cardHost = el('div', 'stage-grid'); cardHost.id = 'npiStageCards';
       renderCards(cardHost);
       wrap.appendChild(cardHost);
-
-      // Re-wire onchange handlers on the freshly rendered <select> elements
-      const famSel = $('#dashFamFilter');
-      const modelSel = $('#dashModelFilter');
-      const startSel = $('#dashStartWeekFilter');
-      const endSel = $('#dashEndWeekFilter');
-
-      function isFilterValid(forFilter) {
-        var projs = allNpi.filter(function(p) {
-          if (forFilter !== 'fam' && dashFamFilter && p.prod_family !== dashFamFilter) return false;
-          if (forFilter !== 'model' && dashModelFilter && p.family !== dashModelFilter) return false;
-          if (forFilter !== 'start' && dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
-          if (forFilter !== 'end' && dashEndWeekFilter) { var ew = projectTargetWeek(p); if (!ew || ew !== dashEndWeekFilter) return false; }
-          return true;
-        });
-        if (forFilter === 'model' && dashModelFilter) return projs.some(function(p) { return p.family === dashModelFilter; });
-        if (forFilter === 'start' && dashStartWeekFilter) return projs.some(function(p) { return toWeek(p.prf_date) === dashStartWeekFilter; });
-        if (forFilter === 'end' && dashEndWeekFilter) return projs.some(function(p) { return projectTargetWeek(p) === dashEndWeekFilter; });
-        return true;
-      }
-
-      function clearStaleFilters() {
-        if (!isFilterValid('model')) dashModelFilter = '';
-        if (!isFilterValid('start')) dashStartWeekFilter = '';
-        if (!isFilterValid('end')) dashEndWeekFilter = '';
-      }
-
-      if (famSel) famSel.onchange = function() {
-        dashFamFilter = famSel.value;
-        clearStaleFilters();
-        renderAll();
-      };
-      if (modelSel) modelSel.onchange = function() {
-        dashModelFilter = modelSel.value;
-        clearStaleFilters();
-        renderAll();
-      };
-      if (startSel) startSel.onchange = function() {
-        dashStartWeekFilter = startSel.value;
-        clearStaleFilters();
-        renderAll();
-      };
-      if (endSel) endSel.onchange = function() {
-        dashEndWeekFilter = endSel.value;
-        clearStaleFilters();
-        renderAll();
-      };
     }
 
     renderAll();
@@ -3055,10 +3048,183 @@ function viewInput(root) {
 /* ===================================================================== */
 let justPickedTree = false;
 let dashMatrixOpen = true;
-let dashFamFilter = '';
-let dashModelFilter = '';
-let dashStartWeekFilter = '';
-let dashEndWeekFilter = '';
+let dashFamFilter = [];
+let dashModelFilter = [];
+let dashStartWeekFilter = [];
+let dashEndWeekFilter = [];
+
+// Multi-select popover singleton — only one popover open at a time
+var _msOpenPopover = null;
+(function() {
+  document.addEventListener('click', function(e) {
+    if (_msOpenPopover && !_msOpenPopover.wrapper.contains(e.target)) {
+      _msCommitAndClose(_msOpenPopover);
+    }
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && _msOpenPopover) {
+      _msCommitAndClose(_msOpenPopover);
+      if (_msOpenPopover && _msOpenPopover.trigger) _msOpenPopover.trigger.focus();
+    }
+  });
+})();
+function _msCommitAndClose(ms) {
+  if (!ms || !ms.popover) return;
+  ms.popover.style.display = 'none';
+  var changed = false;
+  if (ms.value.length !== ms.selected.length) changed = true;
+  else {
+    var a = ms.value.slice().sort(), b = ms.selected.slice().sort();
+    for (var i = 0; i < a.length; i++) { if (a[i] !== b[i]) { changed = true; break; } }
+  }
+  if (changed) {
+    ms.value.length = 0;
+    Array.prototype.push.apply(ms.value, ms.selected);
+    if (ms.onChange) ms.onChange();
+  }
+  _msOpenPopover = null;
+}
+
+function createMultiSelect(cfg) {
+  // cfg: { label, options: [{value,label}], value: [], placeholder, onChange }
+  var wrapper = el('div', 'ms-wrapper');
+  wrapper.style.position = 'relative';
+
+  var ms = {
+    wrapper: wrapper,
+    value: cfg.value,
+    selected: cfg.value.slice(),
+    options: cfg.options,
+    onChange: cfg.onChange,
+    trigger: null,
+    popover: null
+  };
+
+  // Label
+  var lbl = el('span', 'ms-label');
+  lbl.textContent = cfg.label;
+  wrapper.appendChild(lbl);
+
+  // Trigger button
+  var trigger = el('button', 'ms-trigger');
+  trigger.type = 'button';
+  ms.trigger = trigger;
+
+  function updateTriggerText() {
+    if (ms.selected.length === 0) {
+      trigger.textContent = cfg.placeholder;
+    } else if (ms.selected.length === 1) {
+      var found = cfg.options.find(function(o) { return o.value === ms.selected[0]; });
+      trigger.textContent = found ? found.label : ms.selected[0];
+    } else {
+      trigger.textContent = ms.selected.length + ' selected';
+    }
+  }
+  updateTriggerText();
+  wrapper.appendChild(trigger);
+
+  // Popover
+  var popover = el('div', 'ms-popover');
+  popover.style.display = 'none';
+  ms.popover = popover;
+
+  // Search input
+  var searchInput = el('input', 'ms-search');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Search...';
+  popover.appendChild(searchInput);
+
+  // Select All row
+  var selectAllRow = el('label', 'ms-option ms-option-all');
+  var selectAllCB = el('input');
+  selectAllCB.type = 'checkbox';
+  selectAllRow.appendChild(selectAllCB);
+  selectAllRow.appendChild(document.createTextNode(' Select All'));
+  popover.appendChild(selectAllRow);
+
+  // Options list container
+  var optionsList = el('div', 'ms-options-list');
+  popover.appendChild(optionsList);
+
+  function updateSelectAll() {
+    var all = cfg.options.length > 0 && ms.selected.length === cfg.options.length;
+    var some = ms.selected.length > 0 && ms.selected.length < cfg.options.length;
+    selectAllCB.checked = all;
+    selectAllCB.indeterminate = some;
+  }
+
+  function rebuildOptionRows() {
+    var q = searchInput.value.toLowerCase().trim();
+    optionsList.innerHTML = '';
+    cfg.options.forEach(function(opt) {
+      if (q && opt.label.toLowerCase().indexOf(q) === -1) return;
+      var row = el('label', 'ms-option');
+      var cb = el('input');
+      cb.type = 'checkbox';
+      cb.value = opt.value;
+      cb.checked = ms.selected.indexOf(opt.value) !== -1;
+      cb.addEventListener('change', function() {
+        if (cb.checked) {
+          if (ms.selected.indexOf(opt.value) === -1) ms.selected.push(opt.value);
+        } else {
+          var idx = ms.selected.indexOf(opt.value);
+          if (idx !== -1) ms.selected.splice(idx, 1);
+        }
+        updateSelectAll();
+        updateTriggerText();
+      });
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(' ' + opt.label));
+      optionsList.appendChild(row);
+    });
+  }
+
+  searchInput.addEventListener('input', function() { rebuildOptionRows(); });
+
+  selectAllCB.addEventListener('change', function() {
+    if (selectAllCB.checked) {
+      ms.selected = cfg.options.map(function(o) { return o.value; });
+    } else {
+      ms.selected = [];
+    }
+    updateTriggerText();
+    rebuildOptionRows();
+  });
+
+  function open() {
+    // Discard any other open popover without committing (committing would
+    // trigger renderAll which tears down this element's DOM).
+    if (_msOpenPopover && _msOpenPopover !== ms) {
+      _msOpenPopover.popover.style.display = 'none';
+      _msOpenPopover = null;
+    }
+    // Re-sync selected from current external value
+    ms.selected = cfg.value.slice();
+    ms.options = cfg.options;
+    updateTriggerText();
+    updateSelectAll();
+    searchInput.value = '';
+    rebuildOptionRows();
+    popover.style.display = 'flex';
+    _msOpenPopover = ms;
+    setTimeout(function() { searchInput.focus(); }, 50);
+  }
+
+  trigger.addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (popover.style.display === 'flex') {
+      _msCommitAndClose(ms);
+    } else {
+      open();
+    }
+  });
+
+  // Prevent popover clicks from bubbling to document close handler
+  popover.addEventListener('click', function(e) { e.stopPropagation(); });
+
+  wrapper.appendChild(popover);
+  return wrapper;
+}
 // last batch-import summary, so it survives the redraw a successful import triggers
 let lastBatchResult = null;
 let npiSel = null, ecnSel = null, ecnMode = 'steps';

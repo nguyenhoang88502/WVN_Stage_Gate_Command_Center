@@ -825,6 +825,63 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
   font-size: 12px; min-width: 100px;
 }
 
+/* -- multi-select slicer (replaces single <select>) ---------------------- */
+.ms-wrapper {
+  display: flex; align-items: center; gap: 6px;
+}
+.ms-label {
+  font-size: 11.5px; font-weight: 600; color: var(--ink2);
+  white-space: nowrap;
+}
+.ms-trigger {
+  height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  font-size: 12px; min-width: 130px; max-width: 220px;
+  text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 24px 0 var(--s2); border: 1px solid var(--line);
+  border-radius: var(--r2); background: var(--bg); color: var(--ink);
+  cursor: pointer; position: relative; line-height: var(--ctl-h-sm);
+}
+.ms-trigger::after {
+  content: "\25BC"; position: absolute; right: 7px; top: 50%;
+  transform: translateY(-50%); font-size: 8px; color: var(--muted); pointer-events: none;
+}
+.ms-trigger:hover { border-color: var(--blue); }
+.ms-trigger:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(66,133,244,0.2); }
+
+.ms-popover {
+  display: none; position: absolute; top: 100%; left: 0; z-index: 1000;
+  margin-top: 4px; min-width: 200px; max-height: 320px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r2);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.12); overflow: hidden;
+  flex-direction: column;
+}
+
+.ms-search {
+  width: 100%; height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  font-size: 12px; padding: 0 var(--s2); border: none;
+  border-bottom: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  outline: none; flex-shrink: 0;
+}
+.ms-search::placeholder { color: var(--muted); }
+
+.ms-option {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px var(--s2); font-size: 12px; color: var(--ink);
+  cursor: pointer; flex-shrink: 0; margin: 0;
+}
+.ms-option:hover { background: var(--soft); }
+.ms-option input[type="checkbox"] {
+  width: 14px; height: 14px; margin: 0; flex-shrink: 0; cursor: pointer;
+  accent-color: var(--blue);
+}
+.ms-option-all {
+  border-bottom: 1px solid var(--line); font-weight: 600; flex-shrink: 0;
+}
+
+.ms-options-list {
+  overflow-y: auto; flex: 1 1 auto;
+}
+
 /* -- dashboard export toolbar -------------------------------------------- */
 .dash-toolbar {
   display: flex; gap: var(--s2); margin-bottom: var(--s2); flex-wrap: wrap;
