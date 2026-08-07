@@ -118,12 +118,23 @@ async function refresh() {
 }
 
 /* --------------------------------------------------------------- boot -- */
+let reloadInFlight = false;
 async function boot() {
   try {
     await refresh();
     $('#srvState').textContent = 'connected'; $('#srvState').className = badgeClass('Connected');
     $('#stamp').textContent = CFG.system_info.app_name + ' v' + CFG.system_info.version + '  ·  ' + nowLocal();
     buildTabs(); show(current);
+    wireReloadButton();
+    // Auto-reload checkbox — read persisted state, start timer if it was enabled
+    (function() {
+      var chk = $('#autoReloadChk'); if (!chk) return;
+      if (localStorage.getItem('wvn_auto_reload') === '1') { chk.checked = true; startAutoReload(); }
+      chk.onchange = function() {
+        localStorage.setItem('wvn_auto_reload', chk.checked ? '1' : '0');
+        chk.checked ? startAutoReload() : stopAutoReload();
+      };
+    })();
   } catch (e) {
     $('#views').innerHTML = '<div class="err"><b>Could not reach the local server.</b><br>' + esc(e.message) +
       '<br><br>Make sure <code>Open_WVN_NPI_Command_Center.cmd</code> is running, then reload this page.</div>';
@@ -158,6 +169,95 @@ async function refreshSilently() {
   const d = await API.data();
   CFG = d.config; TRK = d.tracking; PATHS = d.paths || {};
   try { TEMPLATES = (await API.templates()).templates || []; } catch (e) { TEMPLATES = []; }
+}
+
+/* ---- reload button & state-preserving reload ---- */
+function wireReloadButton() {
+  var btn = $('#reloadBtn');
+  if (btn) btn.onclick = reloadPreservingState;
+}
+
+function captureUiState() {
+  var d = $('#drawer');
+  return {
+    tab: current,
+    npiSel: npiSel,
+    ecnSel: ecnSel,
+    ecnMode: ecnMode,
+    dashMatrixOpen: dashMatrixOpen,
+    dashFamFilter: dashFamFilter.slice(),
+    dashModelFilter: dashModelFilter.slice(),
+    dashStartWeekFilter: dashStartWeekFilter.slice(),
+    dashEndWeekFilter: dashEndWeekFilter.slice(),
+    drawer: drawerContext ? {
+      projectId: drawerContext.projectId,
+      stepId: drawerContext.stepId,
+      docCode: drawerContext.docCode
+    } : null,
+    pageY: window.scrollY,
+    drawerScroll: d ? d.scrollTop : 0
+  };
+}
+
+function restoreUiState(state) {
+  npiSel = state.npiSel;
+  ecnSel = state.ecnSel;
+  ecnMode = state.ecnMode;
+  dashMatrixOpen = state.dashMatrixOpen;
+  dashFamFilter = state.dashFamFilter;
+  dashModelFilter = state.dashModelFilter;
+  dashStartWeekFilter = state.dashStartWeekFilter;
+  dashEndWeekFilter = state.dashEndWeekFilter;
+  show(state.tab);
+  if (state.drawer) {
+    var project = projById(state.drawer.projectId);
+    if (project) {
+      var step = allStepsOf(project.process).find(function(s) {
+        return s.step_id === state.drawer.stepId;
+      });
+      if (step) {
+        openDrawer(project, step, state.drawer.docCode);
+      }
+    }
+  }
+  requestAnimationFrame(function() {
+    window.scrollTo(0, state.pageY);
+    var d = $('#drawer');
+    if (d) d.scrollTop = state.drawerScroll;
+  });
+}
+
+async function reloadPreservingState() {
+  if (reloadInFlight) return;
+  var btn = $('#reloadBtn');
+  try {
+    reloadInFlight = true;
+    if (btn) { btn.disabled = true; btn.classList.add('is-busy'); }
+    var state = captureUiState();
+    await refreshSilently();
+    restoreUiState(state);
+  } finally {
+    reloadInFlight = false;
+    if (btn) { btn.disabled = false; btn.classList.remove('is-busy'); }
+  }
+}
+
+function startAutoReload() {
+  stopAutoReload();
+  autoReloadId = setInterval(function() {
+    if (reloadInFlight) return;
+    // Skip while a modal is open — .modal-backdrop means user is mid-action
+    if (document.querySelector('.modal-backdrop')) return;
+    // Skip while the user is typing in a form element
+    var el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
+               el.contentEditable === 'true' || el.isContentEditable)) return;
+    reloadPreservingState();
+  }, 15000);
+}
+
+function stopAutoReload() {
+  if (autoReloadId) { clearInterval(autoReloadId); autoReloadId = null; }
 }
 
 /* ------------------------------------------------------------ helpers -- */
@@ -2037,8 +2137,12 @@ function evidenceViewerUrl(filePath) {
   return '/api/vault/view/' + encoded;
 }
 
+let drawerContext = null;
+let autoReloadId = null;
+
 /* ---- executive inspection drawer ---------------------------------------- */
 function closeDrawer() {
+  drawerContext = null;
   const d = $('#drawer'); if (d) d.remove();
   const s = $('#scrim'); if (s) s.remove();
 }
@@ -2047,6 +2151,7 @@ function openDrawerForDoc(project, step, docCode) {
 }
 function openDrawer(project, step, focusDocCode) {
   closeDrawer();
+  drawerContext = { projectId: project.project_id, stepId: step.step_id, docCode: focusDocCode };
   const proc = project.process;
   const sk = stepKeyOf(proc, step);
   const c = cellStateFor(project, step);
