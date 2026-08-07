@@ -1875,6 +1875,16 @@ function openDrawer(project, step, focusDocCode) {
           openDrawer(project, step, code);
         }));
       }
+      var dt = docTypeById(code);
+      if (dt.template_file) {
+        var dlBtn = el('a');
+        dlBtn.textContent = 'Download Blank Template';
+        dlBtn.href = '/api/templates/' + encodeURIComponent(dt.template_file);
+        dlBtn.download = dt.template_file;
+        dlBtn.className = 'btn btn-sm';
+        dlBtn.style.cssText = 'margin-left:8px;font-size:12px;color:var(--blue);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:var(--r1);display:inline-block';
+        dz.appendChild(dlBtn);
+      }
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
       dz.ondrop = async e => {
@@ -3923,6 +3933,20 @@ function viewSettings(root) {
     const t = el('div', 'tagrow');
     t.innerHTML = '<span><b>' + esc(d.doctype_id) + '</b> — ' + esc(d.name) +
       ' <span class="note">· required at: ' + esc(d.stage_required || 'not gated') + '</span></span>';
+    // Template file selector (per-doctype)
+    var tmplSel = el('select');
+    tmplSel.style.cssText = 'margin-left:8px;font-size:12px;min-width:160px;height:26px';
+    tmplSel.innerHTML = '<option value="">(no template)</option>' +
+      TEMPLATES.map(function(tm) { return '<option value="' + esc(tm.name) + '"' + (d.template_file === tm.name ? ' selected' : '') + '>' + esc(tm.name) + '</option>'; }).join('');
+    tmplSel.onchange = async function() {
+      var who = requireName(); if (!who) { tmplSel.value = d.template_file || ''; return; }
+      try {
+        var updated = Object.assign({}, d, { template_file: tmplSel.value || null });
+        await API.doctype('add', updated, null, who);
+        await redrawAfterWrite();
+      } catch (e) { alert('Could not save: ' + e.message); }
+    };
+    t.appendChild(tmplSel);
     const edit = el('button', null, '✎');
     edit.title = 'Edit this document type';
     edit.style.color = 'var(--blue)';
@@ -3934,6 +3958,7 @@ function viewSettings(root) {
       $('#sdStage').value = d.stage_required || '';
       $('#sdSource').value = d.source || '';
       $('#sdDesc').value = d.description || '';
+      $('#sdTemplate').value = d.template_file || '';
       daddBtn.textContent = 'Save document type (update)';
       daddBtn.dataset.editing = d.doctype_id;
       dCancelBtn.className = '';
@@ -3958,7 +3983,10 @@ function viewSettings(root) {
     '<div class="fld"><span>Owner dept</span><input id="sdOwner"></div>' +
     '<div class="fld"><span>Stage required</span><input id="sdStage" placeholder="e.g. NPI 3, ECN 10 — or leave blank"></div>' +
     '<div class="fld"><span>Source</span><input id="sdSource"></div>' +
-    '<div class="fld"><span>Description</span><input id="sdDesc"></div>';
+    '<div class="fld"><span>Description</span><input id="sdDesc"></div>' +
+    '<div class="fld"><span>Template file</span><select id="sdTemplate" style="min-width:200px">' +
+      '<option value="">(none)</option>' +
+      TEMPLATES.map(function(t) { return '<option value="' + esc(t.name) + '">' + esc(t.name) + '</option>'; }).join('') + '</select></div>';
   dpBody.appendChild(dg);
   dpBody.appendChild(el('p', 'note', 'Stage required is a label, not a rule — what actually gates a step is that step\'s ' +
     'required_evidence_doctypes list in config.json. Adding a doctype here makes it filable; it does not make it mandatory.'));
@@ -3967,6 +3995,7 @@ function viewSettings(root) {
   function resetDoctypeForm() {
     $('#sdId').value = ''; $('#sdId').readOnly = false;
     $('#sdName').value = ''; $('#sdForm').value = ''; $('#sdOwner').value = ''; $('#sdStage').value = ''; $('#sdSource').value = ''; $('#sdDesc').value = '';
+    $('#sdTemplate').value = '';
     daddBtn.textContent = 'Add document type'; delete daddBtn.dataset.editing;
     dCancelBtn.className = 'hide';
   }
@@ -3977,7 +4006,8 @@ function viewSettings(root) {
       await API.doctype('add', {
         doctype_id: id, name, form_code: $('#sdForm').value.trim() || null, owner_dept: $('#sdOwner').value.trim(),
         source: $('#sdSource').value.trim(), description: $('#sdDesc').value.trim(),
-        stage_required: $('#sdStage').value.trim() || 'not gated'
+        stage_required: $('#sdStage').value.trim() || 'not gated',
+        template_file: $('#sdTemplate').value || null
       }, null, requireName() || '');
       await redrawAfterWrite();
     } catch (e) { alert('Could not save: ' + e.message); }
