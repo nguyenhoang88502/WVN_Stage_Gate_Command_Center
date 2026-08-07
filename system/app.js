@@ -147,7 +147,7 @@ async function boot() {
 }
 
 const TABS = [['dash', 'Dashboard'], ['claimed', 'Claimed Work'], ['input', 'Input'], ['npi', 'NPI · 7 steps'], ['ecn', 'ECN · 12 steps + PPAP'],
-              ['sp', 'Issue tracker'], ['settings', 'Settings']];
+              ['settings', 'Settings']];
 let current = 'dash';
 function buildTabs() {
   const n = $('#tabs'); n.innerHTML = '';
@@ -157,7 +157,7 @@ function show(id) {
   current = id; buildTabs();
   closeDrawer();
   const v = $('#views'); v.innerHTML = '';
-  ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, sp: viewSharePoint, settings: viewSettings })[id](v);
+  ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
   if (justPickedTree) {
     justPickedTree = false;
     requestAnimationFrame(() => {
@@ -2736,199 +2736,6 @@ function viewClaimed(root) {
   card.appendChild(body);
   root.appendChild(card);
 }
-
-/* ===================================================================== */
-/* TAB — SHAREPOINT ISSUE TRACKER                                        */
-/* ===================================================================== */
-function viewSharePoint(root) {
-  const b = el('div', 'banner');
-  b.innerHTML = '<b>Issues raised against projects, held in the local tracking CSVs.</b> ' +
-    'CSV import and export are the bridge to anything outside this tool — use them to exchange issue logs with other systems or stakeholders.';
-  root.appendChild(b);
-
-  const listPanel = el('div', 'card');
-  const listHdr = el('div', 'card-header'); listHdr.appendChild(el('h3', 'card-title', 'Issue log')); listPanel.appendChild(listHdr);
-  const listBody = el('div', 'card-body');
-  const listHost = el('div'); listBody.appendChild(listHost);
-  listPanel.appendChild(listBody); root.appendChild(listPanel);
-
-  /* ---- template download / export / import buttons ---- */
-  const tplPanel = el('div', 'card');
-  const tplBody = el('div', 'card-body'); tplPanel.appendChild(tplBody);
-  tplBody.innerHTML = '<b>CSV tools</b> &nbsp; ';
-  const dlBtn = el('button', '', 'Download issue CSV template');
-  dlBtn.onclick = () => { window.location.href = '/api/issues/template.csv'; };
-  tplBody.appendChild(dlBtn);
-  const expBtn = el('button', '', 'Export issues to CSV');
-  expBtn.onclick = () => {
-    const hdrs = CFG.issue_tracker_headers || {};
-    const keys = Object.keys(hdrs);
-    const lines = [keys.map(k => csvCell(hdrs[k])).join(',')];
-    (TRK.lb_sp_issues || []).forEach(r => {
-      lines.push(keys.map(k => csvCell(k === 'due_date' ? toWeek(r[k]) : r[k])).join(','));
-    });
-    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'issues_export_' + today() + '.csv';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-  tplBody.appendChild(expBtn);
-  const impInput = el('input'); impInput.type = 'file'; impInput.accept = '.csv'; impInput.style.display = 'none';
-  tplBody.appendChild(impInput);
-  const impBtn = el('button', '', 'Import CSV');
-  impBtn.onclick = () => { impInput.click(); };
-  impInput.onchange = async () => {
-    const f = impInput.files[0];
-    if (!f) return;
-    const who = requireName(); if (!who) { impInput.value = ''; return; }
-    impBtn.disabled = true;
-    try {
-      const text = await new Promise((resolve, reject) => {
-        const rd = new FileReader();
-        rd.onload = () => resolve(rd.result);
-        rd.onerror = reject; rd.readAsText(f);
-      });
-      const r = await API.importIssues(text, who);
-      let msg = r.accepted + ' issue(s) imported.';
-      if (r.rejected && r.rejected.length) {
-        msg += '\n' + r.rejected.length + ' row(s) rejected:';
-        r.rejected.forEach(rj => { msg += '\n  Row ' + rj.row + ': ' + rj.reason; });
-      }
-      alert(msg);
-      await redrawAfterWrite();
-    } catch (e) { alert('Import failed: ' + e.message); }
-    impBtn.disabled = false; impInput.value = '';
-  };
-  tplBody.appendChild(impBtn);
-  root.appendChild(tplPanel);
-
-
-  /* ---- raise an issue ---- */
-  const nf = el('div', 'sub');
-  nf.appendChild(el('h3', null, 'Raise an issue'));
-  const g = el('div', 'grid2');
-  const projOpts = TRK.lb_projects.map(p => '<option>' + esc(p.project_id) + '</option>').join('');
-  g.innerHTML = '<div class="fld"><span>Project</span><select id="spProj">' + (projOpts || '<option value="">register a project first</option>') + '</select></div>' +
-    '<div class="fld"><span>Title *</span><input id="spTitle" placeholder="VM coating peeling on housing"></div>' +
-    '<div class="fld"><span>Owner department</span><select id="spDept">' + Object.keys(CFG.departments || {}).map(k => '<option>' + esc(k) + '</option>').join('') + '</select></div>' +
-    '<div class="fld"><span>Owner (PIC)</span><input id="spPic"></div>' +
-    '<div class="fld"><span>Due date</span><input id="spDue" type="week"></div>' +
-    '<div class="fld"><span>Priority</span><select id="spPriority"><option>Medium</option><option>Low</option><option>High</option><option>Critical</option></select></div>' +
-    '<div class="fld"><span>Assigned dept</span><input id="spAssignedDept" placeholder="free text — may name an external vendor"></div>';
-  nf.appendChild(g);
-  const dsc = el('div', 'fld'); dsc.innerHTML = '<span>Description</span><textarea id="spDesc"></textarea>';
-  nf.appendChild(dsc);
-  const add = el('button', 'primary mt-s2', 'Raise issue');
-  nf.appendChild(add);
-  listBody.insertBefore(nf, listHost);
-
-  add.onclick = async () => {
-    const who = requireName(); if (!who) return;
-    const title = $('#spTitle', nf).value.trim();
-    if (!title) { alert('Give the issue a title.'); return; }
-    add.disabled = true;
-    try {
-      await API.action('lb_sp_issues', {
-        project_id: $('#spProj', nf).value, title, description: $('#spDesc', nf).value.trim(),
-        raised_by: who, raised_utc: new Date().toISOString(), owner_dept: $('#spDept', nf).value,
-        owner_pic: $('#spPic', nf).value.trim(), due_date: $('#spDue', nf).value, status: 'Open',
-        action_taken: '', remarks: '', attachment_name: '', attachment_path: '',
-        last_message_by: who, last_message_utc: new Date().toISOString(), last_message: 'raised',
-        priority: $('#spPriority', nf).value, assigned_dept: $('#spAssignedDept', nf).value.trim()
-      }, { audit: { user: who, action: 'Raise_SP_Issue', projectId: $('#spProj', nf).value, objType: 'SPIssue', objId: title, from: '', to: 'Open', detail: '' } });
-      $('#spTitle', nf).value = ''; $('#spDesc', nf).value = ''; $('#spPic', nf).value = ''; $('#spAssignedDept', nf).value = '';
-      await redrawAfterWrite();
-    } catch (e) { alert('Could not raise the issue: ' + e.message); }
-    add.disabled = false;
-  };
-
-  /* ---- the log ---- */
-  const rawRows = (TRK.lb_sp_issues || []).slice().reverse();
-  if (!rawRows.length) { listHost.appendChild(el('p', 'note', 'No issue raised yet.')); return; }
-
-  const filt = el('div', 'filters');
-  filt.innerHTML = '<label><input type="checkbox" id="issueShowClosed"> Show closed issues</label>' +
-    '<input id="issueSearchInp" placeholder="Search project, title, owner, department…" style="min-width:260px;margin-left:12px">';
-  listHost.appendChild(filt);
-  const tblHost = el('div'); listHost.appendChild(tblHost);
-
-  const drawList = () => {
-    tblHost.innerHTML = '';
-    const showClosed = $('#issueShowClosed', listBody).checked;
-    const q = ($('#issueSearchInp', listBody) || {}).value || '';
-    const ql = q.toLowerCase().trim();
-    let rows = rawRows;
-    if (!showClosed) rows = rows.filter(r => r.status !== 'Closed');
-    if (ql) {
-      rows = rows.filter(r => {
-        const hay = ((r.project_id || '') + '\0' + (r.title || '') + '\0' + (r.owner_pic || '') + '\0' + (r.owner_dept || '') + '\0' + (r.description || '')).toLowerCase();
-        return hay.indexOf(ql) !== -1;
-      });
-    }
-    if (!rows.length) {
-      if (ql) {
-        tblHost.appendChild(el('p', 'note', 'No issues match "' + esc(q) + '". ' + rawRows.length + ' hidden by current filters.'));
-      } else {
-        tblHost.appendChild(el('p', 'note', 'All ' + rawRows.length + ' issue(s) are closed — tick "Show closed issues" to see them.'));
-      }
-      return;
-    }
-    const t = el('table');
-    t.innerHTML = '<thead><tr><th>Project</th><th>Issue</th><th>Owner</th><th>Due</th><th>Priority</th><th>Status</th>' +
-      '<th>Action / remarks</th><th>Attachment</th><th>Last message</th><th></th></tr></thead>';
-    const tb = el('tbody');
-    rows.forEach(r => {
-      const overdue = r.due_date && r.status !== 'Closed' && toWeek(r.due_date) < nowWeek();
-      const tr = el('tr');
-      tr.innerHTML = '<td>' + esc(r.project_id) + '</td>' +
-        '<td><b>' + esc(r.title) + '</b><div class="note">' + esc(r.description) + '</div></td>' +
-        '<td>' + esc(r.owner_pic || '—') + '<div class="note">' + esc(r.owner_dept || '') + '</div></td>' +
-        '<td>' + (r.due_date ? (overdue ? '<b style="color:var(--bad)">' + esc(toWeek(r.due_date)) + '</b>' : esc(toWeek(r.due_date))) : '<span class="note">—</span>') + '</td>' +
-        '<td>' + (r.priority ? (() => { const p = r.priority; const cls = (p === 'Critical' || p === 'High') ? 'AT_RISK' : p === 'Medium' ? 'NOT_STARTED' : 'TRACK'; return '<span class="' + badgeClass(cls) + '">' + esc(p) + '</span>'; })() : '<span class="note">—</span>') + '</td>' +
-        '<td><span class="' + badgeClass(r.status === 'Closed' ? 'COMPLETE' : 'Open') + '">' + esc(r.status) + '</span></td>' +
-        '<td class="note">' + esc(r.action_taken || '') + (r.remarks ? '<br>' + esc(r.remarks) : '') + '</td>' +
-        '<td class="note">' + (r.attachment_name ? '<code>' + esc(r.attachment_name) + '</code>' : '—') + '</td>' +
-        '<td class="note">' + esc(r.last_message_by || '') + ' ' + esc((r.last_message_utc || '').slice(0, 16).replace('T', ' ')) +
-          (r.last_message ? '<br>' + esc(r.last_message) : '') + '</td><td></td>';
-      const act = tr.lastChild;
-      if (r.attachment_path) {
-        const cp = el('button', '', 'Copy path');
-        cp.onclick = async () => {
-          const ok = await copyText(r.attachment_path);
-          cp.textContent = ok ? 'Copied' : 'Copy failed';
-          setTimeout(() => { cp.textContent = 'Copy path'; }, 1500);
-        };
-        act.appendChild(cp);
-      }
-      const upd = el('button', '', 'Update…');
-      upd.onclick = async () => {
-        const who = requireName() || '(unnamed)';
-        const msg = prompt('What happened? (logged with your name and the time)', r.action_taken || '');
-        if (msg === null) return;
-        const st = prompt('Status: Open / In progress / Closed', r.status) || r.status;
-        await API.action('lb_sp_issues', {
-          sp_id: r.sp_id, project_id: r.project_id, title: r.title, description: r.description,
-          raised_by: r.raised_by, raised_utc: r.raised_utc, owner_dept: r.owner_dept, owner_pic: r.owner_pic,
-          due_date: r.due_date, status: st, action_taken: msg, remarks: r.remarks,
-          attachment_name: r.attachment_name, attachment_path: r.attachment_path,
-          last_message_by: who, last_message_utc: new Date().toISOString(), last_message: msg,
-          priority: r.priority, assigned_dept: r.assigned_dept
-        }, { upsertKeys: ['sp_id'], audit: { user: who, action: 'Update_SP_Issue', projectId: r.project_id, objType: 'SPIssue', objId: r.sp_id, from: r.status, to: st, detail: msg } });
-        await redrawAfterWrite();
-      };
-      act.appendChild(upd);
-      tb.appendChild(tr);
-    });
-    t.appendChild(tb);
-    const sc = el('div', 'scroll'); sc.appendChild(t); tblHost.appendChild(sc);
-  };
-
-  $('#issueShowClosed', listBody).onchange = drawList;
-  $('#issueSearchInp', listBody).oninput = drawList;
-  drawList();
-}
-
 /* ===================================================================== */
 /* TAB — INPUT                                                           */
 /* ===================================================================== */
@@ -4799,37 +4606,6 @@ function viewSettings(root) {
     mpBody.appendChild(addRow);
   }
   mp.appendChild(mpBody); root.appendChild(mp);
-
-  /* ---- issue tracker CSV header labels ---- */
-  const hp = el('div', 'card');
-  const hpHdr = el('div', 'card-header'); hpHdr.appendChild(el('h3', 'card-title', 'Issue tracker CSV headers')); hp.appendChild(hpHdr);
-  const hpBody = el('div', 'card-body');
-  hpBody.appendChild(el('p', 'note', 'These labels appear in the CSV template, export, and are used to parse imports. ' +
-    'The internal field names are fixed — you can only change how each field is labelled in the CSV.'));
-  const hlist = el('div', 'taglist');
-  const hdrs = CFG.issue_tracker_headers || {};
-  Object.keys(hdrs).forEach(k => {
-    const row = el('div', 'tagrow');
-    row.innerHTML = '<span><b>' + esc(k) + '</b></span>';
-    const inp = el('input'); inp.value = hdrs[k] || ''; inp.style.width = '220px';
-    row.appendChild(inp);
-    hlist.appendChild(row);
-  });
-  hpBody.appendChild(hlist);
-  const hsaveBtn = el('button', 'primary', 'Save header labels'); hsaveBtn.style.marginTop = '8px';
-  hsaveBtn.onclick = async () => {
-    const who = requireName(); if (!who) return;
-    const obj = {};
-    const rows = $$('.tagrow', hlist);
-    const keys = Object.keys(hdrs);
-    keys.forEach((k, i) => { obj[k] = rows[i].querySelector('input').value.trim(); });
-    try {
-      await API.issueHeaders(obj, who);
-      await redrawAfterWrite();
-    } catch (e) { alert('Could not save: ' + e.message); }
-  };
-  hpBody.appendChild(hsaveBtn);
-  hp.appendChild(hpBody); root.appendChild(hp);
 
   /* ---- change / project types (editable) ---- */
   const cp = el('div', 'card');
