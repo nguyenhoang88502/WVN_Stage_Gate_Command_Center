@@ -97,6 +97,7 @@ const WH_AREAS = ['Assembly', 'Blade', 'Molding (material)', 'Mold storage', 'Fi
 const UK = 'wvn-epm-user';
 function getUser() { try { return localStorage.getItem(UK) || ''; } catch (e) { return ''; } }
 function setUser(v) { try { localStorage.setItem(UK, v); } catch (e) { } }
+function isAdmin() { return (getUser() || '').toLowerCase() === 'admin'; }
 
 async function refresh() {
   const d = await API.data();
@@ -161,8 +162,11 @@ function requireName() {
    without closing the drawer or jumping the viewport. */
 function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
   const currentOwner = row.owner_pic || row.claimed_by || '';
-  const btn = el('button', currentOwner ? 'claimed-btn' : 'primary',
-    currentOwner ? 'Claimed by ' + currentOwner : 'Claim Task');
+  const assignedBy = row.assigned_by || '';
+  const btnLabel = currentOwner && assignedBy ? 'Owner: ' + currentOwner + ' (Assigned by ' + assignedBy + ')'
+    : currentOwner ? 'Claimed by ' + currentOwner
+    : 'Claim Task';
+  const btn = el('button', currentOwner ? 'claimed-btn' : 'primary', btnLabel);
 
   btn.onclick = async () => {
     const who = requireName(); if (!who) return;
@@ -199,6 +203,64 @@ function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
       btn.className = 'claimed-btn';
       if (onAfterClaim) onAfterClaim(who);
     } catch (e) { alert('Claim failed: ' + e.message); }
+    btn.disabled = false;
+  };
+  return btn;
+}
+/* ---- admin assign button builder -----------------------------------------
+   When isAdmin() is true, renders an "Assign Task" button next to each claim
+   button.  On click it prompts for a target user and whether they become
+   Primary Owner or Supporter, then writes the assignment via API.action. */
+function makeAssignButton(objType, store, row, upsertKeys, onAfterAssign) {
+  const btn = el('button', '', 'Assign Task');
+  btn.style.cssText = 'margin-left:4px';
+  btn.onclick = async function() {
+    const admin = requireName(); if (!admin) return;
+    const target = prompt('Assign to whom? Enter the target user\'s name:');
+    if (!target || !target.trim()) return;
+    const targetName = target.trim();
+    const isPrimary = confirm('Assign as Primary Owner?\n\nOK = Primary Owner\nCancel = Supporter');
+    btn.disabled = true;
+    const now = new Date().toISOString();
+    try {
+      const rowData = Object.assign({}, row);
+      if (isPrimary) {
+        rowData.owner_pic = targetName;
+        rowData.claimed_by = targetName;
+        rowData.claimed_utc = now;
+      } else {
+        rowData.supporter_pic = targetName;
+        rowData.supporter_by = targetName;
+        rowData.supporter_utc = now;
+      }
+      rowData.assigned_by = admin;
+      rowData.assigned_utc = now;
+      if (store === 'lb_gates') {
+        if (!rowData.process) rowData.process = '';
+        if (!rowData.step_num) rowData.step_num = '';
+        if (!rowData.step_name) rowData.step_name = '';
+        if (!rowData.status) rowData.status = 'NotStarted';
+        rowData.updated_utc = new Date().toISOString();
+      }
+      await API.action(store, rowData, {
+        upsertKeys: upsertKeys,
+        audit: { user: admin, action: 'Assign_Task_Admin', projectId: row.project_id, objType: objType,
+          objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+          from: '', to: targetName, detail: isPrimary ? 'Primary Owner' : 'Supporter' }
+      });
+      if (isPrimary) {
+        row.owner_pic = targetName;
+        row.claimed_by = targetName;
+        row.claimed_utc = now;
+      } else {
+        row.supporter_pic = targetName;
+        row.supporter_by = targetName;
+        row.supporter_utc = now;
+      }
+      row.assigned_by = admin;
+      row.assigned_utc = now;
+      if (onAfterAssign) onAfterAssign(targetName, isPrimary, admin);
+    } catch (e) { alert('Assignment failed: ' + e.message); }
     btn.disabled = false;
   };
   return btn;
@@ -1507,13 +1569,40 @@ function openDrawer(project, step, focusDocCode) {
   // Stage/gate claim — the gate row may not exist yet if nobody has touched this step
   var gateRow = gateRowOf(project.project_id, sk) || { project_id: project.project_id, step_key: sk };
   var stageClaimWrap = el('div', 'claim-row');
-  stageClaimWrap.appendChild(makeClaimButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(who) {
+  var gateClaimBtn = makeClaimButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(who) {
     // Update gate owner badge in-place so the user sees the claim took effect
     var badge = stageClaimWrap.querySelector('.claim-badge');
     if (badge) { badge.textContent = 'Owner: ' + who; badge.className = badgeClass('FILED'); }
-  }));
-  var ownerBadge = el('span', 'claim-badge ' + badgeClass(gateRow.owner_pic ? 'FILED' : 'NO_DATA'),
-    gateRow.owner_pic ? 'Owner: ' + gateRow.owner_pic : 'Unassigned');
+  });
+  stageClaimWrap.appendChild(gateClaimBtn);
+  if (isAdmin()) {
+    stageClaimWrap.appendChild(makeAssignButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(target, isPrimary, admin) {
+      var badge = stageClaimWrap.querySelector('.claim-badge');
+      if (badge) {
+        badge.textContent = (isPrimary ? 'Owner: ' : 'Supporter: ') + target + ' (Assigned by ' + admin + ')';
+        badge.className = badgeClass('FILED');
+      }
+      if (isPrimary) {
+        gateClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
+        gateClaimBtn.className = 'claimed-btn';
+      }
+    }));
+  }
+  var badgeText, badgeCls;
+  if (gateRow.owner_pic && gateRow.assigned_by) {
+    badgeText = 'Owner: ' + gateRow.owner_pic + ' (Assigned by ' + gateRow.assigned_by + ')';
+    badgeCls = badgeClass('FILED');
+  } else if (gateRow.supporter_pic && gateRow.assigned_by) {
+    badgeText = 'Supporter: ' + gateRow.supporter_pic + ' (Assigned by ' + gateRow.assigned_by + ')';
+    badgeCls = badgeClass('FILED');
+  } else if (gateRow.owner_pic) {
+    badgeText = 'Owner: ' + gateRow.owner_pic;
+    badgeCls = badgeClass('FILED');
+  } else {
+    badgeText = 'Unassigned';
+    badgeCls = badgeClass('NO_DATA');
+  }
+  var ownerBadge = el('span', 'claim-badge ' + badgeCls, badgeText);
   stageClaimWrap.appendChild(ownerBadge);
   d.appendChild(stageClaimWrap);
   if (step.source_note) {
@@ -1620,6 +1709,15 @@ function openDrawer(project, step, focusDocCode) {
       // Claim button per deliverable — writes owner_pic/claimed_by on the existing row
       var delClaimBtn = makeClaimButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(who) {});
       tr.lastChild.appendChild(delClaimBtn);
+      if (isAdmin()) {
+        var delAssignBtn = makeAssignButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(target, isPrimary, admin) {
+          if (isPrimary) {
+            delClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
+            delClaimBtn.className = 'claimed-btn';
+          }
+        });
+        tr.lastChild.appendChild(delAssignBtn);
+      }
       tb.appendChild(tr);
       const notes = commentsFor(project.project_id, x.deliverable_id);
       if (notes.length) {
@@ -1753,7 +1851,16 @@ function openDrawer(project, step, focusDocCode) {
     iss.forEach(function(i) {
       var div = el('div', 'note claim-issue-row');
       div.innerHTML = '• <b>Issue</b> ' + esc(i.description) + (i.owner ? ' — ' + esc(i.owner) : '');
-      div.appendChild(makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function(who) {}));
+      var issueClaimBtn = makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function(who) {});
+      div.appendChild(issueClaimBtn);
+      if (isAdmin()) {
+        div.appendChild(makeAssignButton('Issue', 'lb_issues', i, ['issue_id'], function(target, isPrimary, admin) {
+          if (isPrimary) {
+            issueClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
+            issueClaimBtn.className = 'claimed-btn';
+          }
+        }));
+      }
       ul.appendChild(div);
     });
     tks.forEach(k => ul.insertAdjacentHTML('beforeend', '<div class="note">• <b>Ticket ' + esc(k.ticket_id) + '</b> ' + esc(k.title) + ' — ' + esc(k.assigned_dept || 'unassigned') + ' (' + esc(k.status) + ')</div>'));
@@ -1838,7 +1945,8 @@ function viewClaimed(root) {
       priorityOrder: 2,
       status: g.status || 'NotStarted',
       step: step || { step_id: 0, step_name: '' },
-      project: prj
+      project: prj,
+      assignedBy: g.assigned_by || ''
     });
   });
 
@@ -1865,7 +1973,8 @@ function viewClaimed(root) {
       priorityOrder: 2,
       status: d.approved === 'YES' ? 'APPROVED' : 'FILED',
       step: step || { step_id: 0, step_name: '' },
-      project: prj
+      project: prj,
+      assignedBy: d.assigned_by || ''
     });
   });
 
@@ -1885,7 +1994,8 @@ function viewClaimed(root) {
       priorityOrder: PRIORITY_ORDER[prio] != null ? PRIORITY_ORDER[prio] : 4,
       status: i.status || 'Open',
       step: null,
-      project: prj || null
+      project: prj || null,
+      assignedBy: i.assigned_by || ''
     });
   });
 
@@ -1912,7 +2022,8 @@ function viewClaimed(root) {
       priorityOrder: PRIORITY_ORDER[prio] != null ? PRIORITY_ORDER[prio] : 4,
       status: i.status || 'Open',
       step: step || null,
-      project: prj || null
+      project: prj || null,
+      assignedBy: i.assigned_by || ''
     });
   });
 
@@ -1949,7 +2060,7 @@ function viewClaimed(root) {
 
     tr.innerHTML = '<td><b>' + esc(item.projectId) + '</b></td>' +
       '<td><span class="note">' + esc(item.type) + '</span></td>' +
-      '<td>' + esc(item.label) + '</td>' +
+      '<td>' + esc(item.label) + (item.assignedBy ? ' <span class="badge bg-primary" style="font-size:10px">Assigned by Admin</span>' : '') + '</td>' +
       '<td class="' + (overdue ? 'claimed-overdue' : '') + '">' + esc(twDisplay) + '</td>' +
       '<td>' + esc(item.priority) + '</td>' +
       '<td><span class="' + badgeClass(item.status) + '">' + esc(item.status.replace(/_/g, ' ')) + '</span></td>';
