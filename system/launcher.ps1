@@ -1788,33 +1788,51 @@ try {
 
             function Set-InlineCell($xml, $ref, $val) {
               $safe = [System.Security.SecurityElement]::Escape([string]$val)
-              $newCell = '<c r="' + $ref + '" t="inlineStr"><is><t>' + $safe + '</t></is></c>'
-              $pattern = '<c r="' + $ref + '"[^>]*t="n"[^>]*(?:></c>|/>)'
+              # Match the existing (empty) cell for this ref, whether it is
+              # written as <c .../> or <c ...></c>, and whatever its type.
+              $pattern = '<c r="' + $ref + '"[^>]*?(?:/>|></c>)'
               $m = [regex]::Match($xml, $pattern)
-              if ($m.Success) {
-                return $xml.Substring(0, $m.Index) + $newCell + $xml.Substring($m.Index + $m.Length)
-              }
-              return $xml
+              if (-not $m.Success) { return $xml }
+              # Carry the style index across. The template's formatting (the
+              # form's borders, fonts and fills) lives entirely in s="NNN";
+              # dropping it on write turns the filled report into unformatted
+              # text on a blank grid, which is the whole value of using a
+              # pre-made template in the first place.
+              $styleAttr = ''
+              $sm = [regex]::Match($m.Value, '\ss="(\d+)"')
+              if ($sm.Success) { $styleAttr = ' s="' + $sm.Groups[1].Value + '"' }
+              $newCell = '<c r="' + $ref + '"' + $styleAttr + ' t="inlineStr"><is><t xml:space="preserve">' + $safe + '</t></is></c>'
+              return $xml.Substring(0, $m.Index) + $newCell + $xml.Substring($m.Index + $m.Length)
             }
 
-            $s1xml = Set-InlineCell $s1xml 'Q1'  'LFI'
-            $s1xml = Set-InlineCell $s1xml 'W1'  'Open'
-            $s1xml = Set-InlineCell $s1xml 'B5'  $title
-            $s1xml = Set-InlineCell $s1xml 'B6'  $author
-            $s1xml = Set-InlineCell $s1xml 'G6'  $plant
-            $s1xml = Set-InlineCell $s1xml 'K6'  $dateVal
-            $s1xml = Set-InlineCell $s1xml 'N6'  $lfiNumber
-            $s1xml = Set-InlineCell $s1xml 'V6'  $impact
-            $s1xml = Set-InlineCell $s1xml 'C9'  $projectId
-            $s1xml = Set-InlineCell $s1xml 'H9'  "$stepId $stepName"
-            $s1xml = Set-InlineCell $s1xml 'R9'  $prodFamily
-            $s1xml = Set-InlineCell $s1xml 'C10' $family
-            $s1xml = Set-InlineCell $s1xml 'R10' $family
-            $s1xml = Set-InlineCell $s1xml 'C11' '1'
-            $s1xml = Set-InlineCell $s1xml 'U11' $identifiedIn
-            $s1xml = Set-InlineCell $s1xml 'B15' $desc
+            # Cell refs MUST be the top-left ANCHOR of each merged range. A
+            # value written to any other cell inside a merged block is
+            # silently discarded by Excel - the workbook still opens fine, it
+            # just comes out blank, which is the worst kind of failure here.
+            # Anchors below were read off the template's own mergeCells list.
+            $s1xml = Set-InlineCell $s1xml 'R1'  'LFI'            # Type:
+            $s1xml = Set-InlineCell $s1xml 'Y1'  'Open'           # Solution Status:
+            $s1xml = Set-InlineCell $s1xml 'C5'  $title           # Title:
+            $s1xml = Set-InlineCell $s1xml 'C6'  $author          # Author:
+            $s1xml = Set-InlineCell $s1xml 'G6'  $plant           # Plant:
+            $s1xml = Set-InlineCell $s1xml 'K6'  $dateVal         # Date:
+            $s1xml = Set-InlineCell $s1xml 'O6'  $lfiNumber       # LL INFO Number:
+            $s1xml = Set-InlineCell $s1xml 'W6'  $impact          # Impact:
+            $s1xml = Set-InlineCell $s1xml 'D9'  $projectId       # System:
+            $s1xml = Set-InlineCell $s1xml 'K9'  "$stepId $stepName"  # Process:
+            $s1xml = Set-InlineCell $s1xml 'U9'  $prodFamily      # Product Family:
+            $s1xml = Set-InlineCell $s1xml 'D10' $family          # Machine Type:
+            $s1xml = Set-InlineCell $s1xml 'U10' $family          # Product Name:
+            $s1xml = Set-InlineCell $s1xml 'D11' '1'              # S.no:
+            $s1xml = Set-InlineCell $s1xml 'K11' $identifiedIn    # PROBLEM IDENTIFIED IN:
+            # The two big body panels. A14:L15 and M14:AA15 are the SECTION
+            # HEADINGS ("PROBLEM / NEED..." and "SOLUTION / BEST PRACTICE") -
+            # writing into those would overwrite the printed headings. The
+            # actual writable panels are the blocks underneath: A16:L47 and
+            # M16:AA47, anchored at A16 and M16.
+            $s1xml = Set-InlineCell $s1xml 'A16' $desc
             if ($rootCause) { $combinedSolution = "Root Cause:`r`n$rootCause`r`n`r`nRemediation:`r`n$remediation" } else { $combinedSolution = $remediation }
-            $s1xml = Set-InlineCell $s1xml 'N15' $combinedSolution
+            $s1xml = Set-InlineCell $s1xml 'M16' $combinedSolution
 
             $s1entry.Delete()
             $newS1 = $archive.CreateEntry('xl/worksheets/sheet1.xml')
