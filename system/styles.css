@@ -47,6 +47,8 @@
   --warn2: #fdf2df;
   --bad: #b02318;
   --bad2: #fdeceb;
+  --teal: #0d7c6b;
+  --teal2: #e6f7f5;
   --neutral: #62748a;
   --neutral2: #eef1f5;
 
@@ -113,6 +115,8 @@ html[data-theme="dark"] {
   --warn2: #382d19;
   --bad: #ff8a7e;
   --bad2: #3b1f1c;
+  --teal: #4fd1c5;
+  --teal2: #103331;
   --neutral: #90a2b6;
   --neutral2: #222f3d;
 
@@ -592,6 +596,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
 .badge.bg-danger-lt { background-color: var(--bad2) !important; color: var(--bad) !important; border: 1px solid var(--bad); }
 .badge.bg-warning-lt { background-color: var(--warn2) !important; color: var(--warn) !important; border: 1px solid var(--warn); }
 .badge.bg-primary-lt { background-color: var(--blue2) !important; color: var(--blue) !important; border: 1px solid var(--blue); }
+.badge.bg-teal { background-color: var(--teal) !important; color: #ffffff !important; }
+.badge.bg-teal-lt { background-color: var(--teal2) !important; color: var(--teal) !important; border: 1px solid var(--teal); }
 
 /* dashed-outline variant for a bypassed gate — must read as distinct from a
    plain failure, not merely a different colour. A bypass clears progression
