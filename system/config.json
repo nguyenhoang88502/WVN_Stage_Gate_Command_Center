@@ -3,14 +3,14 @@
                         "version":  "3.5.0",
                         "app_name":  "WVN NPI \u0026 ECN Command Center",
                         "deployment_path":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\WVN_Stage_Gate_Command_Center_v3.5_FullBundle",
-                        "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam â€”Â WOS Pillar 09",
+                        "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam Ã¢â‚¬â€Ã‚Â WOS Pillar 09",
                         "compiled_from":  [
                                               "QA-SOP-NPI-0001-05 New Product Introduction (Rev 05, Aug 2020)",
                                               "QA-SOP-NPI-0002-03 ECN Procedure (Rev 03)",
                                               "QA-SOP-NPI-0003 NPI Management RACI Matrix (Aug 2025)",
                                               "0.EPM_Nov.2025_final.pptx + 0.EPM-VN_Jul.2026.pptx (EPM pillar decks)",
-                                              "Wahl Operating System â€”Â Technical Pillars Criteria.xlsx",
-                                              "WOS Assessment Scoring Summary (Vietnam â€”Â Q4 2025).xlsx",
+                                              "Wahl Operating System Ã¢â‚¬â€Ã‚Â Technical Pillars Criteria.xlsx",
+                                              "WOS Assessment Scoring Summary (Vietnam Ã¢â‚¬â€Ã‚Â Q4 2025).xlsx",
                                               "Forms_Used_in_EPM_EEM_Process.md (DeepSeek extraction, 2026-07-31)",
                                               "01_Current_State_and_Gap_Analysis.md (thesis diagnosis)",
                                               "7_Steps_of_EPM_Pillar.html (compiled pillar reference)",
@@ -101,7 +101,7 @@
                           {
                               "prod_family_id":  "SHAVER",
                               "prod_family_name":  "Shaver (Foil / Rotary)",
-                              "description":  "Electric shavers â€”Â foil and rotary head types",
+                              "description":  "Electric shavers Ã¢â‚¬â€Ã‚Â foil and rotary head types",
                               "sample_fg_ids":  [
                                                     "5619",
                                                     "7066",
@@ -351,7 +351,8 @@
                                                 "prf",
                                                 "product request",
                                                 "request form"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "QA-F-NPI-0001",
@@ -365,7 +366,8 @@
                                                 "product planning",
                                                 "planning form",
                                                 "npi 0001"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "GANTT",
@@ -380,7 +382,8 @@
                                                 "project plan",
                                                 "timeline",
                                                 "schedule"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "QUOTE",
@@ -395,7 +398,8 @@
                                                 "quotation",
                                                 "pricing",
                                                 "price"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "IR",
@@ -409,7 +413,8 @@
                                                 "investment request",
                                                 "investment",
                                                 "capex"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "CLASS",
@@ -425,7 +430,8 @@
                                                 "abcde",
                                                 "change type",
                                                 "change class"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "DESIGN-CHK",
@@ -439,7 +445,8 @@
                                                 "design check",
                                                 "design checklist",
                                                 "dfx checklist"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "DFM",
@@ -453,7 +460,8 @@
                                                 "dfm",
                                                 "design for manufacturing",
                                                 "manufacturability"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "PFMEA",
@@ -468,7 +476,8 @@
                                                 "fmea",
                                                 "failure mode",
                                                 "failure mode analysis"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "BOM",
@@ -482,7 +491,8 @@
                                                 "bom",
                                                 "bill of materials",
                                                 "parts list"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "DWG",
@@ -498,7 +508,8 @@
                                                 "cad",
                                                 "technical drawing",
                                                 "engineering drawing"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "CONTROL-PLAN",
@@ -512,7 +523,8 @@
                                                 "control plan",
                                                 "process control",
                                                 "ppap control plan"
-                                            ]
+                                            ],
+                               "template_file":  "Process_Control_Plan_Template.xls"
                            },
                            {
                                "doctype_id":  "INSP-STD",
@@ -527,7 +539,8 @@
                                                 "insp std",
                                                 "qc standard",
                                                 "inspection spec"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "QA-F-GEN-0010",
@@ -541,7 +554,8 @@
                                                 "trial request",
                                                 "production trial",
                                                 "gen 0010"
-                                            ]
+                                            ],
+                               "template_file":  "QA-F-GEN-0010_Production_Trial_Request.xlsx"
                            },
                            {
                                "doctype_id":  "PPAP",
@@ -555,7 +569,8 @@
                                                 "ppap",
                                                 "part approval",
                                                 "production part approval"
-                                            ]
+                                            ],
+                               "template_file":  "WAHL_Supplier_PPAP_Form_PSW.xlsx"
                            },
                            {
                                "doctype_id":  "SOP",
@@ -569,7 +584,8 @@
                                                 "sop",
                                                 "standard operating procedure",
                                                 "procedure"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "WI",
@@ -582,7 +598,8 @@
                                "keywords":  [
                                                 "work instruction",
                                                 "instruction sheet"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "TRIAL-RPT",
@@ -596,7 +613,8 @@
                                                 "trial report",
                                                 "trial summary",
                                                 "pilot run report"
-                                            ]
+                                            ],
+                               "template_file":  "NPI_Trial_Report_Template.xlsx"
                            },
                            {
                                "doctype_id":  "ECR",
@@ -612,7 +630,8 @@
                                                 "change request",
                                                 "gen 0011",
                                                 "gen 0024"
-                                            ]
+                                            ],
+                               "template_file":  "QA-F-GEN-0011_Engineering_Change_Request.xlsx"
                            },
                            {
                                "doctype_id":  "4M-CHG",
@@ -626,7 +645,8 @@
                                                 "4m",
                                                 "4m change",
                                                 "man machine material method"
-                                            ]
+                                            ],
+                               "template_file":  "QA-F-GEN-0017_4M_Change_Evaluation.xlsx"
                            },
                            {
                                "doctype_id":  "DEVIATION",
@@ -641,7 +661,8 @@
                                                 "deviation request",
                                                 "gen 0012",
                                                 "concession"
-                                            ]
+                                            ],
+                               "template_file":  "QA-F-GEN-0012_Deviation_Request.docx"
                            },
                            {
                                "doctype_id":  "8D-CAPA",
@@ -657,7 +678,8 @@
                                                 "corrective action",
                                                 "root cause",
                                                 "gen 0006"
-                                            ]
+                                            ],
+                               "template_file":  "QA-F-GEN-0006_8D_CAPA_Report.xlsx"
                            },
                            {
                                "doctype_id":  "RAMP-UP",
@@ -665,14 +687,15 @@
                                "form_code":  null,
                                "owner_dept":  "Production",
                                "source":  "Production dashboard",
-                               "description":  "Daily output vs. class-based ramp-up target; Class E target ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¤ 15 days to full capacity",
+                               "description":  "Daily output vs. class-based ramp-up target; Class E target ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¤ 15 days to full capacity",
                                "stage_required":  "NPI 7",
                                "keywords":  [
                                                 "ramp up",
                                                 "rampup",
                                                 "ramp-up tracking",
                                                 "production ramp"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "LL-INFO",
@@ -686,7 +709,8 @@
                                                 "lessons learned",
                                                 "late found",
                                                 "ll info"
-                                            ]
+                                            ],
+                               "template_file":  "LL_info.xlsx"
                            },
                            {
                                "doctype_id":  "KAIZEN",
@@ -700,7 +724,8 @@
                                                 "kaizen",
                                                 "suggestion",
                                                 "improvement tracker"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "NPI-CLOSURE",
@@ -714,7 +739,8 @@
                                                 "npi closure",
                                                 "closure validation",
                                                 "project closure"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            },
                            {
                                "doctype_id":  "QA-F-NPI-0004",
@@ -729,7 +755,8 @@
                                                 "tool handover",
                                                 "project handover",
                                                 "npi 0004"
-                                            ]
+                                            ],
+                               "template_file":  ""
                            }
                        ],
     "issue_tracker_headers":  {
@@ -1290,15 +1317,15 @@
                                    "raci_role":  "Responsible for routes, time study, line balancing"
                                },
                         "Production_Assembly":  {
-                                                    "full_name":  "Production â€”Â Assembly",
+                                                    "full_name":  "Production Ã¢â‚¬â€Ã‚Â Assembly",
                                                     "raci_role":  "Consulted/Informed on most tasks"
                                                 },
                         "Production_Blade":  {
-                                                 "full_name":  "Production â€”Â Blade",
+                                                 "full_name":  "Production Ã¢â‚¬â€Ã‚Â Blade",
                                                  "raci_role":  "Consulted/Informed on blade-related tasks"
                                              },
                         "Production_Mold":  {
-                                                "full_name":  "Production â€”Â Mold",
+                                                "full_name":  "Production Ã¢â‚¬â€Ã‚Â Mold",
                                                 "raci_role":  "Consulted/Informed on mold-related tasks"
                                             },
                         "Finance":  {
@@ -1371,7 +1398,7 @@
                                                           "on_time_pct_2025":  "81%",
                                                           "mold_tools_2024":  23,
                                                           "mold_tools_2025":  81,
-                                                          "note":  "PRF intake nearly doubled 2024ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢2025 (105ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢201); mold volume tripled (23ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢81)"
+                                                          "note":  "PRF intake nearly doubled 2024ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢2025 (105ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢201); mold volume tripled (23ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢81)"
                                                       }
                            },
     "file_system_resilience":  {
@@ -1432,7 +1459,10 @@
                                                                                          }
                                                                          }
                                                            },
-                                "gap_diagnosis_ref":  "01_Current_State_and_Gap_Analysis.md â€”Â five disconnected trackers, no shared project identity, 76-83% on-time for 6 years",
-                                "proposed_framework_ref":  "03_Proposed_Framework_1Month.md â€”Â thin coordination layer over existing trackers"
-                            }
+                                "gap_diagnosis_ref":  "01_Current_State_and_Gap_Analysis.md Ã¢â‚¬â€Ã‚Â five disconnected trackers, no shared project identity, 76-83% on-time for 6 years",
+                                "proposed_framework_ref":  "03_Proposed_Framework_1Month.md Ã¢â‚¬â€Ã‚Â thin coordination layer over existing trackers"
+                            },
+    "moderators":  [
+
+                   ]
 }

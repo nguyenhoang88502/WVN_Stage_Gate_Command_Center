@@ -915,13 +915,35 @@ function Get-NowWeek {
   return "$($d.Year)-W$($weekNum.ToString('00'))"
 }
 
-function New-ReportSheetXml { param([string]$Existing, [string[]]$RowsXml, [string]$Ns)
+function New-ReportSheetXml { param([string]$Existing, [string[]]$RowsXml, [string]$Ns, [switch]$Append)
   $newContent = $RowsXml -join "`r`n"
+  # Two shapes of template land here. A data-table sheet (the RANKED_COLORS
+  # workbooks, LL_info's "List Issue") gets its rows REPLACED. A pre-built form
+  # sheet - NPI_Trial_Report_Template has exactly one sheet and it is the
+  # printed form - gets the generated block APPENDED underneath, because
+  # replacing sheetData there would delete the form the report is named after.
+  $keepExisting = [bool]$Append
   $result = [regex]::Replace($Existing,
-    '(<(?:x:)?sheetData>).*?(</(?:x:)?sheetData>)',
-    { param($m) return $m.Groups[1].Value + "`r`n" + $newContent + "`r`n" + $m.Groups[2].Value },
+    '(<(?:x:)?sheetData>)(.*?)(</(?:x:)?sheetData>)',
+    {
+      param($m)
+      $kept = ''
+      if ($keepExisting) { $kept = $m.Groups[2].Value }
+      return $m.Groups[1].Value + $kept + "`r`n" + $newContent + "`r`n" + $m.Groups[3].Value
+    },
     [System.Text.RegularExpressions.RegexOptions]::Singleline)
   return $result
+}
+
+function Get-SheetMaxRow { param([string]$SheetXml)
+  # Appended rows need r= numbers past everything the template already uses;
+  # duplicate row indexes make Excel declare the file unreadable and repair it.
+  $max = 0
+  foreach ($m in [regex]::Matches($SheetXml, '<(?:x:)?row\s[^>]*\br="(\d+)"')) {
+    $n = [int]$m.Groups[1].Value
+    if ($n -gt $max) { $max = $n }
+  }
+  return $max
 }
 
 function Get-ReportData {
@@ -1025,6 +1047,49 @@ function Get-ReportData {
     # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
     # return, so a report with zero data rows hands the caller the header
     # array's strings as N scalars and transposes the whole sheet.
+    return ,$rows
+  }
+  elseif ($Type -eq 'll') {
+    # Lessons Learnt log. Same source store as 'lfi' (the LFI modal appends to
+    # lb_issues) but laid out to match LL_info.xlsx's "List Issue" sheet, which
+    # reads as a numbered incident register rather than a raw table dump.
+    $projLookup = @{}
+    foreach ($p in $projects) { $projLookup[$p.project_id] = $p }
+    $issues = @($allIssues | Where-Object { $projLookup.ContainsKey($_.project_id) })
+    $headers = @('No.','Date','Model','Project ID','Step','Issue Title / Description','Category','Root Cause / Resolution','Owner','Due Date','Status','Closed UTC')
+    $rows = @(,$headers)
+    $n = 0
+    foreach ($row in $issues) {
+      $n++
+      $proj = $projLookup[$row.project_id]
+      $raised = [string]$row.raised_utc
+      if ($raised.Length -ge 10) { $raised = $raised.Substring(0, 10) }
+      $rows += ,@(
+        [string]$n, $raised, [string]$proj.family, $row.project_id, $row.step_key,
+        $row.description, $row.category, $row.resolution, $row.owner,
+        $row.due_date, $row.status, $row.closed_utc
+      )
+    }
+    return ,$rows
+  }
+  elseif ($Type -eq 'trial') {
+    # NPI trial production summary. Appended UNDER the printed form sheet, so
+    # it leads with its own caption row - without one the block reads as stray
+    # data glued to the bottom of somebody's trial report.
+    $rows = @(,@('NPI TRIAL PRODUCTION SUMMARY - generated ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')))
+    $rows += ,@('Project ID','Process','Model','Product Family','Change Class','PRF Date','Target Date','Target Week','Gates Signed','Gates Total','Completion %','Open Issues','Status')
+    foreach ($p in $projects) {
+      $pr = $progressCache[$p.project_id]
+      $targetWeek = ConvertTo-IsoWeek $p.target_date
+      if (-not $targetWeek) { $targetWeek = '' }
+      $openCount = @($allIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
+      $openCount += @($allSpIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
+      $rows += ,@(
+        $p.project_id, $p.process, $p.family, $p.prod_family, $p.class_abcde,
+        $p.prf_date, $p.target_date, $targetWeek,
+        [string]$pr.done, [string]$pr.total, "$($pr.pct)%", [string]$openCount, $p.status
+      )
+    }
     return ,$rows
   }
   return @()
@@ -1163,6 +1228,41 @@ try {
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; document_types = $cfg.document_types }
           }
         } else { throw "unknown op '$($body.op)'" }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/moderators') {
+        # Moderators inherit admin rights (parallel gate sign-off, task
+        # assignment, settings edits). Only 'admin' may change the list -
+        # a moderator who could appoint moderators is just an admin.
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if ($actor.ToLowerInvariant() -ne 'admin') {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the moderator list.' }
+        } else {
+          $cfg = Get-Config
+          # Trim, drop blanks, de-duplicate case-insensitively but keep the
+          # spelling the admin typed. 'admin' itself is never stored here.
+          $seen = @{}
+          $clean = New-Object System.Collections.Generic.List[string]
+          foreach ($m in @($body.moderators)) {
+            $name = ([string]$m).Trim()
+            if (-not $name) { continue }
+            $k = $name.ToLowerInvariant()
+            if ($k -eq 'admin') { continue }
+            if ($seen.ContainsKey($k)) { continue }
+            $seen[$k] = $true
+            $clean.Add($name)
+          }
+          $before = (@($cfg.moderators) -join ', ')
+          $modArray = [string[]]$clean.ToArray()
+          if ($cfg.PSObject.Properties.Name -contains 'moderators') {
+            $cfg.moderators = $modArray
+          } else {
+            Add-Member -InputObject $cfg -NotePropertyName 'moderators' -NotePropertyValue $modArray -Force
+          }
+          Save-Config $cfg
+          Add-Audit -User $actor -Action 'Config_Moderators_Update' -ProjectId '' -ObjType 'Config' -ObjId 'moderators' -From $before -To (($clean.ToArray()) -join ', ') -Detail ''
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; moderators = @($clean.ToArray()) }
+        }
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/issue-headers') {
         $body = Read-JsonBody -Request $req
@@ -2114,12 +2214,20 @@ try {
                 $startFilter = [string]$req.QueryString['start']
                 $endFilter   = [string]$req.QueryString['end']
 
+                # Each report names the sheet it writes to. The three
+                # RANKED_COLORS workbooks and LL_info all keep their data on
+                # sheet2 with a formatted Dashboard on sheet1; the trial report
+                # template has ONE sheet and it is the printed form, so that
+                # one appends under the form instead of replacing it.
                 $templateMap = @{
-                  'lfi'      = 'Template_EPM_Issue_Analytics_RANKED_COLORS.xlsx'
-                  'transfer' = 'Template_ProjectTransfer_Report_RANKED_COLORS.xlsx'
-                  'kpi'      = 'Template_KPI_Report_RANKED_COLORS.xlsx'
+                  'lfi'      = @{ file = 'Template_EPM_Issue_Analytics_RANKED_COLORS.xlsx';  sheet = 'xl/worksheets/sheet2.xml'; append = $false }
+                  'transfer' = @{ file = 'Template_ProjectTransfer_Report_RANKED_COLORS.xlsx'; sheet = 'xl/worksheets/sheet2.xml'; append = $false }
+                  'kpi'      = @{ file = 'Template_KPI_Report_RANKED_COLORS.xlsx';           sheet = 'xl/worksheets/sheet2.xml'; append = $false }
+                  'll'       = @{ file = 'LL_info.xlsx';                                     sheet = 'xl/worksheets/sheet2.xml'; append = $false; unhideSheet = 'List Issue' }
+                  'trial'    = @{ file = 'NPI_Trial_Report_Template.xlsx';                   sheet = 'xl/worksheets/sheet1.xml'; append = $true }
                 }
-                $templateName = $templateMap[$typeKey]
+                $spec = $templateMap[$typeKey]
+                $templateName = if ($spec) { [string]$spec.file } else { '' }
                 if (-not $templateName) {
                   New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = "Unknown report type '$typeKey'" }
                 } else {
@@ -2141,10 +2249,12 @@ try {
                       Add-Type -AssemblyName System.IO.Compression.FileSystem
                       $fs = [System.IO.File]::Open($tempPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
                       $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Update)
-                      $sheetEntry = $zip.GetEntry('xl/worksheets/sheet2.xml')
+                      $sheetPath   = [string]$spec.sheet
+                      $appendMode  = [bool]$spec.append
+                      $sheetEntry = $zip.GetEntry($sheetPath)
                       if (-not $sheetEntry) {
                         $zip.Dispose()
-                        throw "Template is missing xl/worksheets/sheet2.xml"
+                        throw ("Template '" + $templateName + "' is missing " + $sheetPath)
                       }
                       $reader = New-Object System.IO.StreamReader($sheetEntry.Open(), [System.Text.Encoding]::UTF8)
                       $existingSheetXml = $reader.ReadToEnd()
@@ -2153,21 +2263,50 @@ try {
                       # Detect namespace prefix convention
                       $ns = if ($existingSheetXml -match '<x:sheetData') { 'x:' } else { '' }
 
+                      # Appended rows start past the template's own last row;
+                      # reusing an existing r= makes Excel repair the file. The
+                      # +1 leaves one blank row between the form and the
+                      # appended block so they do not read as one table.
+                      $rowOffset = 0
+                      if ($appendMode) { $rowOffset = (Get-SheetMaxRow -SheetXml $existingSheetXml) + 1 }
+
                       # Build row XML
                       $rowsXml = New-Object System.Collections.Generic.List[string]
                       for ($ri = 0; $ri -lt $data.Count; $ri++) {
-                        $rowsXml.Add((New-ReportRowXml -Values $data[$ri] -RowNum ($ri + 1) -Ns $ns))
+                        $rowsXml.Add((New-ReportRowXml -Values $data[$ri] -RowNum ($rowOffset + $ri + 1) -Ns $ns))
                       }
 
-                      # Replace sheetData content
-                      $newSheetXml = New-ReportSheetXml -Existing $existingSheetXml -RowsXml $rowsXml.ToArray() -Ns $ns
+                      # Replace (or extend) sheetData content
+                      $newSheetXml = New-ReportSheetXml -Existing $existingSheetXml -RowsXml $rowsXml.ToArray() -Ns $ns -Append:$appendMode
 
                       # Delete old entry and write new one
                       $sheetEntry.Delete()
-                      $newEntry = $zip.CreateEntry('xl/worksheets/sheet2.xml')
+                      $newEntry = $zip.CreateEntry($sheetPath)
                       $writer = New-Object System.IO.StreamWriter($newEntry.Open(), [System.Text.Encoding]::UTF8)
                       $writer.Write($newSheetXml)
                       $writer.Close()
+
+                      # LL_info ships its "List Issue" sheet hidden - it is a
+                      # feeder for the form, not something you normally open.
+                      # A report whose only content lands on a hidden sheet
+                      # opens looking empty, so unhide it on the way out.
+                      if ($spec.unhideSheet) {
+                        $wbEntry = $zip.GetEntry('xl/workbook.xml')
+                        if ($wbEntry) {
+                          $wbReader = New-Object System.IO.StreamReader($wbEntry.Open(), [System.Text.Encoding]::UTF8)
+                          $wbXml = $wbReader.ReadToEnd()
+                          $wbReader.Close()
+                          $pattern = '(<sheet\b[^>]*\bname="' + [regex]::Escape([string]$spec.unhideSheet) + '"[^>]*?)\s+state="(?:hidden|veryHidden)"'
+                          $wbNew = [regex]::Replace($wbXml, $pattern, '$1')
+                          if ($wbNew -ne $wbXml) {
+                            $wbEntry.Delete()
+                            $wbNewEntry = $zip.CreateEntry('xl/workbook.xml')
+                            $wbWriter = New-Object System.IO.StreamWriter($wbNewEntry.Open(), [System.Text.Encoding]::UTF8)
+                            $wbWriter.Write($wbNew)
+                            $wbWriter.Close()
+                          }
+                        }
+                      }
                       $zip.Dispose()
                       $fs.Close()
 
