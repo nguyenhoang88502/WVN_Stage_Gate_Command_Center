@@ -852,6 +852,166 @@ function Get-AllTracking {
   return $out
 }
 
+# ============================================================ report engine ==
+
+function ConvertTo-ExcelCol { param([int]$Idx)
+  $result = ''
+  $n = $Idx
+  while ($n -ge 0) {
+    $result = [char]([int][char]'A' + [int]($n % 26)) + $result
+    $n = [int][Math]::Floor($n / 26) - 1
+  }
+  return $result
+}
+
+function ConvertTo-XmlSafe { param($Value)
+  if ($null -eq $Value) { return '' }
+  return ([string]$Value).Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;').Replace("'",'&apos;')
+}
+
+function New-ReportCellXml { param([string]$Col, $Value, [int]$Row, [string]$Ns)
+  $ref = "${Col}${Row}"
+  $s = [string]$Value
+  # Numeric: a plain integer or decimal (e.g. "5", "3.14"). Reject values that
+  # start with a zero followed by a digit (e.g. "01") — those are identifiers,
+  # not numbers, and Excel would strip the leading zero if stored as numeric.
+  if ($s -match '^-?\d+(\.\d+)?$' -and $s -notmatch '^-?0\d') {
+    return "<${Ns}c r=`"${ref}`"><${Ns}v>$s</${Ns}v></${Ns}c>"
+  }
+  $safe = ConvertTo-XmlSafe $s
+  return "<${Ns}c r=`"${ref}`" t=`"inlineStr`"><${Ns}is><${Ns}t>$safe</${Ns}t></${Ns}is></${Ns}c>"
+}
+
+function New-ReportRowXml { param([string[]]$Values, [int]$RowNum, [string]$Ns)
+  $cells = for ($ci = 0; $ci -lt $Values.Count; $ci++) {
+    New-ReportCellXml -Col (ConvertTo-ExcelCol $ci) -Value $Values[$ci] -Row $RowNum -Ns $Ns
+  }
+  return "<${Ns}row r=`"${RowNum}`">$($cells -join '')</${Ns}row>"
+}
+
+function ConvertTo-IsoWeek { param($Value)
+  $s = [string]$Value
+  if (-not $s) { return '' }
+  if ($s -match '^\d{4}-W\d{2}$') { return $s }
+  try {
+    $d = [datetime]::Parse($s)
+    $d = $d.Date
+    $day = $d.DayOfWeek.value__
+    if ($day -eq 0) { $day = 7 }
+    $d = $d.AddDays(4 - $day)
+    $yearStart = Get-Date -Year $d.Year -Month 1 -Day 1
+    $weekNum = [Math]::Ceiling((($d - $yearStart).TotalDays + 1) / 7)
+    return "$($d.Year)-W$($weekNum.ToString('00'))"
+  } catch { return '' }
+}
+
+function Get-NowWeek {
+  $d = Get-Date
+  $day = $d.DayOfWeek.value__
+  if ($day -eq 0) { $day = 7 }
+  $d = $d.AddDays(4 - $day)
+  $yearStart = Get-Date -Year $d.Year -Month 1 -Day 1
+  $weekNum = [Math]::Ceiling((($d - $yearStart).TotalDays + 1) / 7)
+  return "$($d.Year)-W$($weekNum.ToString('00'))"
+}
+
+function New-ReportSheetXml { param([string]$Existing, [string[]]$RowsXml, [string]$Ns)
+  $newContent = $RowsXml -join "`r`n"
+  $result = [regex]::Replace($Existing,
+    '(<(?:x:)?sheetData>).*?(</(?:x:)?sheetData>)',
+    { param($m) return $m.Groups[1].Value + "`r`n" + $newContent + "`r`n" + $m.Groups[2].Value },
+    [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  return $result
+}
+
+function Get-ReportData {
+  param([string]$Type, [string]$FamFilter, [string]$ModelFilter, [string]$StartFilter, [string]$EndFilter)
+
+  $config = Get-Config
+  $nowWeek = Get-NowWeek
+
+  $projects = @(Read-Store 'lb_projects')
+  if ($FamFilter)    { $projects = @($projects | Where-Object { $_.prod_family -eq $FamFilter }) }
+  if ($ModelFilter)  { $projects = @($projects | Where-Object { $_.family -eq $ModelFilter }) }
+  if ($StartFilter)  { $projects = @($projects | Where-Object { (ConvertTo-IsoWeek $_.prf_date) -eq $StartFilter }) }
+  if ($EndFilter)    { $projects = @($projects | Where-Object { (ConvertTo-IsoWeek $_.target_date) -eq $EndFilter }) }
+
+  # Pre-read stores for per-project computation
+  $allApprovals = @(Read-Store 'lb_approvals')
+  $allBypasses  = @(Read-Store 'lb_bypasses')
+  $allIssues    = @(Read-Store 'lb_issues')
+  $allSpIssues  = @(Read-Store 'lb_sp_issues')
+
+  # Build progress cache: project_id -> { pct, done, total, complete }
+  $progressCache = @{}
+  foreach ($p in $projects) {
+    $proc = $p.process
+    $steps = if ($proc -eq 'NPI') { $config.step_models.npi } else { $config.step_models.ecn }
+    if (-not $steps) { $steps = @() }
+    $gated = @($steps | Where-Object {
+      if ($proc -eq 'NPI') { $true } else { [bool]$_.gate_clearance_required }
+    })
+    $total = $gated.Count
+    $done = 0
+    foreach ($step in $gated) {
+      $sk = "$proc-$($step.step_id)"
+      $appr = @($allApprovals | Where-Object { $_.project_id -eq $p.project_id -and $_.step_key -eq $sk })
+      $byp  = @($allBypasses  | Where-Object { $_.project_id -eq $p.project_id -and $_.step_key -eq $sk -and -not $_.closed_utc })
+      if ($appr.Count -gt 0 -or $byp.Count -gt 0) { $done++ }
+    }
+    $pct = if ($total -gt 0) { [Math]::Round(100 * $done / $total) } else { 0 }
+    $complete = ($done -eq $total -and $total -gt 0)
+    $progressCache[$p.project_id] = @{ pct = $pct; done = $done; total = $total; complete = $complete }
+  }
+
+  if ($Type -eq 'lfi') {
+    $projIds = @{}
+    foreach ($p in $projects) { $projIds[$p.project_id] = $true }
+    $issues = @($allIssues | Where-Object { $projIds.ContainsKey($_.project_id) })
+    $headers = @('Issue ID','Project ID','Step Key','Raised By','Raised UTC','Category','Description','Owner','Due Date','Status','Resolution','Closed UTC')
+    $rows = @($headers)
+    foreach ($row in $issues) {
+      $rows += ,@(
+        $row.issue_id, $row.project_id, $row.step_key, $row.raised_by, $row.raised_utc,
+        $row.category, $row.description, $row.owner, $row.due_date, $row.status,
+        $row.resolution, $row.closed_utc
+      )
+    }
+    return $rows
+  }
+  elseif ($Type -eq 'transfer') {
+    $headers = @('Project ID','Process','Model','Product Family','Change Class','PRF Date','Target Date','Market Manager','Country','Customer Number','Status','Notes','Completion %')
+    $rows = @($headers)
+    foreach ($p in $projects) {
+      $pr = $progressCache[$p.project_id]
+      $rows += ,@(
+        $p.project_id, $p.process, $p.family, $p.prod_family, $p.class_abcde,
+        $p.prf_date, $p.target_date, $p.market_manager, $p.country, $p.customer_number,
+        $p.status, $p.notes, "$($pr.pct)%"
+      )
+    }
+    return $rows
+  }
+  elseif ($Type -eq 'kpi') {
+    $headers = @('Project ID','Process','Model','Product Family','Target Week','Completion %','Open Issues','On-Time')
+    $rows = @($headers)
+    foreach ($p in $projects) {
+      $pr = $progressCache[$p.project_id]
+      $targetWeek = ConvertTo-IsoWeek $p.target_date
+      if (-not $targetWeek) { $targetWeek = '' }
+      $openCount = @($allIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
+      $openCount += @($allSpIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
+      $onTime = if ($pr.complete) { 'Yes' } elseif ($targetWeek -and $targetWeek -ge $nowWeek) { 'Yes' } else { 'No' }
+      $rows += ,@(
+        $p.project_id, $p.process, $p.family, $p.prod_family, $targetWeek,
+        "$($pr.pct)%", [string]$openCount, $onTime
+      )
+    }
+    return $rows
+  }
+  return @()
+}
+
 # ---------------------------------------------------------------- server --
 $listener = New-Object System.Net.HttpListener
 $boundPort = $null
@@ -1749,8 +1909,88 @@ try {
           if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
         }
       }
-      else {
-        New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'not found' }
+      elseif ($method -eq 'GET' -and $path -eq '/api/reports/download') {
+	        $typeKey     = [string]$req.QueryString['type']
+	        $famFilter   = [string]$req.QueryString['fam']
+	        $modelFilter = [string]$req.QueryString['model']
+	        $startFilter = [string]$req.QueryString['start']
+	        $endFilter   = [string]$req.QueryString['end']
+
+	        $templateMap = @{
+	          'lfi'      = 'Template_EPM_Issue_Analytics_RANKED_COLORS.xlsx'
+	          'transfer' = 'Template_ProjectTransfer_Report_RANKED_COLORS.xlsx'
+	          'kpi'      = 'Template_KPI_Report_RANKED_COLORS.xlsx'
+	        }
+	        $templateName = $templateMap[$typeKey]
+	        if (-not $templateName) {
+	          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = "Unknown report type '$typeKey'" }
+	        } else {
+	          $templatePath = Join-Path $TemplatesDir $templateName
+	          if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
+	            New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = "Template file not found: $templateName" }
+	          } else {
+	            $tempPath = Join-Path $env:TEMP ('wvnrpt_' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.xlsx')
+	            Copy-Item -LiteralPath $templatePath -Destination $tempPath -Force
+	            try {
+	              # Generate data rows
+	              $data = Get-ReportData -Type $typeKey -FamFilter $famFilter -ModelFilter $modelFilter -StartFilter $startFilter -EndFilter $endFilter
+	              if ($data.Count -eq 0) {
+	                $data = @(@('No data'))
+	              }
+
+	              # Read existing sheet2.xml from the template copy
+	              Add-Type -AssemblyName System.IO.Compression
+	              Add-Type -AssemblyName System.IO.Compression.FileSystem
+	              $fs = [System.IO.File]::Open($tempPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
+	              $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Update)
+	              $sheetEntry = $zip.GetEntry('xl/worksheets/sheet2.xml')
+	              if (-not $sheetEntry) {
+	                $zip.Dispose()
+	                throw "Template is missing xl/worksheets/sheet2.xml"
+	              }
+	              $reader = New-Object System.IO.StreamReader($sheetEntry.Open(), [System.Text.Encoding]::UTF8)
+	              $existingSheetXml = $reader.ReadToEnd()
+	              $reader.Close()
+
+	              # Detect namespace prefix convention
+	              $ns = if ($existingSheetXml -match '<x:sheetData') { 'x:' } else { '' }
+
+	              # Build row XML
+	              $rowsXml = New-Object System.Collections.Generic.List[string]
+	              for ($ri = 0; $ri -lt $data.Count; $ri++) {
+	                $rowsXml.Add((New-ReportRowXml -Values $data[$ri] -RowNum ($ri + 1) -Ns $ns))
+	              }
+
+	              # Replace sheetData content
+	              $newSheetXml = New-ReportSheetXml -Existing $existingSheetXml -RowsXml $rowsXml.ToArray() -Ns $ns
+
+	              # Delete old entry and write new one
+	              $sheetEntry.Delete()
+	              $newEntry = $zip.CreateEntry('xl/worksheets/sheet2.xml')
+	              $writer = New-Object System.IO.StreamWriter($newEntry.Open(), [System.Text.Encoding]::UTF8)
+	              $writer.Write($newSheetXml)
+	              $writer.Close()
+	              $zip.Dispose()
+	              $fs.Close()
+
+	              # Stream the result
+	              $bytes = [System.IO.File]::ReadAllBytes($tempPath)
+	              $filename = 'Report_' + $typeKey + '_' + (Get-Date -Format 'yyyyMMdd') + '.xlsx'
+	              $res.StatusCode = 200
+	              $res.ContentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+	              $res.AddHeader('Content-Disposition', 'attachment; filename="' + $filename + '"')
+	              $res.ContentLength64 = $bytes.Length
+	              $res.OutputStream.Write($bytes, 0, $bytes.Length)
+	              $res.OutputStream.Close()
+	              Write-Log ('Report downloaded: ' + $typeKey)
+	            } finally {
+	              if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+	            }
+	          }
+	        }
+	      }
+	      else {
+	        New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'not found' }
       }
     } catch {
       Write-Log ('Request failed: ' + $req.Url + ' — ' + $_.Exception.Message) 'ERROR'
