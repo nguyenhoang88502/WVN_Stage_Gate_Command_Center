@@ -1,7 +1,7 @@
 # Sample data package — for demonstrating the tool
 
 Everything here is **fabricated demo data**. No real WAHL project, customer, price or person
-appears in it. The names are invented, and the FG numbers are drawn from the sample lists already
+appears in it. The names are invented, and the model codes are drawn from the sample lists already
 in `config.json`. Nothing here should be presented as an actual project status.
 
 Two separate things live in this folder:
@@ -30,7 +30,7 @@ To go back afterwards, copy your backup over `system\tracking\` the same way.
 
 ### What the demo dataset contains
 
-26 projects — 19 NPI and 7 ECN — across all six product families and all five change types,
+26 projects — 19 NPI and 7 ECN — across all six prod families and all five change types,
 deliberately spread so every visual state on the dashboard is represented:
 
 | Status | Count | Why it looks that way |
@@ -49,7 +49,7 @@ Supporting records, all consistent with those statuses:
   that marks unresolved process debt, which is worth pointing out in a demo
 - **11 LFIs** in `lb_issues` (6 open, 5 closed) and **6 SharePoint issues** — these feed the
   "LFIs identified" and "Issues resolved" KPI tiles
-- **30 warehouse readiness rows**, **18 D365 entries**, **95 audit-log rows**
+- **30 warehouse readiness rows**, **95 audit-log rows**
 
 The data is generated so it is *internally consistent*: statuses are derived from the approvals,
 not written independently. A project is never shown as 100% complete and overdue at the same time.
@@ -87,9 +87,9 @@ and a table naming each rejected row with its reason:
 | CSV row | Rejected because |
 |---|---|
 | 14 | `process must be NPI or ECN (got 'XXX')` |
-| 15 | `family_id (or fg_id) is required - it forms the project ID` |
+| 15 | `family is required - it forms the project ID` |
 | 16 | `class_abcde 'Z' is not a configured change type (A/B/C/D/E)` |
-| 17 | `family 'NOT-A-REAL-FAMILY' is not a configured product family` |
+| 17 | `prod_family 'NOT-A-REAL-FAMILY' is not a configured product family` |
 | 18 | `prf_date '13/07/2026' must be an ISO week (2026-W32) or a date (2026-08-06)` |
 | 19 | `duplicate of row 4 in this file - both produce project ID NPI-9891` |
 

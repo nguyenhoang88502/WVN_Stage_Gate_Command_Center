@@ -15,7 +15,7 @@ No Node.js, Python, internet connection, admin rights, or Excel automation is re
 ```text
 <parent folder>/
 ├─ NPI_EPM_Documents_Control/         ← the document vault — evidence lives HERE, outside the app
-│  └─ [DocType]/[Family]/[FG]/[Part]/[file]
+│  └─ [DocType]/[Family]/[file]
 └─ NPI_EPM_Stage_Gate/
    ├─ Open_WVN_NPI_Command_Center.cmd   ← the only file a stakeholder ever double-clicks
    └─ system/                            ← hidden application core
@@ -47,12 +47,14 @@ file is safe, rewriting a folder hierarchy underneath recorded paths is not.
 > in `config.json`. They are per-machine runtime state, and a populated `evidence_vault_path` that still
 > matches the current install is honoured as-is — which would silently pin the vault to its old location.
 
-`config.json` is **authored data**, not something scraped from a workbook. It holds the product family
-list, the change-type model (A–E), the document-type catalogue, the full NPI (7-step) and ECN (12-step)
-models including which steps are signed milestones (`gate_clearance_required`) and which need warehouse
-clearance (`warehouse_gate_required`), and the trial-quantity presets. Everything in
-`system\tracking\*.csv` is written only through the app — registrations, gate approvals, bypasses,
-issues, warehouse clearances, MWER records, PPAP tracking and the D365 entry log.
+`config.json` is **authored data**, not something scraped from a workbook. It holds the prod-family
+(category) list — a project's own Family (its specific model code, e.g. 9649LP) is typed at
+registration, not drawn from a config list — the change-type model (A–E), the document-type catalogue,
+the full NPI (7-step) and ECN (12-step) models including which steps are signed milestones
+(`gate_clearance_required`) and which need warehouse clearance (`warehouse_gate_required`), and the
+trial-quantity presets. Everything in `system\tracking\*.csv` is written only through the app —
+registrations, gate approvals, bypasses, issues, warehouse clearances, MWER records, PPAP tracking and
+the audit log.
 
 ### What it deliberately does not do
 
@@ -161,7 +163,7 @@ and must not be made impossible. Your project selection is never reset by a redr
 Files land under:
 
 ```
-..\NPI_EPM_Documents_Control\[Document type]\[Family]\[FG]\[Part]\[filename]
+..\NPI_EPM_Documents_Control\[Document type]\[Family]\[filename]
 ```
 
 A byte-identical file already filed there is skipped (no duplicate written); a same-name file with
@@ -249,26 +251,25 @@ guessed at. All twelve ECN steps apply to every type.
 > It is carried through from the existing Class ABCDE tracker and is flagged as suspect in
 > `config.json`; it should be re-measured from raw project data before anyone commits a date on it.
 
-**Typing an FG number is enough (v2.5).** Family ID matches a product family by its `family_id` *or* by
-any FG number listed in that family's `sample_fg_ids`, case-insensitively — type `9649` and the product
-family and change type fill themselves in. They fill in only while you have not touched them yourself;
-once you type into either box it is yours and no auto-fill overwrites it.
+**Typing a model code fills in the rest (v2.5).** Entering a known Family code (e.g. `9649`) fills the
+prod family and change type automatically — if you have not already set them yourself. Once you type into
+either box it is yours and no auto-fill overwrites it.
 
 **Target finish date can be overridden (v2.5).** Leave the override blank and the date is calculated —
 that is the normal case, and a blank box is how you can still tell a calculated date from a decided one.
 Fill it in when this project's schedule genuinely differs. The calculation is done **server-side**, so
 the stored date is authoritative no matter what the browser sends: change type's `cycle_time_days` first,
-then the product family's `typical_lead_time_days`, then empty. Empty stays a legitimate answer — Type A
+then the prod family's `typical_lead_time_days`, then empty. Empty stays a legitimate answer — Type A
 has no baselined cycle time and gets no invented date. Once stored, a target date is never recalculated
 on redraw.
 
-**The pickers accept typed text (v2.5).** Family, product family and document type are comboboxes: pick a
-suggestion or type your own. A new FG number or a document code that is not in the catalogue yet passes
+**The pickers accept typed text (v2.5).** Family, prod family and document type are comboboxes: pick a
+suggestion or type your own. A new family code or a document code that is not in the catalogue yet passes
 through exactly as typed — the gate simply will not recognise it, which is correct, not an error. Steps
 are the one exception: they are a closed set, so a typed step must resolve to a real step of that project
 or it is rejected with a message rather than filed against the wrong gate.
 
-## 5b. Managing product families and document types
+## 5b. Managing prod families and document types
 
 Use the **Settings** tab — nobody needs to hand-edit `config.json`. Adding or deleting a family or
 document type there writes straight back to `config.json` and takes effect for every connected user
@@ -379,7 +380,7 @@ five are cleared for a given project/step, the step cannot be approved. Which st
 | `GET /api/templates/<name>` | Streams one blank form as a download (file name only, no paths) |
 | `POST /api/projects` | Register a project — server derives `project_id` as `NPI-<FamilyID>` / `ECN-<FamilyID>` |
 | `POST /api/action` | `{ store, row, upsertKeys?, audit? }` — generic insert/upsert into any `lb_*` store |
-| `POST /api/upload` | `{ docType, family, fgId, partId, wvnId, wnbId, description, fileName, contentBase64 }` — files evidence under its standardised name |
+| `POST /api/upload` | `{ docType, family, wvnId, wnbId, description, fileName, contentBase64 }` — files evidence under its standardised name |
 | `POST /api/filename/preview` | Same fields minus the content — returns the name a file *would* get |
 | `GET /api/package/<project_id>` | Zips every document filed against a project, plus a manifest |
 | `POST /api/sharepoint/folder` | Opens the native folder dialog **on the host machine** and stores the choice |

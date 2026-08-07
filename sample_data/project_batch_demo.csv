@@ -1,19 +1,19 @@
-process,family_id,class_abcde,fg_id,family,prf_date,target_date,market_manager,country,customer_number,notes,certifications
+process,prod_family,class_abcde,family,prf_date,target_date,market_manager,country,customer_number,notes,certifications
 # ---- DEMO FILE for A2. Batch Project Registration. Rows starting with # are ignored by the importer. ----
 # The 8 rows below are all VALID and will register cleanly.
-NPI,9891,E,9891,TRIMMER,2026-W34,,A. Fischer,VN,C-2001,New cordless trimmer platform for FY27,CB|CE-EMC
-NPI,9906,C,9906,TRIMMER,2026-W35,,M. Weber,VN,C-2002,Housing change to share the 9891 blade guard,CE-EMC
-NPI,6275LP,E,6275LP,CL-CORDLESS,2026-W33,2027-W20,S. Klein,DE,C-2003,"Li-ion cordless clipper, EU launch",CB|CE-EMC|UL
-NPI,2240LC,D,2240LC,CL-CORDLESS,2026-W36,,J. Braun,VN,C-2004,Surface finish update for club channel,CB|CE-EMC
-ECN,79449-1001,B,79449-1001,CL-CORDED,2026-W33,,R. Hoffmann,VN,C-2005,"Blister card change: new hanger, same insert",CE-EMC
-ECN,5608,A,5608,STYLER,2026-W34,,A. Fischer,VN,C-2006,Packaging-only relabel for the KC market,KC
-ECN,3155,C,3155,KIT,2026-W35,,M. Weber,VN,C-2007,"Kit tray redesign — Ghi chú: giảm nhựa 12%",CB|CE-EMC
-ECN,3026590,D,3026590,KIT,2026-W37,,S. Klein,VN,C-2008,Surface change on the storage case,CE-EMC
+NPI,TRIMMER,E,9891,2026-W34,,A. Fischer,VN,C-2001,New cordless trimmer platform for FY27,CB|CE-EMC
+NPI,TRIMMER,C,9906,2026-W35,,M. Weber,VN,C-2002,Housing change to share the 9891 blade guard,CE-EMC
+NPI,CL-CORDLESS,E,6275LP,2026-W33,2027-W20,S. Klein,DE,C-2003,"Li-ion cordless clipper, EU launch",CB|CE-EMC|UL
+NPI,CL-CORDLESS,D,2240LC,2026-W36,,J. Braun,VN,C-2004,Surface finish update for club channel,CB|CE-EMC
+ECN,CL-CORDED,B,79449-1001,2026-W33,,R. Hoffmann,VN,C-2005,"Blister card change: new hanger, same insert",CE-EMC
+ECN,STYLER,A,5608,2026-W34,,A. Fischer,VN,C-2006,Packaging-only relabel for the KC market,KC
+ECN,KIT,C,3155,2026-W35,,M. Weber,VN,C-2007,"Kit tray redesign — Ghi chú: giảm nhựa 12%",CB|CE-EMC
+ECN,KIT,D,3026590,2026-W37,,S. Klein,VN,C-2008,Surface change on the storage case,CE-EMC
 # ---- The 6 rows below are all INVALID, on purpose, to demonstrate row-level rejection. ----
 # Each one triggers a different validation rule; the 8 valid rows above still import.
-XXX,BADPROC,E,,TRIMMER,,,,,,process is not NPI or ECN,
-NPI,,E,,TRIMMER,,,,,,no family_id and no fg_id so no project ID can be formed,
-NPI,BADCLASS,Z,,TRIMMER,,,,,,change type Z is not configured,
-NPI,BADFAM,E,,NOT-A-REAL-FAMILY,,,,,,product family does not exist,
-NPI,BADDATE,E,,TRIMMER,13/07/2026,,,,,prf_date is not an ISO week or a date,
-NPI,9891,E,,TRIMMER,,,,,,duplicate of the 9891 row above - same project ID,
+XXX,TRIMMER,E,,,,,,,process is not NPI or ECN,
+NPI,TRIMMER,E,,,,,,,no prod_family or no family so no project ID can be formed,
+NPI,TRIMMER,Z,,,,,,,change type Z is not configured,
+NPI,NOT-A-REAL-FAMILY,E,8888,,,,,,product family does not exist,
+NPI,TRIMMER,E,7777,13/07/2026,,,,,prf_date is not an ISO week or a date,
+NPI,TRIMMER,E,9891,,,,,,duplicate of the 9891 row above - same project ID,

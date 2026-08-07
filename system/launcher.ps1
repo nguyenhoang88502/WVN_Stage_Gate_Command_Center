@@ -250,8 +250,22 @@ $Stores = [ordered]@{
   # v2.7 appended owner_pic / claimed_by / claimed_utc on lb_gates, lb_deliverables,
   # lb_sp_issues and lb_issues so the claim engine can persist task ownership.
   # lb_deliverables also gained custom_doc for model-specific document uploads.
-  lb_projects     = @('project_id','process','family','fg_id','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family_id','target_date','certifications')
-  lb_gates        = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','warehouse_ready','approved_by','approved_utc','evidence_cited','notes','updated_utc','owner_pic','claimed_by','claimed_utc')
+  # v3.6 fixed a naming collision that had stood since v2.1: the column named
+  # `family` held the broad product CATEGORY (e.g. CL-CORDLESS) and the column
+  # named `family_id` held the actual specific model code (e.g. 9649LP) that
+  # every project is really tracked by - the opposite of what a reader would
+  # guess from the names, and the reason document filing was landing under the
+  # shared category folder instead of the project's own model folder. Renamed
+  # in place, same positions: `family` -> `prod_family` (the category),
+  # `family_id` -> `family` (the model code - matches the real Item Master's
+  # own "Family" column, e.g. Group Family code 9649LP). Also dropped `fg_id`
+  # entirely: this app has never tracked individual finished-good/child SKUs,
+  # only the Family (model) level, and the column had held nothing but an
+  # empty string since v3.5.
+  lb_projects     = @('project_id','process','prod_family','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family','target_date','certifications')
+  # v3.6 dropped warehouse_ready: dead since the Warehouse readiness tab and
+  # its lb_warehouse store were removed - nothing read or wrote it any more.
+  lb_gates        = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','approved_by','approved_utc','evidence_cited','notes','updated_utc','owner_pic','claimed_by','claimed_utc')
   # v2.2 appended kind..link_url. `kind` is 'file' for an uploaded document and
   # 'link' for a UNC path or URL that lives somewhere else and is only cited.
   lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc')
@@ -266,14 +280,19 @@ $Stores = [ordered]@{
   lb_bypasses     = @('bypass_id','project_id','step_key','authorised_by','authorised_utc','reason','mitigation','supersede_by','closed_utc','closed_note')
   lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc')
   lb_ppap         = @('ppap_id','project_id','part_number','customer','doc_code','required','submitted_utc','customer_approved','customer_approved_utc','notes')
+  # v3.6 removed lb_d365 entirely: it was genuinely dead, left behind when the
+  # D365 entry log tab was cut from Input — nothing ever read TRK.lb_d365.
+  # lb_warehouse looked dead by the same test (no Input-tab route writes to it
+  # any more either) but is NOT: app.js still reads TRK.lb_warehouse directly
+  # inside gateState()/whReady() to decide whether a step with
+  # warehouse_gate_required:true in config.json can be approved at all. Kept.
   lb_warehouse    = @('wh_id','project_id','step_key','area','kind','status','cleared_by','cleared_date','reference','notes')
   lb_mwer         = @('mwer_id','project_id','step_key','meeting_type','meeting_date','attendees','summary','evidence_file','evidence_body','decision','conditions','logged_by','logged_utc')
-  lb_d365         = @('d365_id','project_id','step_key','area','entered_by','entered_date','reference','notes','logged_utc')
   lb_audit        = @('log_id','timestamp_utc','user','action','project_id','object_type','object_id','change_from','change_to','detail','result')
 }
 $IdPrefix = @{
   lb_gates='GATE'; lb_deliverables='DEL'; lb_approvals='APR'; lb_bypasses='BYP'; lb_issues='LFI';
-  lb_ppap='PPAP'; lb_warehouse='WH'; lb_mwer='MWER'; lb_d365='D365'; lb_audit='LOG'; lb_doc_comments='CMT'
+  lb_ppap='PPAP'; lb_warehouse='WH'; lb_mwer='MWER'; lb_audit='LOG'; lb_doc_comments='CMT'
   lb_tickets='TKT'; lb_ticket_events='EVT'; lb_sp_issues='SPI'
 }
 
@@ -608,17 +627,16 @@ function Get-StandardFileName {
 }
 
 function Save-Evidence {
-  param([string]$DocType, [string]$Family, [string]$FgId, [string]$PartId, [string]$FileName, [byte[]]$Bytes)
-  # v2.4 hierarchy: [Model]\[FG_ID]\[DocType]\[file] — you browse to a product,
-  # then a variant, then a kind of document, which is how people actually look
-  # for one. Any blank level is dropped rather than leaving an empty folder or
-  # a doubled slash, so a project with no FG number still files cleanly - which
-  # is exactly what every new filing does since v3.5: FgId is never populated
-  # any more (projects are tracked by model/family only), so it collapses out
-  # and new evidence lands at [Model]\[DocType]\[file].
+  param([string]$DocType, [string]$Family, [string]$PartId, [string]$FileName, [byte[]]$Bytes)
+  # v3.6 hierarchy: [Family]\[DocType]\[file] — you browse to a specific
+  # model (Family, e.g. 9649LP), then a kind of document, which is how people
+  # actually look for one. This app never tracks individual finished-good /
+  # child SKUs, so there is no level below Family for one - the old FgId
+  # level here always received an empty string (nothing populated it since
+  # v3.5) and has been dropped rather than kept as permanent dead weight.
   # PartId, when given, sits one level below DocType; it is absent from the
   # stated pattern because it is almost always blank.
-  $levels = @($Family, $FgId, $DocType, $PartId) |
+  $levels = @($Family, $DocType, $PartId) |
             ForEach-Object { if ($null -eq $_) { '' } else { (Get-SafeName ([string]$_)) } } |
             Where-Object { $_ -ne '' }
   $destDir = (@($EvidenceDir) + $levels) -join '\'
@@ -658,19 +676,20 @@ function Save-Evidence {
 # When the browser sends no manual override, the server computes one from the
 # configured cycle-time baselines. Precedence order:
 #   1. change_types[].cycle_time_days   (matched on class_abcde / type_id)
-#   2. product_families[].typical_lead_time_days  (matched case-insensitively
-#      on family_id, then on sample_fg_ids)
+#   2. prod_families[].typical_lead_time_days  (matched case-insensitively
+#      on prod_family_id, then on sample_fg_ids)
 #   3. empty string  (legitimate — Type A has no baselined cycle time yet)
 # PRF date is parsed defensively; a malformed or missing input yields an empty
 # target, never a crash or a 1-Jan-0001.
 #
 # -Identifier takes the candidates in preference order, because two different
-# fields can name the family: the "Product family" picker holds a real
-# family_id, while "Family ID" holds whatever the user typed — a family_id on
-# some projects, a bare FG number on most. The explicit picker is checked
-# first; the typed value is the fallback. Blank candidates are skipped rather
-# than matched, or a project with no family would match a family whose id
-# happened to be empty.
+# fields can name the product family category: the "Product family" picker
+# holds a real prod_family_id, while the resolved Family (the specific model
+# code) is checked as a fallback in case it happens to collide with a
+# category id or one of its configured sample codes. The explicit picker is
+# checked first; the model code is the fallback. Blank candidates are skipped
+# rather than matched, or a project with no category would match a category
+# whose id happened to be empty.
 # ISO-8601 week helpers, mirroring isoWeek()/weekToDate() in app.js so the
 # server and the browser always agree on what week a date falls in.
 # [System.Globalization.ISOWeek] is .NET Core only - PS 5.1 runs on .NET
@@ -730,14 +749,14 @@ function Get-TargetDate {
     return (& $emit ([int]$ct[0].cycle_time_days))
   }
 
-  # 2. Product family lead time — match family_id then sample_fg_ids
-  $families = @($Config.product_families)
+  # 2. Product family lead time — match prod_family_id then sample_fg_ids
+  $families = @($Config.prod_families)
   $fam = $null
   :idloop foreach ($cand in @($Identifier)) {
     $c = ([string]$cand).Trim()
     if (-not $c) { continue }
     foreach ($pf in $families) {
-      if (([string]$pf.family_id).Equals($c, [System.StringComparison]::OrdinalIgnoreCase)) {
+      if (([string]$pf.prod_family_id).Equals($c, [System.StringComparison]::OrdinalIgnoreCase)) {
         $fam = $pf; break idloop
       }
     }
@@ -905,28 +924,35 @@ try {
         New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/family') {
+        # v3.6: renamed field-for-field to match the corrected schema. Also
+        # fixed a real bug in the delete guard below - it compared against
+        # lb_projects.family_id, which (both before and, by name, still after
+        # this rename) has never held a category id; the category link on a
+        # project lives in prod_family. The guard was comparing the wrong
+        # column and so never actually blocked a referenced category from
+        # being deleted.
         $body = Read-JsonBody -Request $req
         $cfg = Get-Config
-        $list = @($cfg.product_families)
+        $list = @($cfg.prod_families)
         if ($body.op -eq 'add') {
-          $list = @($list | Where-Object { $_.family_id -ne $body.family.family_id }) + ,$body.family
-          $cfg.product_families = $list
+          $list = @($list | Where-Object { $_.prod_family_id -ne $body.prodFamily.prod_family_id }) + ,$body.prodFamily
+          $cfg.prod_families = $list
           Save-Config $cfg
-          Add-Audit -User $body.user -Action ('Config_Family_' + $body.op) -ProjectId '' -ObjType 'ProductFamily' -ObjId $body.family.family_id -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
-          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; product_families = $cfg.product_families }
+          Add-Audit -User $body.user -Action ('Config_Family_' + $body.op) -ProjectId '' -ObjType 'ProdFamily' -ObjId $body.prodFamily.prod_family_id -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; prod_families = $cfg.prod_families }
         } elseif ($body.op -eq 'delete') {
-          $referencingProjects = @(Read-Store 'lb_projects' | Where-Object { [string]$_.family_id -eq $body.family_id })
+          $referencingProjects = @(Read-Store 'lb_projects' | Where-Object { [string]$_.prod_family -eq $body.prod_family_id })
           if ($referencingProjects.Count -gt 0) {
             $refList = ($referencingProjects | ForEach-Object { $_.project_id }) -join ', '
             New-JsonResponse -Response $res -StatusCode 409 -Body @{
-              error = ("Cannot delete family '" + $body.family_id + "' — it is still referenced by project(s): " + $refList)
+              error = ("Cannot delete product family '" + $body.prod_family_id + "' — it is still referenced by project(s): " + $refList)
             }
           } else {
-          $list = @($list | Where-Object { $_.family_id -ne $body.family_id })
-          $cfg.product_families = $list
+          $list = @($list | Where-Object { $_.prod_family_id -ne $body.prod_family_id })
+          $cfg.prod_families = $list
           Save-Config $cfg
-          Add-Audit -User $body.user -Action ('Config_Family_' + $body.op) -ProjectId '' -ObjType 'ProductFamily' -ObjId $body.family_id -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
-          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; product_families = $cfg.product_families }
+          Add-Audit -User $body.user -Action ('Config_Family_' + $body.op) -ProjectId '' -ObjType 'ProdFamily' -ObjId $body.prod_family_id -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; prod_families = $cfg.prod_families }
           }
         } else { throw "unknown op '$($body.op)'" }
       }
@@ -1060,12 +1086,14 @@ try {
       elseif ($method -eq 'POST' -and $path -eq '/api/projects') {
         $body = Read-JsonBody -Request $req
         $now = (Get-Date).ToUniversalTime().ToString('o')
-        # v2.1 ID format: [NPI|ECN]-[Family_ID], e.g. NPI-9649LP, ECN-5612.
-        # Whatever the user typed as the family identifier IS the readable half.
-        $famId = ([string]$body.family_id).Trim()
-        if (-not $famId) { throw 'A Family ID is required — it forms the project ID.' }
+        # v2.1 ID format: [NPI|ECN]-[Family], e.g. NPI-9649LP, ECN-5612.
+        # Whatever the user typed as the family (specific model code) IS the
+        # readable half. v3.6 renamed the wire field from family_id to family
+        # to match the corrected schema — this IS the project's Family.
+        $famId = ([string]$body.family).Trim()
+        if (-not $famId) { throw 'A Family is required — it forms the project ID.' }
         $idPart = ($famId.ToUpperInvariant() -replace '[^A-Z0-9\.\-_]', '')
-        if (-not $idPart) { throw "Family ID '$famId' has no usable characters for an ID." }
+        if (-not $idPart) { throw "Family '$famId' has no usable characters for an ID." }
         $candidate = ([string]$body.process) + '-' + $idPart
 
         # certifications arrive as an array from the browser; store them flat
@@ -1078,12 +1106,12 @@ try {
         $target_date = ([string]$body.target_date).Trim()
         if (-not $target_date) {
           $target_date = Get-TargetDate -ClassAbcde $body.class_abcde `
-                                        -Identifier @($body.family, $famId) `
+                                        -Identifier @($body.prod_family, $famId) `
                                         -PrfDate $body.prf_date -Config (Get-Config)
         }
 
         $row = @{
-          process = $body.process; family = $body.family; family_id = $famId; fg_id = ''
+          process = $body.process; prod_family = $body.prod_family; family = $famId
           class_abcde = $body.class_abcde; target_date = $target_date; certifications = $certs
           prf_date = $body.prf_date; market_manager = $body.market_manager; country = $body.country
           customer_number = $body.customer_number; status = 'Active'; created_by = $body.created_by
@@ -1107,7 +1135,11 @@ try {
         $body = Read-JsonBody -Request $req
         $cfg = Get-Config
         $csvText = [string]$body.csv
-        $EXPECTED = @('process','family_id','class_abcde','family','prf_date',
+        # v3.6: 'family' is now the specific model code that forms the project
+        # ID (e.g. 9649LP), and 'prod_family' is the broad category (e.g.
+        # CL-CORDLESS) — the old header had these backwards under the names
+        # 'family_id' and 'family' respectively.
+        $EXPECTED = @('process','family','class_abcde','prod_family','prf_date',
                       'target_date','market_manager','country','customer_number','notes','certifications')
 
         $records = ConvertFrom-CsvText $csvText
@@ -1140,9 +1172,9 @@ try {
         $validClasses = @{}
         foreach ($t in @($cfg.change_types)) { $validClasses[([string]$t.type_id).ToUpperInvariant()] = $t }
         $famById = @{}; $famByName = @{}
-        foreach ($f in @($cfg.product_families)) {
-          $famById[([string]$f.family_id).ToUpperInvariant()] = $f
-          $famByName[([string]$f.family_name).Trim().ToLowerInvariant()] = $f
+        foreach ($f in @($cfg.prod_families)) {
+          $famById[([string]$f.prod_family_id).ToUpperInvariant()] = $f
+          $famByName[([string]$f.prod_family_name).Trim().ToLowerInvariant()] = $f
         }
         $existingIds = @{}
         foreach ($p in @(Read-Store 'lb_projects')) { $existingIds[([string]$p.project_id).ToUpperInvariant()] = $true }
@@ -1180,10 +1212,9 @@ try {
           $rowNo = $r + 1          # 1-based including the header, so it matches Excel
 
           $process = (& $get 'process').ToUpperInvariant()
-          $familyId = & $get 'family_id'
-          $fgId     = & $get 'fg_id'
+          $familyId = & $get 'family'
           $klass    = (& $get 'class_abcde').ToUpperInvariant()
-          $famRaw   = & $get 'family'
+          $famRaw   = & $get 'prod_family'
 
           if ($process -ne 'NPI' -and $process -ne 'ECN') {
             $rejections += @{ row = $rowNo; reason = ("process must be NPI or ECN (got '" + (& $get 'process') + "')") }; continue
@@ -1195,35 +1226,36 @@ try {
             $rejections += @{ row = $rowNo; reason = ("class_abcde '" + $klass + "' is not a configured change type (" +
               ((@($cfg.change_types) | ForEach-Object { $_.type_id }) -join '/') + ")") }; continue
           }
-          # family_id forms the project ID.
+          # family (the specific model code) forms the project ID.
           $idSeed = $familyId
           if (-not $idSeed) {
-            $rejections += @{ row = $rowNo; reason = 'family_id is required - it forms the project ID' }; continue
+            $rejections += @{ row = $rowNo; reason = 'family is required - it forms the project ID' }; continue
           }
           $idPart = ($idSeed.ToUpperInvariant() -replace '[^A-Z0-9\.\-_]', '')
           if (-not $idPart) {
-            $rejections += @{ row = $rowNo; reason = ("family_id '" + $idSeed + "' has no characters usable in an ID") }; continue
+            $rejections += @{ row = $rowNo; reason = ("family '" + $idSeed + "' has no characters usable in an ID") }; continue
           }
           $candidate = $process + '-' + $idPart
 
-          # family is optional, but a value that matches nothing configured is
-          # almost always a typo, so it is surfaced rather than stored as-is.
+          # prod_family is optional, but a value that matches nothing
+          # configured is almost always a typo, so it is surfaced rather than
+          # stored as-is.
           $familyResolved = ''
           if ($famRaw) {
             $hit = $null
             if ($famById.ContainsKey($famRaw.ToUpperInvariant())) { $hit = $famById[$famRaw.ToUpperInvariant()] }
             elseif ($famByName.ContainsKey($famRaw.ToLowerInvariant())) { $hit = $famByName[$famRaw.ToLowerInvariant()] }
             else {
-              # tolerate the UI's own "Family Name (FAMILY_ID)" display form
+              # tolerate the UI's own "Category Name (PROD_FAMILY_ID)" display form
               $m = [regex]::Match($famRaw, '\(([^)]+)\)\s*$')
               if ($m.Success -and $famById.ContainsKey($m.Groups[1].Value.Trim().ToUpperInvariant())) {
                 $hit = $famById[$m.Groups[1].Value.Trim().ToUpperInvariant()]
               }
             }
             if (-not $hit) {
-              $rejections += @{ row = $rowNo; reason = ("family '" + $famRaw + "' is not a configured product family") }; continue
+              $rejections += @{ row = $rowNo; reason = ("prod_family '" + $famRaw + "' is not a configured product family") }; continue
             }
-            $familyResolved = [string]$hit.family_id
+            $familyResolved = [string]$hit.prod_family_id
           }
 
           # Dates accept an ISO week (YYYY-Www, the v3.0 planning format) or a
@@ -1267,7 +1299,7 @@ try {
           $idCandidates[$key] = $candidate
           $accepted += @{
             __key = $key
-            process = $process; family = $familyResolved; family_id = $familyId; fg_id = ''
+            process = $process; prod_family = $familyResolved; family = $familyId
             class_abcde = $klass; target_date = $targetDate; certifications = $certs
             prf_date = (& $get 'prf_date'); market_manager = (& $get 'market_manager')
             country = (& $get 'country'); customer_number = (& $get 'customer_number')
@@ -1527,7 +1559,7 @@ try {
         # somebody uploads "final FINAL v3 (2).xlsx" from their desktop.
         $stdName = Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
                      -WnbId $body.wnbId -Description $body.description -OriginalName $original
-        $saved = Save-Evidence -DocType $body.docType -Family $body.family -FgId $body.fgId -PartId $body.partId -FileName $stdName -Bytes $bytes
+        $saved = Save-Evidence -DocType $body.docType -Family $body.family -PartId $body.partId -FileName $stdName -Bytes $bytes
         $saved | Add-Member -NotePropertyName originalName -NotePropertyValue $original -Force
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved
       }

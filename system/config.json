@@ -1,8 +1,8 @@
-﻿{
+{
     "system_info":  {
                         "version":  "3.5.0",
                         "app_name":  "WVN NPI \u0026 ECN Command Center",
-                        "deployment_path":  "",
+                        "deployment_path":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\WVN_Stage_Gate_Command_Center_v3.5_FullBundle",
                         "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam â€”Â WOS Pillar 09",
                         "compiled_from":  [
                                               "QA-SOP-NPI-0001-05 New Product Introduction (Rev 05, Aug 2020)",
@@ -25,7 +25,7 @@
                                 "ecn_log_subpath":  "system\\ecn_log",
                                 "evidence_vault_folder_name":  "NPI_EPM_Documents_Control",
                                 "evidence_vault_relative_to_root":  "..",
-                                "evidence_vault_path":  "",
+                                "evidence_vault_path":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\NPI_EPM_Documents_Control",
                                 "templates_subpath":  "system\\templates",
                                 "filename_conventions":  {
                                                              "DWG":  "PD[WVN_Code]_01 [Description]_[WNB_Code].[ext]",
@@ -39,112 +39,112 @@
                                 "default_certifications":  [
 
                                                            ],
-                                "evidence_vault_root":  ""
+                                "evidence_vault_root":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\WVN_Stage_Gate_Command_Center_v3.5_FullBundle"
                             },
-    "product_families":  [
-                             {
-                                 "family_id":  "CL-CORDED",
-                                 "family_name":  "Hair Clipper (Corded)",
-                                 "description":  "Mains-powered professional \u0026 consumer hair clippers",
-                                 "sample_fg_ids":  [
-                                                       "5612",
-                                                       "7067",
-                                                       "5612C",
-                                                       "09155-1701",
-                                                       "09670-1201",
-                                                       "3026452",
-                                                       "79449-1001"
-                                                   ],
-                                 "complexity_class":  "B",
-                                 "typical_lead_time_days":  178
-                             },
-                             {
-                                 "family_id":  "CL-CORDLESS",
-                                 "family_name":  "Hair Clipper (Cordless / Rechargeable)",
-                                 "description":  "Lithium-ion/NiMH rechargeable clippers with charging stands",
-                                 "sample_fg_ids":  [
-                                                       "9649LP",
-                                                       "9639",
-                                                       "9655N",
-                                                       "2983LP",
-                                                       "9649P",
-                                                       "9649",
-                                                       "6245LP",
-                                                       "6275LP",
-                                                       "2240LC"
-                                                   ],
-                                 "complexity_class":  "E",
-                                 "typical_lead_time_days":  210
-                             },
-                             {
-                                 "family_id":  "TRIMMER",
-                                 "family_name":  "Beard \u0026 Hair Trimmer",
-                                 "description":  "Detail trimmers, beard trimmers, multi-grooming attachments",
-                                 "sample_fg_ids":  [
-                                                       "6275",
-                                                       "5537",
-                                                       "4501",
-                                                       "3282",
-                                                       "3028666",
-                                                       "3028671",
-                                                       "9855",
-                                                       "9893LP",
-                                                       "5616L",
-                                                       "9906",
-                                                       "9336",
-                                                       "9685",
-                                                       "9891"
-                                                   ],
-                                 "complexity_class":  "D",
-                                 "typical_lead_time_days":  108
-                             },
-                             {
-                                 "family_id":  "SHAVER",
-                                 "family_name":  "Shaver (Foil / Rotary)",
-                                 "description":  "Electric shavers â€”Â foil and rotary head types",
-                                 "sample_fg_ids":  [
-                                                       "5619",
-                                                       "7066",
-                                                       "7065",
-                                                       "7067"
-                                                   ],
-                                 "complexity_class":  "D",
-                                 "typical_lead_time_days":  108
-                             },
-                             {
-                                 "family_id":  "STYLER",
-                                 "family_name":  "Nose, Ear \u0026 Eyebrow Trimmer",
-                                 "description":  "Nose, ear and eyebrow trimmers (5640, 5560, 5546, 5545, 5608 families). Renamed 2026-08-03: the config previously called this \"Hair Dryer \u0026 Hot Air Styler\", but the item master carries 201 items here and none of them is a hair dryer. family_id kept as STYLER so existing project references stay valid.",
-                                 "sample_fg_ids":  [
-                                                       "5546S",
-                                                       "5560-ALK",
-                                                       "5560N",
-                                                       "5640",
-                                                       "5545",
-                                                       "5546",
-                                                       "5560",
-                                                       "5608"
-                                                   ],
-                                 "complexity_class":  "C",
-                                 "typical_lead_time_days":  103,
-                                 "renamed_from":  "Hair Dryer \u0026 Hot Air Styler"
-                             },
-                             {
-                                 "family_id":  "KIT",
-                                 "family_name":  "Grooming Kit (Multi-piece Sets)",
-                                 "description":  "Bundled clipper + trimmer + accessory kits in hard/soft cases",
-                                 "sample_fg_ids":  [
-                                                       "2983L",
-                                                       "9865",
-                                                       "79434",
-                                                       "3026590",
-                                                       "3193",
-                                                       "3155"
-                                                   ],
-                                 "complexity_class":  "A",
-                                 "typical_lead_time_days":  94
-                             }
-                         ],
+    "prod_families":  [
+                          {
+                              "prod_family_id":  "CL-CORDED",
+                              "prod_family_name":  "Hair Clipper (Corded)",
+                              "description":  "Mains-powered professional \u0026 consumer hair clippers",
+                              "sample_fg_ids":  [
+                                                    "5612",
+                                                    "7067",
+                                                    "5612C",
+                                                    "09155-1701",
+                                                    "09670-1201",
+                                                    "3026452",
+                                                    "79449-1001"
+                                                ],
+                              "complexity_class":  "B",
+                              "typical_lead_time_days":  178
+                          },
+                          {
+                              "prod_family_id":  "CL-CORDLESS",
+                              "prod_family_name":  "Hair Clipper (Cordless / Rechargeable)",
+                              "description":  "Lithium-ion/NiMH rechargeable clippers with charging stands",
+                              "sample_fg_ids":  [
+                                                    "9649LP",
+                                                    "9639",
+                                                    "9655N",
+                                                    "2983LP",
+                                                    "9649P",
+                                                    "9649",
+                                                    "6245LP",
+                                                    "6275LP",
+                                                    "2240LC"
+                                                ],
+                              "complexity_class":  "E",
+                              "typical_lead_time_days":  210
+                          },
+                          {
+                              "prod_family_id":  "TRIMMER",
+                              "prod_family_name":  "Beard \u0026 Hair Trimmer",
+                              "description":  "Detail trimmers, beard trimmers, multi-grooming attachments",
+                              "sample_fg_ids":  [
+                                                    "6275",
+                                                    "5537",
+                                                    "4501",
+                                                    "3282",
+                                                    "3028666",
+                                                    "3028671",
+                                                    "9855",
+                                                    "9893LP",
+                                                    "5616L",
+                                                    "9906",
+                                                    "9336",
+                                                    "9685",
+                                                    "9891"
+                                                ],
+                              "complexity_class":  "D",
+                              "typical_lead_time_days":  108
+                          },
+                          {
+                              "prod_family_id":  "SHAVER",
+                              "prod_family_name":  "Shaver (Foil / Rotary)",
+                              "description":  "Electric shavers â€”Â foil and rotary head types",
+                              "sample_fg_ids":  [
+                                                    "5619",
+                                                    "7066",
+                                                    "7065",
+                                                    "7067"
+                                                ],
+                              "complexity_class":  "D",
+                              "typical_lead_time_days":  108
+                          },
+                          {
+                              "prod_family_id":  "STYLER",
+                              "prod_family_name":  "Nose, Ear \u0026 Eyebrow Trimmer",
+                              "description":  "Nose, ear and eyebrow trimmers (5640, 5560, 5546, 5545, 5608 families). Renamed 2026-08-03: the config previously called this \"Hair Dryer \u0026 Hot Air Styler\", but the item master carries 201 items here and none of them is a hair dryer. family_id kept as STYLER so existing project references stay valid.",
+                              "sample_fg_ids":  [
+                                                    "5546S",
+                                                    "5560-ALK",
+                                                    "5560N",
+                                                    "5640",
+                                                    "5545",
+                                                    "5546",
+                                                    "5560",
+                                                    "5608"
+                                                ],
+                              "complexity_class":  "C",
+                              "typical_lead_time_days":  103,
+                              "renamed_from":  "Hair Dryer \u0026 Hot Air Styler"
+                          },
+                          {
+                              "prod_family_id":  "KIT",
+                              "prod_family_name":  "Grooming Kit (Multi-piece Sets)",
+                              "description":  "Bundled clipper + trimmer + accessory kits in hard/soft cases",
+                              "sample_fg_ids":  [
+                                                    "2983L",
+                                                    "9865",
+                                                    "79434",
+                                                    "3026590",
+                                                    "3193",
+                                                    "3155"
+                                                ],
+                              "complexity_class":  "A",
+                              "typical_lead_time_days":  94
+                          }
+                      ],
     "change_types":  [
                          {
                              "type_id":  "A",

@@ -48,8 +48,8 @@ $TODAY = [datetime]::new(2026, 8, 6)          # Python date(2026, 8, 6)
 # Ported verbatim from SCHEMA in generate_sample_data.py.
 # --------------------------------------------------------------------------
 $SCHEMA = @{
-    'lb_projects'      = @('project_id','process','family','fg_id','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family_id','target_date','certifications')
-    'lb_gates'         = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','warehouse_ready','approved_by','approved_utc','evidence_cited','notes','updated_utc')
+    'lb_projects'      = @('project_id','process','prod_family','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family','target_date','certifications')
+    'lb_gates'         = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','approved_by','approved_utc','evidence_cited','notes','updated_utc')
     'lb_deliverables'  = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url')
     'lb_doc_comments'  = @('comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc')
     'lb_tickets'       = @('ticket_id','project_id','step_key','doc_code','title','description','requested_by','requested_dept','requested_utc','assigned_dept','assigned_to','priority','due_date','status','fulfilled_by','fulfilled_utc','deliverable_id','sha256','close_note')
@@ -283,25 +283,25 @@ function Write-BatchDemoCsv {
                 ': gi' + [string][char]0x1EA3 + 'm nh' + [string][char]0x1EF1 + 'a 12%'
 
     $lines = @(
-        'process,family_id,class_abcde,fg_id,family,prf_date,target_date,market_manager,country,customer_number,notes,certifications'
+        'process,prod_family,class_abcde,family,prf_date,target_date,market_manager,country,customer_number,notes,certifications'
         '# ---- DEMO FILE for A2. Batch Project Registration. Rows starting with # are ignored by the importer. ----'
         '# The 8 rows below are all VALID and will register cleanly.'
-        'NPI,9891,E,9891,TRIMMER,2026-W34,,A. Fischer,VN,C-2001,New cordless trimmer platform for FY27,CB|CE-EMC'
-        'NPI,9906,C,9906,TRIMMER,2026-W35,,M. Weber,VN,C-2002,Housing change to share the 9891 blade guard,CE-EMC'
-        'NPI,6275LP,E,6275LP,CL-CORDLESS,2026-W33,2027-W20,S. Klein,DE,C-2003,"Li-ion cordless clipper, EU launch",CB|CE-EMC|UL'
-        'NPI,2240LC,D,2240LC,CL-CORDLESS,2026-W36,,J. Braun,VN,C-2004,Surface finish update for club channel,CB|CE-EMC'
-        'ECN,79449-1001,B,79449-1001,CL-CORDED,2026-W33,,R. Hoffmann,VN,C-2005,"Blister card change: new hanger, same insert",CE-EMC'
-        'ECN,5608,A,5608,STYLER,2026-W34,,A. Fischer,VN,C-2006,Packaging-only relabel for the KC market,KC'
-        ('ECN,3155,C,3155,KIT,2026-W35,,M. Weber,VN,C-2007,"' + $note3155 + '",CB|CE-EMC')
-        'ECN,3026590,D,3026590,KIT,2026-W37,,S. Klein,VN,C-2008,Surface change on the storage case,CE-EMC'
+        'NPI,TRIMMER,E,9891,2026-W34,,A. Fischer,VN,C-2001,New cordless trimmer platform for FY27,CB|CE-EMC'
+        'NPI,TRIMMER,C,9906,2026-W35,,M. Weber,VN,C-2002,Housing change to share the 9891 blade guard,CE-EMC'
+        'NPI,CL-CORDLESS,E,6275LP,2026-W33,2027-W20,S. Klein,DE,C-2003,"Li-ion cordless clipper, EU launch",CB|CE-EMC|UL'
+        'NPI,CL-CORDLESS,D,2240LC,2026-W36,,J. Braun,VN,C-2004,Surface finish update for club channel,CB|CE-EMC'
+        'ECN,CL-CORDED,B,79449-1001,2026-W33,,R. Hoffmann,VN,C-2005,"Blister card change: new hanger, same insert",CE-EMC'
+        'ECN,STYLER,A,5608,2026-W34,,A. Fischer,VN,C-2006,Packaging-only relabel for the KC market,KC'
+        ('ECN,KIT,C,3155,2026-W35,,M. Weber,VN,C-2007,"' + $note3155 + '",CB|CE-EMC')
+        'ECN,KIT,D,3026590,2026-W37,,S. Klein,VN,C-2008,Surface change on the storage case,CE-EMC'
         '# ---- The 6 rows below are all INVALID, on purpose, to demonstrate row-level rejection. ----'
         '# Each one triggers a different validation rule; the 8 valid rows above still import.'
-        'XXX,BADPROC,E,,TRIMMER,,,,,,process is not NPI or ECN,'
-        'NPI,,E,,TRIMMER,,,,,,no family_id and no fg_id so no project ID can be formed,'
-        'NPI,BADCLASS,Z,,TRIMMER,,,,,,change type Z is not configured,'
-        'NPI,BADFAM,E,,NOT-A-REAL-FAMILY,,,,,,product family does not exist,'
-        'NPI,BADDATE,E,,TRIMMER,13/07/2026,,,,,prf_date is not an ISO week or a date,'
-        'NPI,9891,E,,TRIMMER,,,,,,duplicate of the 9891 row above - same project ID,'
+        'XXX,TRIMMER,E,,,,,,,process is not NPI or ECN,'
+        'NPI,TRIMMER,E,,,,,,,,no prod_family or no family so no project ID can be formed,'
+        'NPI,TRIMMER,Z,,,,,,,,change type Z is not configured,'
+        'NPI,NOT-A-REAL-FAMILY,E,,,,,,,,product family does not exist,'
+        'NPI,TRIMMER,E,,13/07/2026,,,,,,prf_date is not an ISO week or a date,'
+        'NPI,TRIMMER,E,,,,,,,,duplicate of the 9891 row above - same project ID,'
     )
 
     $sb = New-Object System.Text.StringBuilder
@@ -333,8 +333,7 @@ for ($i = 0; $i -lt $PROJECTS.Count; $i++) {
     $rows['lb_projects'] += [ordered]@{
         project_id      = $projId
         process         = $p.proc
-        family          = $p.fam
-        fg_id           = $p.fg
+        prod_family     = $p.fam
         class_abcde     = $p.typ
         prf_date        = Get-Wk $p.prf
         market_manager  = $MM[$i % $MM.Count]
@@ -345,7 +344,7 @@ for ($i = 0; $i -lt $PROJECTS.Count; $i++) {
         created_utc     = $created
         updated_utc     = Get-Utc 3
         notes           = $p.note
-        family_id       = $p.fg
+        family          = $p.fg
         target_date     = Get-Wk $p.tgt
         certifications  = $CERTS[$p.fam]
     }
@@ -426,7 +425,6 @@ for ($i = 0; $i -lt $PROJECTS.Count; $i++) {
             batch_3           = ''
             batch_override    = ''
             batch_justification = ''
-            warehouse_ready   = $(if ($signed) { 'YES' } else { '' })
             approved_by       = $(if ($signed) { $owner } else { '' })
             approved_utc      = $(if ($signed) { Get-Utc ([math]::Max(1, -$p.prf * 7 - $s * 4)) } else { '' })
             evidence_cited    = ($req[$s] -join ';')
@@ -516,7 +514,7 @@ foreach ($p in $rows['lb_projects']) {
             status       = $(if ($ok) { 'Cleared' } else { 'Pending' })
             cleared_by   = $(if ($ok) { $p['created_by'] } else { '' })
             cleared_date = $(if ($ok) { Get-Wk -2 } else { '' })
-            reference    = ('WH-{0}' -f $p['fg_id'])
+            reference    = ('WH-{0}' -f $p['family'])
             notes        = $(if ($ok) { '' } else { 'Awaiting gate clearance' })
         }
     }
@@ -535,7 +533,7 @@ foreach ($p in $rows['lb_projects']) {
                 area        = $area
                 entered_by  = 'Finance / SRC'
                 entered_date = Get-Wk -2
-                reference   = ('D365-{0}-{1}' -f $p['fg_id'], $area.Substring(0,3).ToUpper())
+                reference   = ('D365-{0}-{1}' -f $p['family'], $area.Substring(0,3).ToUpper())
                 notes       = 'Entered after gate closure'
                 logged_utc  = Get-Utc 14
             }

@@ -71,7 +71,7 @@ const API = {
   async createProject(body) { return API.post('/api/projects', body); },
   async action(store, row, opts) { return API.post('/api/action', { store, row, upsertKeys: (opts || {}).upsertKeys, audit: (opts || {}).audit }); },
   async upload(body) { return API.post('/api/upload', body); },
-  async family(op, family, family_id, user) { return API.post('/api/config/family', { op, family, family_id, user }); },
+  async family(op, prodFamily, prod_family_id, user) { return API.post('/api/config/family', { op, prodFamily, prod_family_id, user }); },
   async doctype(op, doctype, doctype_id, user) { return API.post('/api/config/doctype', { op, doctype, doctype_id, user }); },
   async templates() { const r = await fetch('/api/templates', { cache: 'no-store' }); if (!r.ok) throw await API.err(r); return r.json(); },
   async previewName(body) { return API.post('/api/filename/preview', body); },
@@ -90,7 +90,7 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
 };
 
 /* ------------------------------------------------------------- state -- */
-let CFG = null;                    // config.json (product_families, change_types, document_types, npi/ecn workflow, ...)
+let CFG = null;                    // config.json (prod_families, change_types, document_types, npi/ecn workflow, ...)
 let TRK = {};                      // tracking store arrays, keyed by store name
 let PATHS = {};                    // resolved server-side paths (vault, templates, root)
 let TEMPLATES = [];                // blank company forms available for download
@@ -219,10 +219,10 @@ function csvCell(v) {
 const familyById = id => {
   if (!id) return null;
   const s = String(id).trim();
-  const exact = CFG.product_families.find(f => f.family_id === s);
+  const exact = CFG.prod_families.find(f => f.prod_family_id === s);
   if (exact) return exact;
   const lower = s.toLowerCase();
-  return CFG.product_families.find(f => (f.sample_fg_ids || []).some(x => String(x).trim().toLowerCase() === lower));
+  return CFG.prod_families.find(f => (f.sample_fg_ids || []).some(x => String(x).trim().toLowerCase() === lower));
 };
 const changeTypes = () => CFG.change_types || [];
 const changeTypeById = id => changeTypes().find(t => t.type_id === id);
@@ -238,12 +238,12 @@ const certById = id => certTypes().find(c => c.cert_id === id);
 function normaliseFamilyInput(val) {
   const s = (val || '').trim();
   if (!s) return '';
-  if (CFG.product_families.some(f => f.family_id === s)) return s;
+  if (CFG.prod_families.some(f => f.prod_family_id === s)) return s;
   const m = s.match(/\(([A-Za-z0-9_-]+)\)\s*$/);
-  if (m && CFG.product_families.some(f => f.family_id === m[1])) return m[1];
+  if (m && CFG.prod_families.some(f => f.prod_family_id === m[1])) return m[1];
   const lower = s.toLowerCase();
-  const byName = CFG.product_families.find(f => f.family_name.toLowerCase() === lower);
-  return byName ? byName.family_id : s;
+  const byName = CFG.prod_families.find(f => f.prod_family_name.toLowerCase() === lower);
+  return byName ? byName.prod_family_id : s;
 }
 function normaliseDoctypeInput(val) {
   const s = (val || '').trim();
@@ -800,7 +800,7 @@ function viewDashboard(root) {
     var list = projectsOf(process);
     if (!dashFamFilter && !dashYearFilter && !dashWeekFilter) return list;
     return list.filter(function(p) {
-      if (dashFamFilter && p.family !== dashFamFilter) return false;
+      if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
       var tw = projectTargetWeek(p);
       if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
       if (dashWeekFilter && tw !== dashWeekFilter) return false;
@@ -820,10 +820,10 @@ function viewDashboard(root) {
 
   function renderDashboardSlicers() {
     var allNpi = projectsOf('NPI');
-    var famFiltered = dashFamFilter ? allNpi.filter(function(p) { return p.family === dashFamFilter; }) : allNpi;
+    var famFiltered = dashFamFilter ? allNpi.filter(function(p) { return p.prod_family === dashFamFilter; }) : allNpi;
     var yearFiltered = (dashFamFilter || dashYearFilter)
       ? allNpi.filter(function(p) {
-          if (dashFamFilter && p.family !== dashFamFilter) return false;
+          if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
           var tw = projectTargetWeek(p);
           if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
           return true;
@@ -833,7 +833,7 @@ function viewDashboard(root) {
     dashSlicerWrap.innerHTML = '';
     var sel = el('div', 'dashboard-slicers');
     sel.innerHTML = '<label class="dashboard-slicer">Family<select id="dashFamFilter"><option value="">All Families</option>' +
-      CFG.product_families.map(function(f) { return '<option value="' + esc(f.family_id) + '"' + (dashFamFilter === f.family_id ? ' selected' : '') + '>' + esc(f.family_name) + ' (' + esc(f.family_id) + ')</option>'; }).join('') +
+      CFG.prod_families.map(function(f) { return '<option value="' + esc(f.prod_family_id) + '"' + (dashFamFilter === f.prod_family_id ? ' selected' : '') + '>' + esc(f.prod_family_name) + ' (' + esc(f.prod_family_id) + ')</option>'; }).join('') +
       '</select></label>' +
       '<label class="dashboard-slicer">Year<select id="dashYearFilter"><option value="">All Years</option>' +
       buildYearOptions(famFiltered).map(function(y) { return '<option value="' + y + '"' + (dashYearFilter === y ? ' selected' : '') + '>' + y + '</option>'; }).join('') +
@@ -888,7 +888,7 @@ function viewDashboard(root) {
         const cls = classifyProject(project);
         const tgt = toWeek(project.target_date) || targetDateFor(project.class_abcde, project.prf_date);
         const late = tgt && tgt < nowWeek() && pr.done < pr.total;
-        const fam = familyById(project.family);
+        const fam = familyById(project.prod_family);
 
         const tr = el('tr');
 
@@ -896,7 +896,7 @@ function viewDashboard(root) {
         // target week (danger-coloured + text hint when overdue), project-level issues.
         const head = el('td');
         let headHTML = '<b>' + esc(project.project_id) + '</b>';
-        if (fam) headHTML += '<div class="note">' + esc(fam.family_name) + '</div>';
+        if (fam) headHTML += '<div class="note">' + esc(fam.prod_family_name) + '</div>';
         headHTML += ' <span class="' + badgeClass(cls) + '">' + esc(cls.replace(/_/g, ' ')) + '</span>';
         headHTML += '<br><span class="bar bar-sm"><i style="width:' + pr.pct + '%"></i></span>' +
           ' <span class="note">' + pr.done + '/' + pr.total + '</span>';
@@ -1006,13 +1006,13 @@ function viewDashboard(root) {
         const cls = classifyProject(project);
         const tgt = toWeek(project.target_date) || targetDateFor(project.class_abcde, project.prf_date);
         const late = tgt && tgt < nowWeek() && pr.done < pr.total;
-        const fam = familyById(project.family);
+        const fam = familyById(project.prod_family);
         const tr = el('tr');
 
         // Row header
         const head = el('td');
         let headHTML = '<b>' + esc(project.project_id) + '</b>';
-        if (fam) headHTML += '<div class="note">' + esc(fam.family_name) + '</div>';
+        if (fam) headHTML += '<div class="note">' + esc(fam.prod_family_name) + '</div>';
         headHTML += ' <span class="' + badgeClass(cls) + '">' + esc(cls.replace(/_/g, ' ')) + '</span>';
         headHTML += '<br><span class="bar bar-sm"><i style="width:' + pr.pct + '%"></i></span>' +
           ' <span class="note">' + pr.done + '/' + pr.total + '</span>';
@@ -1250,7 +1250,7 @@ function viewDashboard(root) {
         dashFamFilter = famSel.value;
         if (dashWeekFilter) {
           const weeks = buildWeekOptions(allNpi.filter(p => {
-            if (dashFamFilter && p.family !== dashFamFilter) return false;
+            if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
             const tw = projectTargetWeek(p);
             if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
             return true;
@@ -1264,7 +1264,7 @@ function viewDashboard(root) {
         const valid = filteredProjects();
         const weeks = buildWeekOptions(dashFamFilter
           ? allNpi.filter(p => {
-              if (dashFamFilter && p.family !== dashFamFilter) return false;
+              if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
               const tw = projectTargetWeek(p);
               if (dashYearFilter && tw.slice(0, 4) !== dashYearFilter) return false;
               return true;
@@ -1358,11 +1358,11 @@ function exportManagementReport() {
       const tw = weekToDate(targetWeek);
       if (sw && tw) cycle = String(Math.round((tw - sw) / (7 * 86400000)));
     }
-    const fam = familyById(p.family);
+    const fam = familyById(p.prod_family);
     const pr = progressOf(p);
     const cls = classifyProject(p);
     lines.push(csvCell(p.project_id) + ',' + csvCell(p.process) + ',' +
-      csvCell(fam ? fam.family_name : (p.family || '')) + ',' +
+      csvCell(fam ? fam.prod_family_name : (p.prod_family || '')) + ',' +
       csvCell(p.class_abcde || '') + ',' + csvCell(startWeek) + ',' + csvCell(targetWeek) + ',' +
       csvCell(cycle) + ',' + csvCell(pr.pct + '%') + ',' + csvCell(cls));
   });
@@ -1461,7 +1461,7 @@ async function uploadEvidence(project, stepKey, docCode, file) {
   const up = await API.upload({
     fileName: file.name, contentBase64: b64, docType: docCode,
     family: project.family,
-    wvnId: project.family_id, wnbId: project.customer_number || '',
+    wvnId: project.family, wnbId: project.customer_number || '',
     description: docCode, partId: ''
   });
   await API.action('lb_deliverables', {
@@ -1469,7 +1469,7 @@ async function uploadEvidence(project, stepKey, docCode, file) {
     file_name: up.fileName, file_path: up.path, sha256: up.sha256, status: 'Filed',
     approved: '', suspect_template: '', uploaded_by: who,
     uploaded_utc: new Date().toISOString(), notes: '', kind: 'file',
-    original_name: up.originalName, wvn_id: project.family_id || '',
+    original_name: up.originalName, wvn_id: project.family || '',
     wnb_id: project.customer_number || '', description: docCode, link_url: ''
   }, { audit: { user: who, action: 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: 'MISSING', to: 'Filed', detail: docCode } });
 }
@@ -1538,11 +1538,12 @@ function openDrawer(project, step, focusDocCode) {
     const npiProjects = projectsOf('NPI');
     const filtered = q
       ? npiProjects.filter(p => {
-          const fam = familyById(p.family);
+          const fam = familyById(p.prod_family);
           const tw = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
           return (p.project_id || '').toLowerCase().includes(q) ||
-            (fam ? fam.family_name.toLowerCase() : '').includes(q) ||
-            (fam ? fam.family_id.toLowerCase() : '').includes(q) ||
+            (p.family || '').toLowerCase().includes(q) ||
+            (fam ? fam.prod_family_name.toLowerCase() : '').includes(q) ||
+            (fam ? fam.prod_family_id.toLowerCase() : '').includes(q) ||
             (p.market_manager || '').toLowerCase().includes(q) ||
             tw.toLowerCase().includes(q);
         }).slice(0, 15)
@@ -1554,13 +1555,13 @@ function openDrawer(project, step, focusDocCode) {
       return;
     }
     filtered.forEach(prj => {
-      const fam = familyById(prj.family);
+      const fam = familyById(prj.prod_family);
       const tw = toWeek(prj.target_date) || targetDateFor(prj.class_abcde, prj.prf_date) || '';
       const item = el('div', 'sidebar-project-item');
       item.style.cssText = 'padding:6px 8px;border:1px solid var(--line);border-radius:4px;margin-bottom:4px;cursor:pointer';
       item.innerHTML = '<b>' + esc(prj.project_id) + '</b>' +
         '<div class="sidebar-project-meta">' +
-        esc(fam ? fam.family_name + ' (' + fam.family_id + ')' : 'No family') + ' · ' + esc(tw) +
+        esc(fam ? fam.prod_family_name + ' (' + fam.prod_family_id + ')' : 'No family') + ' · ' + esc(tw) +
         (prj.market_manager ? ' · ' + esc(prj.market_manager) : '') +
         '</div>';
       item.onclick = () => {
@@ -2184,11 +2185,11 @@ function viewInput(root) {
     'The change type sets the cycle time and decides which process steps this project actually has to run.'));
   const g = el('div', 'grid2');
   const fld = (label, html) => { const d = el('div', 'fld'); d.appendChild(el('span', null, label)); d.insertAdjacentHTML('beforeend', html); return d; };
-  // combobox: datalist shows "Family Name (FAMILY_ID)", normalised back to family_id at submit
-  const famDlOpts = CFG.product_families.map(f => '<option value="' + esc(f.family_name) + ' (' + esc(f.family_id) + ')">').join('');
+  // combobox: datalist shows "Category Name (PROD_FAMILY_ID)", normalised back to prod_family_id at submit
+  const famDlOpts = CFG.prod_families.map(f => '<option value="' + esc(f.prod_family_name) + ' (' + esc(f.prod_family_id) + ')">').join('');
   // every FG number we already know about, offered as suggestions but not enforced
   const known = [];
-  CFG.product_families.forEach(f => (f.sample_fg_ids || []).forEach(x => known.indexOf(x) < 0 && known.push(x)));
+  CFG.prod_families.forEach(f => (f.sample_fg_ids || []).forEach(x => known.indexOf(x) < 0 && known.push(x)));
   const ctOpts = changeTypes().map(t => '<option value="' + esc(t.type_id) + '">Type ' + esc(t.type_id) + ' — ' + esc(t.name) +
     (t.cycle_time_days == null ? ' (cycle TBD)' : ' (' + t.cycle_time_days + ' d)') + '</option>').join('');
 
@@ -2242,7 +2243,7 @@ function viewInput(root) {
       '<br>Runs ' + (runs || all.map(s => s.step_id)).length + ' of ' + all.length + ' ' + esc(proc) + ' steps.' +
       (skipped.length ? ' Not applicable: ' + skipped.map(s => 'step ' + s.step_id + ' ' + esc(s.step_name)).join(', ') +
         (t.excluded_step_reason ? ' — ' + esc(t.excluded_step_reason) : '') : '') +
-      (fam ? '<br>Family: <b>' + esc(fam.family_name) + '</b> (' + esc(fam.family_id) + ')' +
+      (fam ? '<br>Family: <b>' + esc(fam.prod_family_name) + '</b> (' + esc(fam.prod_family_id) + ')' +
         (fam.typical_lead_time_days ? ' · typical lead time <b>' + fam.typical_lead_time_days + ' days</b>' : '') : '');
   };
   $('#npClass', reg).onchange = (e) => { _npClassEdited = true; upd(); };
@@ -2262,7 +2263,7 @@ function viewInput(root) {
     // flags stay false and a later keystroke in Family ID can still refresh an
     // auto-filled field. That is intended: only a human touching the box locks it.
     if (fam) {
-      if (!_npFamEdited) $('#npFam').value = fam.family_name + ' (' + fam.family_id + ')';
+      if (!_npFamEdited) $('#npFam').value = fam.prod_family_name + ' (' + fam.prod_family_id + ')';
       if (!_npClassEdited && fam.complexity_class) {
         const ct = changeTypes().find(t => t.type_id === fam.complexity_class);
         if (ct) $('#npClass').value = ct.type_id;
@@ -2288,7 +2289,7 @@ function viewInput(root) {
     regBtn.disabled = true;
     try {
       const saved = await API.createProject({
-        process: $('#npProc').value, family_id: famId, family: normaliseFamilyInput($('#npFam').value),
+        process: $('#npProc').value, family: famId, prod_family: normaliseFamilyInput($('#npFam').value),
         class_abcde: cls,
         target_date: ov || targetDateFor(cls, $('#npPrf').value),
         prf_date: $('#npPrf').value, market_manager: $('#npMm').value.trim(), country: $('#npCountry').value.trim(),
@@ -2322,10 +2323,10 @@ function viewInput(root) {
 
   // Template is generated in the browser — no server round trip, so it works
   // exactly the same on an air-gapped machine.
-  const BATCH_HEADERS = ['process', 'family_id', 'class_abcde', 'family', 'prf_date',
+  const BATCH_HEADERS = ['process', 'family', 'class_abcde', 'prod_family', 'prf_date',
     'target_date', 'market_manager', 'country', 'customer_number', 'notes', 'certifications'];
   tplBtn.onclick = () => {
-    const famExample = (CFG.product_families[0] || {}).family_id || 'CL-CORDED';
+    const famExample = (CFG.prod_families[0] || {}).prod_family_id || 'CL-CORDED';
     const clsExample = ((changeTypes()[0] || {}).type_id) || 'E';
     // The sample row is commented out with a leading '#'. The server skips any
     // row whose process cell starts with '#', so "download the template, add
@@ -2338,9 +2339,9 @@ function viewInput(root) {
     ];
     const help = [
       '# process       NPI or ECN (required)',
-      '# family_id     forms the project ID, e.g. 9649LP -> NPI-9649LP (required)',
+      '# family        forms the project ID, e.g. 9649LP -> NPI-9649LP (required)',
       '# class_abcde   change type: ' + changeTypes().map(t => t.type_id).join(' / ') + ' (required)',
-      '# family        one of: ' + CFG.product_families.map(f => f.family_id).join(' / ') + ' (optional)',
+      '# prod_family   one of: ' + CFG.prod_families.map(f => f.prod_family_id).join(' / ') + ' (optional)',
       '# prf_date      ISO week 2026-W32 or date 2026-08-06 (optional)',
       '# target_date   blank = calculated from the change type cycle time (optional)',
       '# certifications  separate several with | e.g. CB|CE-EMC'
@@ -2597,7 +2598,7 @@ function viewInput(root) {
   function pick(files) {
     if (!TRK.lb_projects.length) { alert('Register a project first.'); return; }
     const projOpts = TRK.lb_projects.map(r => '<option value="' + esc(r.project_id) + '">' + esc(r.project_id) +
-      (r.family ? ' — ' + esc((familyById(r.family) || {}).family_name || r.family) : '') + '</option>').join('');
+      (r.prod_family ? ' — ' + esc((familyById(r.prod_family) || {}).prod_family_name || r.prod_family) : '') + '</option>').join('');
     // combobox format: value shown to user is "DOCTYPE_ID — Name", normalised at read time
     const docDlOpts = CFG.document_types.map(d => '<option value="' + esc(d.doctype_id) + ' — ' + esc(d.name) + '">').join('');
 
@@ -2829,11 +2830,11 @@ function familyFgTree(root, proc, state, onPick) {
   /* Canonical grouping/filter key. familyById() already resolves case drift and
      stale sample-FG values (v2.5), but that normalisation only ever ran on
      hand-typed input at registration time — rows written by the legacy-Excel
-     importer never passed through it, so `project.family` on those can be a
-     value no current product family matches. Without this, each such value
+     importer never passed through it, so `project.prod_family` on those can be
+     a value no current product family matches. Without this, each such value
      spawns its own single-project "family" header instead of collapsing into
      one Unassigned bucket alongside the genuinely-blank rows. */
-  const famKeyOf = x => { const f = familyById(x.family); return f ? f.family_id : '__unassigned__'; };
+  const famKeyOf = x => { const f = familyById(x.prod_family); return f ? f.prod_family_id : '__unassigned__'; };
 
   let debounceTimer = null;
 
@@ -2860,7 +2861,7 @@ function familyFgTree(root, proc, state, onPick) {
     const fam = familyById(famId);
     const b = el('button', state.familyFilter.indexOf(famId) >= 0 ? 'on' : '', famId);
     b.type = 'button'; b.dataset.fam = famId;
-    b.title = fam ? fam.family_name + (fam.description ? ' — ' + fam.description : '') : famId;
+    b.title = fam ? fam.prod_family_name + (fam.description ? ' — ' + fam.description : '') : famId;
     b.onclick = () => {
       const i = state.familyFilter.indexOf(famId);
       if (i >= 0) state.familyFilter.splice(i, 1); else state.familyFilter.push(famId);
@@ -2897,8 +2898,8 @@ function familyFgTree(root, proc, state, onPick) {
     if (q) {
       filtered = filtered.filter(x => {
         if ((x.project_id || '').toLowerCase().indexOf(q) >= 0) return true;
-        const fam = familyById(x.family) || {};
-        if ((fam.family_name || '').toLowerCase().indexOf(q) >= 0) return true;
+        const fam = familyById(x.prod_family) || {};
+        if ((fam.prod_family_name || '').toLowerCase().indexOf(q) >= 0) return true;
         if ((x.market_manager || '').toLowerCase().indexOf(q) >= 0) return true;
         return false;
       });
@@ -2932,7 +2933,7 @@ function familyFgTree(root, proc, state, onPick) {
     famKeys.forEach(famId => {
       const famProjs = groups[famId];
       const fam = familyById(famId);
-      const famName = famId === '__unassigned__' ? 'Unassigned' : (fam ? fam.family_name : 'Unassigned');
+      const famName = famId === '__unassigned__' ? 'Unassigned' : (fam ? fam.prod_family_name : 'Unassigned');
       const expanded = !!state.expanded[famId];
 
       const hdr = el('div', 'famhead');
@@ -3298,7 +3299,7 @@ function viewNpi(root) {
   b.innerHTML = '<b>NPI gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
     'warehouse clearance is done where required, and a named person signs. Otherwise use <b>Authorise bypass</b> — it is recorded separately and stays visible.';
   pBody.appendChild(b);
-  const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.family) || {}).family_name || project.family));
+  const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.prod_family) || {}).prod_family_name || project.prod_family));
   activeHead.id = 'npiActiveHead';
   pBody.appendChild(activeHead);
   const host = el('div'); pBody.appendChild(host);
@@ -3383,7 +3384,7 @@ function viewEcn(root) {
     const bt = el('button', ecnMode === k ? 'on' : '', l); bt.onclick = () => { ecnMode = k; show('ecn'); }; seg.appendChild(bt);
   });
   pBody.appendChild(seg);
-  const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.family) || {}).family_name || project.family) + (project.customer_number ? ' · customer ' + project.customer_number : ''));
+  const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.prod_family) || {}).prod_family_name || project.prod_family) + (project.customer_number ? ' · customer ' + project.customer_number : ''));
   activeHead.id = 'ecnActiveHead';
   pBody.appendChild(activeHead);
   const host = el('div'); pBody.appendChild(host);
@@ -3468,7 +3469,7 @@ function ppapSection(project) {
   b.innerHTML = '<b>Submission and customer approval are tracked separately</b> — a document sent is not a document accepted.';
   wrap.appendChild(b);
   const f = el('div', 'filters');
-  f.innerHTML = '<label>Part number</label><input id="ppPart" style="width:120px" value="' + esc(project.family_id) + '">' +
+  f.innerHTML = '<label>Part number</label><input id="ppPart" style="width:120px" value="' + esc(project.family) + '">' +
     '<label>Customer</label><input id="ppCust" style="width:120px" value="' + esc(project.customer_number) + '">';
   wrap.appendChild(f);
 
@@ -3587,24 +3588,24 @@ function viewSettings(root) {
 
   /* ---- families ---- */
   const fp = el('div', 'card');
-  const fpHdr = el('div', 'card-header'); fpHdr.appendChild(el('h3', 'card-title', 'Product families / models')); fp.appendChild(fpHdr);
+  const fpHdr = el('div', 'card-header'); fpHdr.appendChild(el('h3', 'card-title', 'Product families')); fp.appendChild(fpHdr);
   const fpBody = el('div', 'card-body');
   const flist = el('div', 'taglist');
-  CFG.product_families.forEach(f => {
+  CFG.prod_families.forEach(f => {
     const t = el('div', 'tagrow');
-    t.innerHTML = '<span><b>' + esc(f.family_id) + '</b> — ' + esc(f.family_name) + ' (class ' + esc(f.complexity_class) + ')</span>';
+    t.innerHTML = '<span><b>' + esc(f.prod_family_id) + '</b> — ' + esc(f.prod_family_name) + ' (class ' + esc(f.complexity_class) + ')</span>';
     const edit = el('button', null, '✎');
     edit.title = 'Edit this family';
     edit.style.color = 'var(--blue)';
     edit.onclick = () => {
-      $('#sfId').value = f.family_id || ''; $('#sfId').readOnly = true;
-      $('#sfName').value = f.family_name || '';
+      $('#sfId').value = f.prod_family_id || ''; $('#sfId').readOnly = true;
+      $('#sfName').value = f.prod_family_name || '';
       $('#sfDesc').value = f.description || '';
       $('#sfFg').value = (f.sample_fg_ids || []).join(', ');
       $('#sfClass').value = f.complexity_class || '';
       $('#sfLead').value = f.typical_lead_time_days != null ? f.typical_lead_time_days : '';
       faddBtn.textContent = 'Save family (update)';
-      faddBtn.dataset.editing = f.family_id;
+      faddBtn.dataset.editing = f.prod_family_id;
       fCancelBtn.className = '';
       fCancelBtn.style.marginLeft = '8px';
     };
@@ -3612,15 +3613,15 @@ function viewSettings(root) {
     const del = el('button', null, '×');
     del.title = 'Delete this family';
     del.onclick = async () => {
-      if (!confirm('Delete family "' + f.family_id + '"? Projects already registered under it keep their data.')) return;
-      try { await API.family('delete', null, f.family_id, requireName() || ''); await redrawAfterWrite(); }
+      if (!confirm('Delete product family "' + f.prod_family_id + '"? Projects already registered under it keep their data.')) return;
+      try { await API.family('delete', null, f.prod_family_id, requireName() || ''); await redrawAfterWrite(); }
       catch (e) { alert('Could not delete: ' + e.message); }
     };
     t.appendChild(del); flist.appendChild(t);
   });
   fpBody.appendChild(flist);
   const fg = el('div', 'grid2');
-  fg.innerHTML = '<div class="fld"><span>Family ID *</span><input id="sfId" placeholder="e.g. CL-CORDLESS"></div>' +
+  fg.innerHTML = '<div class="fld"><span>Product Family ID *</span><input id="sfId" placeholder="e.g. CL-CORDLESS"></div>' +
     '<div class="fld"><span>Name *</span><input id="sfName" placeholder="e.g. Hair Clipper (Cordless)"></div>' +
     '<div class="fld"><span>Description</span><input id="sfDesc"></div>' +
     '<div class="fld"><span>Sample FG IDs (comma-separated)</span><input id="sfFg"></div>' +
@@ -3637,10 +3638,10 @@ function viewSettings(root) {
   }
   faddBtn.onclick = async () => {
     const id = $('#sfId').value.trim(), name = $('#sfName').value.trim();
-    if (!id || !name) { alert('Family ID and name are required.'); return; }
+    if (!id || !name) { alert('Product Family ID and name are required.'); return; }
     try {
       await API.family('add', {
-        family_id: id, family_name: name, description: $('#sfDesc').value.trim(),
+        prod_family_id: id, prod_family_name: name, description: $('#sfDesc').value.trim(),
         sample_fg_ids: $('#sfFg').value.split(',').map(s => s.trim()).filter(Boolean),
         complexity_class: $('#sfClass').value.trim(), typical_lead_time_days: Number($('#sfLead').value) || 0
       }, null, requireName() || '');

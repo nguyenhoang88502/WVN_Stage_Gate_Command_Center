@@ -35,8 +35,8 @@ def utc(days_ago, hh=9, mm=30):
 
 
 SCHEMA = {
- 'lb_projects': ['project_id','process','family','fg_id','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family_id','target_date','certifications'],
- 'lb_gates': ['gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','warehouse_ready','approved_by','approved_utc','evidence_cited','notes','updated_utc'],
+ 'lb_projects': ['project_id','process','prod_family','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family','target_date','certifications'],
+ 'lb_gates': ['gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','approved_by','approved_utc','evidence_cited','notes','updated_utc'],
  'lb_deliverables': ['deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url'],
  'lb_doc_comments': ['comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc'],
  'lb_tickets': ['ticket_id','project_id','step_key','doc_code','title','description','requested_by','requested_dept','requested_utc','assigned_dept','assigned_to','priority','due_date','status','fulfilled_by','fulfilled_utc','deliverable_id','sha256','close_note'],
@@ -119,11 +119,11 @@ for i, (sfx, fam, fg, proc, typ, status, prf_off, tgt_off, note) in enumerate(P)
     owner = PEOPLE[i % len(PEOPLE)]
     created = utc(-prf_off * 7)
     rows['lb_projects'].append(dict(
-        project_id=pid, process=proc, family=fam, fg_id=fg, class_abcde=typ,
+        project_id=pid, process=proc, prod_family=fam, class_abcde=typ,
         prf_date=wk(prf_off), market_manager=MM[i % len(MM)], country='VN',
         customer_number='C-%04d' % (1000 + i * 7), status='Active',
         created_by=owner, created_utc=created, updated_utc=utc(3),
-        notes=note, family_id=fg, target_date=wk(tgt_off), certifications=CERTS[fam]))
+        notes=note, family=fg, target_date=wk(tgt_off), certifications=CERTS[fam]))
 
     steps = TYPE_NPI[typ] if proc == 'NPI' else list(range(1, 13))
     gated = steps if proc == 'NPI' else [s for s in steps if s in ECN_GATED]
@@ -167,7 +167,7 @@ for i, (sfx, fam, fg, proc, typ, status, prf_off, tgt_off, note) in enumerate(P)
             gate_id=nid('GAT', 5), project_id=pid, process=proc, step_key=sk, step_num=str(s),
             step_name=names[s], status='CLEARED' if signed else ('OPEN' if s <= frontier + 1 else 'PENDING'),
             complexity='', batch_1='', batch_2='', batch_3='', batch_override='',
-            batch_justification='', warehouse_ready='YES' if signed else '',
+            batch_justification='',
             approved_by=owner if signed else '', approved_utc=utc(max(1, -prf_off * 7 - s * 4)) if signed else '',
             evidence_cited=';'.join(req[s]), notes='', updated_utc=utc(3)))
 
@@ -238,7 +238,7 @@ for p in rows['lb_projects']:
             wh_id=nid('WH', 5), project_id=pid, step_key=sk, area=WH_AREAS[len(rows['lb_warehouse']) % 5],
             kind='Material readiness', status='Cleared' if ok else 'Pending',
             cleared_by=p['created_by'] if ok else '', cleared_date=wk(-2) if ok else '',
-            reference='WH-%s' % p['fg_id'], notes='' if ok else 'Awaiting gate clearance'))
+            reference='WH-%s' % p['family'], notes='' if ok else 'Awaiting gate clearance'))
 
 # ---- D365 entries for closed projects ----
 for p in rows['lb_projects']:
@@ -249,7 +249,7 @@ for p in rows['lb_projects']:
             rows['lb_d365'].append(dict(
                 d365_id=nid('D365', 4), project_id=p['project_id'], step_key='%s-%s' % (p['process'], total_gated),
                 area=area, entered_by='Finance / SRC', entered_date=wk(-2),
-                reference='D365-%s-%s' % (p['fg_id'], area[:3].upper()),
+                reference='D365-%s-%s' % (p['family'], area[:3].upper()),
                 notes='Entered after gate closure', logged_utc=utc(14)))
 
 # ---- audit trail ----
