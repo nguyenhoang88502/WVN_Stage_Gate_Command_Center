@@ -1042,6 +1042,14 @@ function viewDashboard(root) {
   var dashEcnMatrixWrap = el('div'); dashEcnMatrixWrap.id = 'dashEcnMatrixWrap';
   root.appendChild(dashEcnMatrixWrap);
 
+  // renderAll() is declared inside the IIFE further down that owns `wrap` and
+  // renderCards(), so it is NOT in scope for the slicer onChange handlers up
+  // here - calling it directly threw "renderAll is not defined" on every
+  // slicer interaction, which silently left the matrices unfiltered while the
+  // slicer button label happily showed the new selection. The IIFE publishes
+  // it here instead.
+  var dashRenderAll = null;
+
   function renderDashboardSlicers() {
     var allNpi = projectsOf('NPI');
     _msOpenPopover = null; // close any stale popover from a prior render
@@ -1086,7 +1094,7 @@ function viewDashboard(root) {
     sel.appendChild(createMultiSelect({
       label: 'Family', options: famOptions, value: dashFamFilter,
       placeholder: 'All Families',
-      onChange: function() { clearStaleFilters(); renderAll(); }
+      onChange: function() { clearStaleFilters(); if (dashRenderAll) dashRenderAll(); }
     }));
 
     // Model — derived from distinct p.family values of currently-visible projects
@@ -1096,7 +1104,7 @@ function viewDashboard(root) {
     sel.appendChild(createMultiSelect({
       label: 'Model', options: modelOptions, value: dashModelFilter,
       placeholder: 'All Models',
-      onChange: function() { clearStaleFilters(); renderAll(); }
+      onChange: function() { clearStaleFilters(); if (dashRenderAll) dashRenderAll(); }
     }));
 
     // Start Week (prf_date)
@@ -1106,7 +1114,7 @@ function viewDashboard(root) {
     sel.appendChild(createMultiSelect({
       label: 'Start Week', options: startOptions, value: dashStartWeekFilter,
       placeholder: 'All Start Weeks',
-      onChange: function() { clearStaleFilters(); renderAll(); }
+      onChange: function() { clearStaleFilters(); if (dashRenderAll) dashRenderAll(); }
     }));
 
     // End Week (target_date)
@@ -1116,7 +1124,7 @@ function viewDashboard(root) {
     sel.appendChild(createMultiSelect({
       label: 'End Week', options: endOptions, value: dashEndWeekFilter,
       placeholder: 'All End Weeks',
-      onChange: function() { clearStaleFilters(); renderAll(); }
+      onChange: function() { clearStaleFilters(); if (dashRenderAll) dashRenderAll(); }
     }));
 
     dashSlicerWrap.appendChild(sel);
@@ -1532,6 +1540,7 @@ function viewDashboard(root) {
       wrap.appendChild(cardHost);
     }
 
+    dashRenderAll = renderAll;
     renderAll();
   })();
 }
