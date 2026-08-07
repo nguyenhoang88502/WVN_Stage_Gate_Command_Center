@@ -1870,6 +1870,11 @@ function openDrawer(project, step, focusDocCode) {
       var dzRow = TRK.lb_deliverables.find(function(d) { return d.project_id === project.project_id && d.step_key === sk && d.doc_code === code; }) || { project_id: project.project_id, step_key: sk, doc_code: code };
       dz.appendChild(el('br'));
       dz.appendChild(makeClaimButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function(who, role) {}));
+      if (isAdmin()) {
+        dz.appendChild(makeAssignButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() {
+          openDrawer(project, step, code);
+        }));
+      }
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
       dz.ondrop = async e => {
