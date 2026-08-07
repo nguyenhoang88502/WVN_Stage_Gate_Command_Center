@@ -1,0 +1,1677 @@
+﻿#requires -version 3
+<#
+  launcher.ps1 — WVN NPI & ECN Command Center backend.
+
+  A .NET HttpListener serving the static frontend (index.html / styles.css /
+  app.js) and a small JSON API backed entirely by system\config.json and
+  system\tracking\*.csv. Every write is a short-lived, exclusively-locked
+  file operation triggered by one HTTP request — nothing is held open
+  between requests, so multiple users on the same network share can use the
+  tool at once without CSV locking crashes.
+
+  There is no workbook reading here. config.json is authored data (product
+  families, document types, the NPI/ECN step models); system\tracking\*.csv
+  is authored data written by this tool. Both are edited only through the
+  API, never scanned from source trackers.
+#>
+[CmdletBinding()]
+param(
+  [int]$Port = 8080,
+  [switch]$NoBrowser
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+# ============================================================ paths & log ==
+$SystemDir  = $PSScriptRoot
+if (-not $SystemDir) { $SystemDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$RootDir      = Split-Path -Parent $SystemDir
+$ConfigPath   = Join-Path $SystemDir 'config.json'
+$TrackingDir  = Join-Path $SystemDir 'tracking'
+$TemplatesDir = Join-Path $SystemDir 'templates'
+$StagingDir   = Join-Path $SystemDir 'tmp_staging'
+$LogDir       = Join-Path $SystemDir 'logs'
+$LogPath      = Join-Path $LogDir 'launcher.log'
+# Every location the document vault has previously lived in, so a tool folder
+# upgraded in place carries its evidence forward instead of stranding it.
+$LegacyEvidenceDir       = Join-Path $SystemDir 'evidence'                                   # v2.0
+$LegacyEvidenceVaultDir  = Join-Path $RootDir '..\evidence\NPI_EPM_Documents_Control'        # v2.1-v2.4
+$LegacyVaultDir          = Join-Path $RootDir '..\NPI_EPM_Documents_Control'                 # v2.5+
+try { $LegacyEvidenceVaultDir = [System.IO.Path]::GetFullPath($LegacyEvidenceVaultDir) } catch { $LegacyEvidenceVaultDir = '' }
+try { $LegacyVaultDir         = [System.IO.Path]::GetFullPath($LegacyVaultDir)         } catch { $LegacyVaultDir         = '' }
+# The live vault sits outside the app folder entirely — resolved from config
+# once the file has been read, see "document vault" below.
+$EvidenceDir  = $LegacyEvidenceDir
+
+foreach ($d in @($TrackingDir, $TemplatesDir, $LogDir)) {
+  if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+}
+
+# Crash-proof logging: try the primary log, then a fresh timestamped one,
+# then give up quietly. Never let logging itself take the process down.
+$script:LogTarget = $LogPath
+function Write-Log {
+  param([string]$Message, [string]$Level = 'INFO')
+  $line = '[{0}] [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
+  try {
+    Add-Content -LiteralPath $script:LogTarget -Value $line -Encoding UTF8 -ErrorAction Stop
+    return
+  } catch { }
+  try {
+    $fallback = Join-Path $LogDir ('app_fallback_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.log')
+    Add-Content -LiteralPath $fallback -Value $line -Encoding UTF8 -ErrorAction Stop
+    $script:LogTarget = $fallback
+    return
+  } catch { }
+  try { Write-Host $line } catch { }
+}
+
+Write-Log ('Starting. Root=' + $RootDir)
+
+# ============================================================ single run ==
+$mutex = New-Object System.Threading.Mutex($false, 'Global\WVN_NPI_EPM_StageGate_SingleInstance')
+if (-not $mutex.WaitOne(0)) {
+  Write-Log 'Another instance is already running — exiting.' 'WARN'
+  if (-not $NoBrowser) { Start-Process 'http://localhost:8080/' }
+  exit 0
+}
+
+# =========================================================== retry lock ==
+# Exclusive, short-lived file access with a 3-retry / 100ms backoff — matches
+# config.file_system_resilience. Every read-modify-write of a CSV or of
+# config.json goes through this so two simultaneous submits never corrupt
+# either file; the loser just retries a fraction of a second later.
+function Invoke-Locked {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][scriptblock]$Action,
+    [int]$Retries = 3,
+    [int]$DelayMs = 100
+  )
+  $attempt = 0
+  while ($true) {
+    $attempt++
+    $stream = $null
+    try {
+      $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+      $result = & $Action $stream
+      $stream.Close(); $stream = $null
+      return $result
+    } catch [System.IO.IOException] {
+      if ($stream) { try { $stream.Close() } catch { } }
+      if ($attempt -gt $Retries) {
+        Write-Log ("Lock failed after $Retries retries on $Path : " + $_.Exception.Message) 'ERROR'
+        throw
+      }
+      Start-Sleep -Milliseconds $DelayMs
+    } finally {
+      if ($stream) { try { $stream.Close() } catch { } }
+    }
+  }
+}
+
+function Read-AllText { param([System.IO.FileStream]$Stream)
+  $Stream.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
+  $reader = New-Object System.IO.StreamReader($Stream, [System.Text.Encoding]::UTF8, $true, 4096, $true)
+  $text = $reader.ReadToEnd(); $reader.Close(); return $text
+}
+function Write-AllText { param([System.IO.FileStream]$Stream, [string]$Text)
+  $Stream.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
+  $Stream.SetLength(0)
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+  $Stream.Write($bytes, 0, $bytes.Length)
+  $Stream.Flush()
+}
+
+# ================================================================ config ==
+function Get-Config {
+  if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "config.json not found at $ConfigPath" }
+  Invoke-Locked -Path $ConfigPath -Action { param($s) (Read-AllText $s) | ConvertFrom-Json }
+}
+function Save-Config { param($ConfigObj)
+  $json = $ConfigObj | ConvertTo-Json -Depth 12
+  Invoke-Locked -Path $ConfigPath -Action { param($s) Write-AllText $s $json }.GetNewClosure() | Out-Null
+}
+
+# ---- first-launch / self-healing deployment path --------------------------
+try {
+  $cfg = Get-Config
+  $actualRoot = $RootDir
+  $changed = $false
+  if (-not $cfg.system_info.deployment_path) {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $picker = New-Object System.Windows.Forms.FolderBrowserDialog
+    $picker.Description = 'Choose the folder this tool was deployed into (cancel to use the current location).'
+    $picker.SelectedPath = $actualRoot
+    $chosen = $actualRoot
+    try { if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $picker.SelectedPath) { $chosen = $picker.SelectedPath } } catch { }
+    $cfg.system_info.deployment_path = $chosen
+    $changed = $true
+    Write-Log ('First-launch deployment_path set to ' + $chosen)
+  } elseif ($cfg.system_info.deployment_path -ne $actualRoot) {
+    Write-Log ('deployment_path stale (' + $cfg.system_info.deployment_path + ') — self-healing to ' + $actualRoot)
+    $cfg.system_info.deployment_path = $actualRoot
+    $changed = $true
+  }
+  if ($changed) { Save-Config $cfg }
+} catch {
+  Write-Log ('Startup config check failed: ' + $_.Exception.Message) 'ERROR'
+}
+
+# ---- document vault (v2.1) ------------------------------------------------
+# Evidence no longer lives under system\. It sits in a sibling folder of the
+# app root — NPI_EPM_Documents_Control by default — so the controlled documents
+# survive replacing the tool folder, and so a user can browse them in Explorer
+# without wandering into the app's internals.
+try {
+  $cfg = Get-Config
+  $dd = $cfg.deployment_defaults
+  $folderName = if ($dd.evidence_vault_folder_name) { [string]$dd.evidence_vault_folder_name } else { 'NPI_EPM_Documents_Control' }
+  $relative   = if ($dd.evidence_vault_relative_to_root) { [string]$dd.evidence_vault_relative_to_root } else { '..' }
+  $defaultVault = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $RootDir $relative) $folderName))
+
+  $vault = [string]$dd.evidence_vault_path
+  # evidence_vault_root records which app folder that vault path was resolved
+  # FOR. If this copy of the tool is running from somewhere else — moved,
+  # copied, or a second deployment on the same machine — the stored path
+  # belongs to a different install and must not be reused, or two deployments
+  # quietly share one vault. Only a vault resolved for THIS root, whose parent
+  # still exists, is honoured; that keeps a deliberately customised path.
+  $vaultRoot = [string]$dd.evidence_vault_root
+  $reason = ''
+  if (-not $vault) { $reason = 'no vault configured' }
+  elseif ($vaultRoot -ne $RootDir) { $reason = "configured for a different install ($vaultRoot)" }
+  elseif (-not (Test-Path -LiteralPath (Split-Path -Parent $vault))) { $reason = 'parent folder is gone' }
+  if ($reason) {
+    if ($vault) { Write-Log ("Vault path " + $vault + " not used — " + $reason + ". Using " + $defaultVault) 'WARN' }
+    $vault = $defaultVault
+    $cfg.deployment_defaults.evidence_vault_path = $vault
+    $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_vault_root -NotePropertyValue $RootDir -Force
+    Save-Config $cfg
+  }
+  if (-not (Test-Path -LiteralPath $vault)) { New-Item -ItemType Directory -Path $vault -Force | Out-Null }
+  $EvidenceDir = $vault
+  Write-Log ('Document vault: ' + $EvidenceDir)
+
+  # One-time migration out of every location the vault has ever lived in:
+  #   v2.0        system\evidence
+  #   v2.1-v2.4   ..\evidence\NPI_EPM_Documents_Control
+  #   v2.5+       ..\NPI_EPM_Documents_Control
+  # Files keep their existing sub-path. Their old folder layout was
+  # [DocType]\[Family]\[FG]\[Part]; new files use [Model]\[FG]\[DocType]. Old
+  # evidence is deliberately NOT re-shuffled into the new shape — moving files
+  # is safe, rewriting a hierarchy underneath recorded paths is not. Both
+  # layouts coexist and every stored path stays correct.
+  foreach ($legacy in @($LegacyEvidenceDir, $LegacyEvidenceVaultDir, $LegacyVaultDir)) {
+    if (-not $legacy) { continue }
+    if (-not (Test-Path -LiteralPath $legacy)) { continue }
+    if ([System.IO.Path]::GetFullPath($legacy).TrimEnd('\') -eq [System.IO.Path]::GetFullPath($EvidenceDir).TrimEnd('\')) { continue }
+    $stale = @(Get-ChildItem -LiteralPath $legacy -Recurse -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -ne '.gitkeep' })
+    if (-not $stale.Count) { continue }
+    Write-Log ('Migrating ' + $stale.Count + ' file(s) from ' + $legacy + ' into the vault.')
+    $moved = 0
+    foreach ($f in $stale) {
+      $rel = $f.FullName.Substring($legacy.Length).TrimStart('\')
+      $dest = Join-Path $EvidenceDir $rel
+      $destParent = Split-Path -Parent $dest
+      if (-not (Test-Path -LiteralPath $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+      if (Test-Path -LiteralPath $dest) { Write-Log ('  skipped (already in vault): ' + $rel) }
+      else { Move-Item -LiteralPath $f.FullName -Destination $dest -Force; $moved++ }
+    }
+    # lb_deliverables holds absolute paths written before the move; rewrite
+    # them so "Copy path" and the exporter keep working on migrated evidence.
+    if ($moved) {
+      try {
+        $delPath = Join-Path $TrackingDir 'lb_deliverables.csv'
+        if (Test-Path -LiteralPath $delPath) {
+          $from = $legacy; $to = $EvidenceDir
+          Invoke-Locked -Path $delPath -Action {
+            param($s)
+            $t = Read-AllText $s
+            if ($t) { Write-AllText $s ($t.Replace($from, $to)) }
+          }.GetNewClosure() | Out-Null
+        }
+      } catch { Write-Log ('Deliverable path rewrite failed: ' + $_.Exception.Message) 'WARN' }
+    }
+  }
+} catch {
+  Write-Log ('Vault resolution failed, using ' + $EvidenceDir + ' — ' + $_.Exception.Message) 'ERROR'
+  if (-not (Test-Path -LiteralPath $EvidenceDir)) { New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null }
+}
+
+# ============================================================ CSV stores ==
+$Stores = [ordered]@{
+  # v2.1 added family_id / target_date at the END on purpose: Read-Store parses
+  # positionally, so appending keeps CSVs written by 2.0 readable.
+  # v2.4 appended certifications (pipe-separated, e.g. "CB|CE-EMC|PSE"). A comma
+  # would have to be quoted on every row; a pipe never collides with a scheme name.
+  # v2.7 appended owner_pic / claimed_by / claimed_utc on lb_gates, lb_deliverables,
+  # lb_sp_issues and lb_issues so the claim engine can persist task ownership.
+  # lb_deliverables also gained custom_doc for model-specific document uploads.
+  lb_projects     = @('project_id','process','family','fg_id','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family_id','target_date','certifications')
+  lb_gates        = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','warehouse_ready','approved_by','approved_utc','evidence_cited','notes','updated_utc','owner_pic','claimed_by','claimed_utc')
+  # v2.2 appended kind..link_url. `kind` is 'file' for an uploaded document and
+  # 'link' for a UNC path or URL that lives somewhere else and is only cited.
+  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc')
+  lb_doc_comments = @('comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc')
+  # v2.3 — shared with the standalone WVN_Ticketing_Center, which points at
+  # this same tracking folder. lb_ticket_events is append-only by convention:
+  # nothing in either app ever updates or deletes a row in it.
+  lb_tickets      = @('ticket_id','project_id','step_key','doc_code','title','description','requested_by','requested_dept','requested_utc','assigned_dept','assigned_to','priority','due_date','status','fulfilled_by','fulfilled_utc','deliverable_id','sha256','close_note')
+  lb_ticket_events= @('event_id','ticket_id','timestamp_utc','actor','actor_role','action','detail','sha256')
+  lb_sp_issues    = @('sp_id','project_id','title','description','raised_by','raised_utc','owner_dept','owner_pic','due_date','status','action_taken','remarks','attachment_name','attachment_path','last_message_by','last_message_utc','last_message','priority','assigned_dept','claimed_by','claimed_utc')
+  lb_approvals    = @('approval_id','project_id','step_key','deliverable_id','approved_by','approved_utc','approval_type','evidence_count','comments')
+  lb_bypasses     = @('bypass_id','project_id','step_key','authorised_by','authorised_utc','reason','mitigation','supersede_by','closed_utc','closed_note')
+  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc')
+  lb_ppap         = @('ppap_id','project_id','part_number','customer','doc_code','required','submitted_utc','customer_approved','customer_approved_utc','notes')
+  lb_warehouse    = @('wh_id','project_id','step_key','area','kind','status','cleared_by','cleared_date','reference','notes')
+  lb_mwer         = @('mwer_id','project_id','step_key','meeting_type','meeting_date','attendees','summary','evidence_file','evidence_body','decision','conditions','logged_by','logged_utc')
+  lb_d365         = @('d365_id','project_id','step_key','area','entered_by','entered_date','reference','notes','logged_utc')
+  lb_audit        = @('log_id','timestamp_utc','user','action','project_id','object_type','object_id','change_from','change_to','detail','result')
+}
+$IdPrefix = @{
+  lb_gates='GATE'; lb_deliverables='DEL'; lb_approvals='APR'; lb_bypasses='BYP'; lb_issues='LFI';
+  lb_ppap='PPAP'; lb_warehouse='WH'; lb_mwer='MWER'; lb_d365='D365'; lb_audit='LOG'; lb_doc_comments='CMT'
+  lb_tickets='TKT'; lb_ticket_events='EVT'; lb_sp_issues='SPI'
+}
+
+function CsvPath { param([string]$Store) Join-Path $TrackingDir ($Store + '.csv') }
+
+function ConvertTo-CsvCell { param([string]$Value)
+  $v = if ($null -eq $Value) { '' } else { [string]$Value }
+  $v = $v -replace "`r?`n", ' '
+  if ($v -match '[",]') { return '"' + ($v -replace '"', '""') + '"' }
+  return $v
+}
+function ConvertFrom-CsvLine { param([string]$Line)
+  $out = New-Object System.Collections.Generic.List[string]
+  $f = ''; $q = $false
+  for ($i = 0; $i -lt $Line.Length; $i++) {
+    $c = $Line[$i]
+    if ($q) {
+      if ($c -eq '"') { if ($i + 1 -lt $Line.Length -and $Line[$i+1] -eq '"') { $f += '"'; $i++ } else { $q = $false } }
+      else { $f += $c }
+    } elseif ($c -eq '"') { $q = $true }
+    elseif ($c -eq ',') { $out.Add($f); $f = '' }
+    else { $f += $c }
+  }
+  $out.Add($f)
+  return ,$out
+}
+
+# Full-document CSV reader (v3.1, for /api/projects/batch).
+#
+# ConvertFrom-CsvLine above is deliberately line-at-a-time because the stores it
+# serves never contain embedded newlines - ConvertTo-CsvCell strips them on the
+# way in. A file a user hand-edits in Excel has no such guarantee: a "notes"
+# cell with Alt+Enter in it becomes a quoted field spanning two physical lines,
+# and splitting on newline first would tear that record in half and shift every
+# column after it. This walks the whole text once so a newline inside quotes is
+# just another character.
+#
+# Handles: quoted fields, commas and newlines inside quotes, "" escaped quotes,
+# CRLF and LF, a trailing newline, and blank lines (skipped).
+# Returns a List of List[string] - one entry per record.
+function ConvertFrom-CsvText { param([string]$Text)
+  $records = New-Object System.Collections.Generic.List[object]
+  if ($null -eq $Text) { return ,$records }
+  $Text = $Text -replace "^﻿", ''      # strip a UTF-8 BOM if Excel added one
+  $row = New-Object System.Collections.Generic.List[string]
+  $field = New-Object System.Text.StringBuilder
+  $inQuotes = $false
+  $i = 0
+  $len = $Text.Length
+  while ($i -lt $len) {
+    $c = $Text[$i]
+    if ($inQuotes) {
+      if ($c -eq '"') {
+        if ($i + 1 -lt $len -and $Text[$i + 1] -eq '"') { [void]$field.Append('"'); $i++ }
+        else { $inQuotes = $false }
+      } else { [void]$field.Append($c) }
+    }
+    elseif ($c -eq '"') { $inQuotes = $true }
+    elseif ($c -eq ',') { $row.Add($field.ToString()); [void]$field.Clear() }
+    elseif ($c -eq "`r") { }                # swallow CR; the LF ends the record
+    elseif ($c -eq "`n") {
+      $row.Add($field.ToString()); [void]$field.Clear()
+      # A record is kept only when it has real content, so a trailing newline
+      # and blank separator lines never produce phantom all-empty records.
+      if ($row.Count -gt 1 -or ($row.Count -eq 1 -and $row[0] -ne '')) { $records.Add($row) }
+      $row = New-Object System.Collections.Generic.List[string]
+    }
+    else { [void]$field.Append($c) }
+    $i++
+  }
+  # final record, for a file that does not end in a newline
+  $row.Add($field.ToString())
+  if ($row.Count -gt 1 -or ($row.Count -eq 1 -and $row[0] -ne '')) { $records.Add($row) }
+  return ,$records
+}
+
+# Appends MANY rows under a SINGLE exclusive lock (v3.1, batch import).
+#
+# Calling Add-StoreRow in a loop would take and release the lock once per row,
+# so a concurrent writer could interleave between rows and a failure halfway
+# through would leave a partially-imported file. This reads, assigns every ID,
+# appends every row and writes back exactly once - so the import is all-or-
+# nothing and IDs cannot collide with each other or with a concurrent submit.
+#
+# $Rows is an array of hashtables. Returns the assigned ID strings in order.
+function Add-StoreRowsBatch {
+  param([string]$Store, [object[]]$Rows, [string]$IdField, [hashtable]$IdCandidates)
+  $path = CsvPath $Store
+  $cols = $Stores[$Store]
+  Invoke-Locked -Path $path -Action {
+    param($s)
+    $text = Read-AllText $s
+    $lines = if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } } else { @() }
+    $existing = New-Object System.Collections.Generic.List[object]
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+      $vals = ConvertFrom-CsvLine $lines[$i]
+      $o = @{}
+      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
+      $existing.Add($o)
+    }
+    $taken = @{}
+    foreach ($r in $existing) { $taken[([string]$r[$IdField]).ToUpperInvariant()] = $true }
+
+    # plain array, not List[string] - see the note in the batch route: a
+    # generic List round-tripped through @() breaks ConvertTo-Json on PS 5.1,
+    # and this value goes straight into the JSON response.
+    $assigned = @()
+    foreach ($row in $Rows) {
+      $cand = [string]$IdCandidates[[string]$row['__key']]
+      $try = $cand; $n = 1
+      while ($taken.ContainsKey($try.ToUpperInvariant())) { $n++; $try = $cand + '-' + $n }
+      $taken[$try.ToUpperInvariant()] = $true
+      $row[$IdField] = $try
+      $assigned += $try
+      $full = @{}
+      foreach ($c in $cols) { $full[$c] = if ($row.ContainsKey($c) -and $null -ne $row[$c]) { [string]$row[$c] } else { '' } }
+      $existing.Add($full)
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append(($cols -join ',')); [void]$sb.Append("`r`n")
+    foreach ($r in $existing) {
+      $cells = foreach ($c in $cols) { ConvertTo-CsvCell $r[$c] }
+      [void]$sb.Append(($cells -join ',')); [void]$sb.Append("`r`n")
+    }
+    Write-AllText $s $sb.ToString()
+    return ,$assigned
+  }.GetNewClosure()
+}
+
+# Reads a store; creates an empty header-only file the first time it's touched.
+function Read-Store { param([string]$Store)
+  $path = CsvPath $Store
+  $cols = $Stores[$Store]
+  if (-not (Test-Path -LiteralPath $path)) { return @() }
+  Invoke-Locked -Path $path -Action {
+    param($s)
+    $text = Read-AllText $s
+    if (-not $text) { return @() }
+    $lines = $text -split "`r?`n" | Where-Object { $_ -ne '' }
+    if ($lines.Count -le 1) { return @() }
+    $rows = New-Object System.Collections.Generic.List[object]
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+      $vals = ConvertFrom-CsvLine $lines[$i]
+      $o = [ordered]@{}
+      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
+      $rows.Add([pscustomobject]$o)
+    }
+    return ,$rows
+  }
+}
+
+# Appends one row under an exclusive lock, assigning its ID inside the same
+# critical section so two concurrent submits can never collide. $IdPrefixOverride
+# lets callers key the sequence by something other than the store's fixed
+# prefix (projects are NPI-#### / ECN-#### depending on process).
+# $IdCandidate (v2.1) takes a human-meaningful ID such as NPI-9649LP and makes
+# it unique inside the lock by appending -2, -3 ... on collision.
+function Add-StoreRow {
+  param([string]$Store, [hashtable]$Row, [string]$IdField, [string]$IdPrefixOverride, [string]$IdCandidate)
+  $path = CsvPath $Store
+  $cols = $Stores[$Store]
+  Invoke-Locked -Path $path -Action {
+    param($s)
+    $text = Read-AllText $s
+    $existed = [bool]$text
+    $lines = if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } } else { @() }
+    $rows = New-Object System.Collections.Generic.List[object]
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+      $vals = ConvertFrom-CsvLine $lines[$i]
+      $o = @{}
+      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
+      $rows.Add($o)
+    }
+    if ($IdField -and -not $Row[$IdField]) {
+      if ($IdCandidate) {
+        $taken = @{}
+        foreach ($r in $rows) { $taken[([string]$r[$IdField]).ToUpperInvariant()] = $true }
+        $try = $IdCandidate; $n = 1
+        while ($taken.ContainsKey($try.ToUpperInvariant())) { $n++; $try = $IdCandidate + '-' + $n }
+        $Row[$IdField] = $try
+      } else {
+        $prefix = if ($IdPrefixOverride) { $IdPrefixOverride } else { $IdPrefix[$Store] }
+        $max = 0
+        foreach ($r in $rows) {
+          $id = [string]$r[$IdField]
+          if ($id -match [regex]::Escape($prefix + '-') + '(\d+)$') { $n = [int]$Matches[1]; if ($n -gt $max) { $max = $n } }
+        }
+        $Row[$IdField] = '{0}-{1:D4}' -f $prefix, ($max + 1)
+      }
+    }
+    $full = @{}
+    foreach ($c in $cols) { $full[$c] = if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { [string]$Row[$c] } else { '' } }
+    $rows.Add($full)
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append(($cols -join ','))
+    [void]$sb.Append("`r`n")
+    foreach ($r in $rows) {
+      $cells = foreach ($c in $cols) { ConvertTo-CsvCell $r[$c] }
+      [void]$sb.Append(($cells -join ','))
+      [void]$sb.Append("`r`n")
+    }
+    Write-AllText $s $sb.ToString()
+    return [pscustomobject]$full
+  }
+}
+
+# Upsert-by-key for stores where the same logical record is touched
+# repeatedly (gate status, trial quantities). Matches on $KeyFields (all
+# must be equal); replaces the row if found, else appends via Add-StoreRow.
+function Set-StoreRow {
+  param([string]$Store, [hashtable]$Row, [string[]]$KeyFields, [string]$IdField)
+  $path = CsvPath $Store
+  $cols = $Stores[$Store]
+  Invoke-Locked -Path $path -Action {
+    param($s)
+    $text = Read-AllText $s
+    $lines = if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } } else { @() }
+    $rows = New-Object System.Collections.Generic.List[object]
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+      $vals = ConvertFrom-CsvLine $lines[$i]
+      $o = @{}
+      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
+      $rows.Add($o)
+    }
+    $idx = -1
+    for ($i = 0; $i -lt $rows.Count; $i++) {
+      $match = $true
+      foreach ($k in $KeyFields) { if ([string]$rows[$i][$k] -ne [string]$Row[$k]) { $match = $false; break } }
+      if ($match) { $idx = $i; break }
+    }
+    if ($idx -ge 0) {
+      foreach ($c in $cols) { if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { $rows[$idx][$c] = [string]$Row[$c] } }
+      $full = $rows[$idx]
+    } else {
+      if ($IdField -and -not $Row[$IdField]) {
+        $prefix = $IdPrefix[$Store]
+        $max = 0
+        foreach ($r in $rows) {
+          $id = [string]$r[$IdField]
+          if ($id -match [regex]::Escape($prefix + '-') + '(\d+)$') { $n = [int]$Matches[1]; if ($n -gt $max) { $max = $n } }
+        }
+        $Row[$IdField] = '{0}-{1:D4}' -f $prefix, ($max + 1)
+      }
+      $full = @{}
+      foreach ($c in $cols) { $full[$c] = if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { [string]$Row[$c] } else { '' } }
+      $rows.Add($full)
+    }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append(($cols -join ','))
+    [void]$sb.Append("`r`n")
+    foreach ($r in $rows) {
+      $cells = foreach ($c in $cols) { ConvertTo-CsvCell $r[$c] }
+      [void]$sb.Append(($cells -join ','))
+      [void]$sb.Append("`r`n")
+    }
+    Write-AllText $s $sb.ToString()
+    return [pscustomobject]$full
+  }
+}
+
+function Add-Audit { param([string]$User, [string]$Action, [string]$ProjectId, [string]$ObjType, [string]$ObjId, [string]$From, [string]$To, [string]$Detail)
+  Add-StoreRow -Store 'lb_audit' -IdField 'log_id' -Row @{
+    timestamp_utc = (Get-Date).ToUniversalTime().ToString('o'); user = $User; action = $Action
+    project_id = $ProjectId; object_type = $ObjType; object_id = $ObjId
+    change_from = $From; change_to = $To; detail = $Detail; result = 'Success'
+  } | Out-Null
+}
+
+# ============================================================== evidence ==
+function Get-SafeName { param([string]$Name)
+  $clean = $Name
+  foreach ($c in [System.IO.Path]::GetInvalidFileNameChars()) { $clean = $clean.Replace($c, '_') }
+  return ($clean -replace '\s+', ' ').Trim()
+}
+
+# ------------------------------------------------- standardised file names --
+# Two shapes, both taken from real WVN filing practice:
+#   DWG   PD[WVN]_01 [Description]_[WNB].[ext]
+#         e.g. PD1010523_01 Motor with PCBA_3025015.pdf
+#   other [DocType]_[Model]_[WVN]_[WNB]_[Description].[ext]
+#         e.g. PFMEA_CL-CORDLESS_1010523_3025015_Process_FMEA_Report.xlsx
+# The drawing form keeps its spaces because that is how Design actually files
+# them; everything else uses underscores. Empty parts collapse rather than
+# leaving a run of separators behind.
+function ConvertTo-NamePart {
+  param([string]$Value, [switch]$KeepSpaces)
+  $v = if ($null -eq $Value) { '' } else { [string]$Value }
+  foreach ($c in [System.IO.Path]::GetInvalidFileNameChars()) { $v = $v.Replace($c, '_') }
+  $v = $v -replace '[\\/:\*\?"<>\|]', '_'
+  if ($KeepSpaces) { $v = ($v -replace '\s+', ' ').Trim() }
+  else { $v = ($v -replace '\s+', '_') }
+  $v = $v -replace '_{2,}', '_'
+  return $v.Trim('_', ' ', '.')
+}
+
+function Get-StandardFileName {
+  param([string]$DocType, [string]$Model, [string]$WvnId, [string]$WnbId, [string]$Description, [string]$OriginalName)
+  $ext = ([System.IO.Path]::GetExtension($OriginalName)).ToLowerInvariant()
+  # fall back to the original stem when no description was given, so a file is
+  # never reduced to just its codes
+  if (-not $Description) { $Description = [System.IO.Path]::GetFileNameWithoutExtension($OriginalName) }
+
+  # The drawing pattern is only meaningful with a WVN code — without one it
+  # degenerates to "PD_01 name.pdf", which reads like a real part code and is
+  # not. Fall through to the generic shape instead of minting a fake one.
+  if ($DocType -eq 'DWG' -and (ConvertTo-NamePart $WvnId)) {
+    $wvn  = ConvertTo-NamePart $WvnId
+    $wnb  = ConvertTo-NamePart $WnbId
+    $desc = ConvertTo-NamePart $Description -KeepSpaces
+    # Build from non-empty suffix segments, each carrying its own separator so
+    # every combination of blank inputs is provably safe — no orphaned space,
+    # no dangling underscore, no double separator.
+    $name = 'PD' + $wvn + '_01'
+    $suffix = @()
+    if ($desc) { $suffix += [pscustomobject]@{ text = $desc; sep = ' ' } }
+    if ($wnb)  { $suffix += [pscustomobject]@{ text = $wnb;  sep = '_' } }
+    foreach ($part in $suffix) { $name += $part.sep + $part.text }
+    return $name + $ext
+  }
+
+  $parts = @($DocType, $Model, $WvnId, $WnbId, $Description) |
+           ForEach-Object { ConvertTo-NamePart $_ } |
+           Where-Object { $_ }
+  if (-not $parts.Count) { return (ConvertTo-NamePart $OriginalName) + $ext }
+  # ConvertTo-NamePart already trims '_', ' ', '.' from every part and
+  # collapses internal runs of underscores, so the join can never produce a
+  # leading/trailing separator or a double underscore. The outer Trim is a
+  # belt-and-suspenders guard against a single-element array edge case.
+  return (($parts -join '_').Trim('_', ' ', '.')) + $ext
+}
+
+function Save-Evidence {
+  param([string]$DocType, [string]$Family, [string]$FgId, [string]$PartId, [string]$FileName, [byte[]]$Bytes)
+  # v2.4 hierarchy: [Model]\[FG_ID]\[DocType]\[file] — you browse to a product,
+  # then a variant, then a kind of document, which is how people actually look
+  # for one. Any blank level is dropped rather than leaving an empty folder or
+  # a doubled slash, so a project with no FG number still files cleanly - which
+  # is exactly what every new filing does since v3.5: FgId is never populated
+  # any more (projects are tracked by model/family only), so it collapses out
+  # and new evidence lands at [Model]\[DocType]\[file].
+  # PartId, when given, sits one level below DocType; it is absent from the
+  # stated pattern because it is almost always blank.
+  $levels = @($Family, $FgId, $DocType, $PartId) |
+            ForEach-Object { if ($null -eq $_) { '' } else { (Get-SafeName ([string]$_)) } } |
+            Where-Object { $_ -ne '' }
+  $destDir = (@($EvidenceDir) + $levels) -join '\'
+  if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+
+  $safeFile = Get-SafeName $FileName
+  $ext = [System.IO.Path]::GetExtension($safeFile)
+  $base = [System.IO.Path]::GetFileNameWithoutExtension($safeFile)
+  $destPath = Join-Path $destDir $safeFile
+
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $newHash = ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant()
+  $sha.Dispose()
+
+  $duplicate = $false
+  if (Test-Path -LiteralPath $destPath) {
+    $existingBytes = [System.IO.File]::ReadAllBytes($destPath)
+    $sha2 = [System.Security.Cryptography.SHA256]::Create()
+    $existingHash = ([BitConverter]::ToString($sha2.ComputeHash($existingBytes))).Replace('-', '').ToLowerInvariant()
+    $sha2.Dispose()
+    if ($existingHash -eq $newHash) { $duplicate = $true }
+    else {
+      $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+      $safeFile = $base + '_' + $stamp + $ext
+      $destPath = Join-Path $destDir $safeFile
+    }
+  }
+  if (-not $duplicate) { [System.IO.File]::WriteAllBytes($destPath, $Bytes) }
+
+  # v2.1: the absolute path is what a user pastes into Explorer, so that is what
+  # gets stored; the vault-relative one is only for display.
+  $relPath = $destPath.Substring($EvidenceDir.Length).TrimStart('\')
+  return [pscustomobject]@{ fileName = $safeFile; path = $destPath; relPath = $relPath; sha256 = $newHash; duplicate = $duplicate; bytes = $Bytes.Length }
+}
+
+# ------------------------------------------------------ target date fallback --
+# When the browser sends no manual override, the server computes one from the
+# configured cycle-time baselines. Precedence order:
+#   1. change_types[].cycle_time_days   (matched on class_abcde / type_id)
+#   2. product_families[].typical_lead_time_days  (matched case-insensitively
+#      on family_id, then on sample_fg_ids)
+#   3. empty string  (legitimate — Type A has no baselined cycle time yet)
+# PRF date is parsed defensively; a malformed or missing input yields an empty
+# target, never a crash or a 1-Jan-0001.
+#
+# -Identifier takes the candidates in preference order, because two different
+# fields can name the family: the "Product family" picker holds a real
+# family_id, while "Family ID" holds whatever the user typed — a family_id on
+# some projects, a bare FG number on most. The explicit picker is checked
+# first; the typed value is the fallback. Blank candidates are skipped rather
+# than matched, or a project with no family would match a family whose id
+# happened to be empty.
+# ISO-8601 week helpers, mirroring isoWeek()/weekToDate() in app.js so the
+# server and the browser always agree on what week a date falls in.
+# [System.Globalization.ISOWeek] is .NET Core only - PS 5.1 runs on .NET
+# Framework 4.x - so the arithmetic is done by hand.
+function ConvertTo-IsoWeek {
+  param([datetime]$Date)
+  $d = $Date.Date
+  # The Thursday of a week decides which year the week belongs to, which is
+  # what makes 31 Dec correctly land in week 1 of the following year.
+  $dow = [int]$d.DayOfWeek; if ($dow -eq 0) { $dow = 7 }
+  $thursday = $d.AddDays(4 - $dow)
+  $week = [math]::Floor(($thursday.DayOfYear - 1) / 7) + 1
+  return ('{0:0000}-W{1:00}' -f $thursday.Year, $week)
+}
+function ConvertFrom-IsoWeek {
+  param([string]$Week)     # 'YYYY-Www' -> the Monday of that week
+  if ($Week -notmatch '^(\d{4})-W(\d{2})$') { return $null }
+  $y = [int]$Matches[1]; $w = [int]$Matches[2]
+  # ISO week 1 is the week containing 4 January, by definition.
+  $jan4 = New-Object datetime($y, 1, 4)
+  $dow = [int]$jan4.DayOfWeek; if ($dow -eq 0) { $dow = 7 }
+  return $jan4.AddDays(1 - $dow).AddDays(($w - 1) * 7)
+}
+
+function Get-TargetDate {
+  param([string]$ClassAbcde, [string[]]$Identifier, [string]$PrfDate, $Config)
+  if (-not $PrfDate) { return '' }
+  $PrfDate = $PrfDate.Trim()
+
+  # v3.0 moved every planning field to ISO weeks (type="week"), so this now
+  # receives '2026-W33', not '2026-08-06'. Parsing only yyyy-MM-dd meant every
+  # call returned '' - the server-side target-date fallback had been silently
+  # dead since v3.0, which mattered most for CSV rows that leave target_date
+  # blank and expect the cycle time to fill it in.
+  # Whichever format comes in, the same format goes out.
+  $asWeek = $PrfDate -match '^\d{4}-W\d{2}$'
+  $prf = $null
+  if ($asWeek) {
+    $prf = ConvertFrom-IsoWeek $PrfDate
+  } else {
+    try { $prf = [datetime]::ParseExact($PrfDate, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) } catch { return '' }
+  }
+  if (-not $prf) { return '' }
+
+  # Whole weeks, rounded up - the same [math]::Ceiling(days / 7) the browser's
+  # targetDateFor() applies, so a project registered through the UI and one
+  # imported from CSV land on the same target week.
+  $emit = {
+    param([int]$days)
+    if ($asWeek) { return ConvertTo-IsoWeek $prf.AddDays(7 * [math]::Ceiling($days / 7.0)) }
+    return $prf.AddDays($days).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+  }.GetNewClosure()
+
+  # 1. Change type cycle time
+  $ct = @($Config.change_types | Where-Object { $_.type_id -eq $ClassAbcde })
+  if ($ct.Count -gt 0 -and $null -ne $ct[0].cycle_time_days) {
+    return (& $emit ([int]$ct[0].cycle_time_days))
+  }
+
+  # 2. Product family lead time — match family_id then sample_fg_ids
+  $families = @($Config.product_families)
+  $fam = $null
+  :idloop foreach ($cand in @($Identifier)) {
+    $c = ([string]$cand).Trim()
+    if (-not $c) { continue }
+    foreach ($pf in $families) {
+      if (([string]$pf.family_id).Equals($c, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $fam = $pf; break idloop
+      }
+    }
+    foreach ($pf in $families) {
+      foreach ($id in @($pf.sample_fg_ids)) {
+        if (([string]$id).Equals($c, [System.StringComparison]::OrdinalIgnoreCase)) {
+          $fam = $pf; break idloop
+        }
+      }
+    }
+  }
+  if ($fam -and $null -ne $fam.typical_lead_time_days) {
+    return (& $emit ([int]$fam.typical_lead_time_days))
+  }
+
+  # 3. No baseline configured — empty is the honest answer
+  return ''
+}
+
+# ================================================================== HTTP ==
+function New-JsonResponse {
+  param([System.Net.HttpListenerResponse]$Response, [int]$StatusCode, $Body)
+  $json = $Body | ConvertTo-Json -Depth 12 -Compress
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+  $Response.StatusCode = $StatusCode
+  $Response.ContentType = 'application/json; charset=utf-8'
+  $Response.ContentLength64 = $bytes.Length
+  $Response.OutputStream.Write($bytes, 0, $bytes.Length)
+  # Flush before Close so the bytes are handed to http.sys while this thread is
+  # still alive. Close() alone is enough for a server that keeps running, but
+  # /api/shutdown terminates the process immediately afterwards - without the
+  # explicit flush the client can see a dropped socket instead of the 200.
+  $Response.OutputStream.Flush()
+  $Response.OutputStream.Close()
+}
+function New-FileResponse {
+  param([System.Net.HttpListenerResponse]$Response, [string]$Path, [string]$ContentType)
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $Response.StatusCode = 200
+  $Response.ContentType = $ContentType
+  $Response.ContentLength64 = $bytes.Length
+  $Response.OutputStream.Write($bytes, 0, $bytes.Length)
+  $Response.OutputStream.Flush()
+  $Response.OutputStream.Close()
+}
+
+# Shutdown kills the process, so it must never be reachable from another
+# machine. The listener only binds loopback prefixes (localhost, 127.0.0.1,
+# ::1) so remote clients cannot arrive here in the first place, but the check
+# is asserted explicitly rather than inferred from the prefix - a future
+# prefix change must not silently turn this into a remote kill switch.
+#
+# This replaces the v2.4 Origin-authority comparison, which returned 403 for
+# perfectly legitimate local requests whenever the browser's Origin authority
+# and $req.Url.Authority disagreed - which is exactly what happens when the
+# launcher falls back to port 8081/8082, or when a client sends no Origin.
+function Test-LoopbackRequest {
+  param([System.Net.HttpListenerRequest]$Request)
+  try {
+    $ep = $Request.RemoteEndPoint
+    if ($null -eq $ep -or $null -eq $ep.Address) { return $false }
+    $addr = $ep.Address
+    # Covers 127.0.0.0/8 and ::1. An IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)
+    # is not recognised by IsLoopback, so it is unmapped first.
+    if ($addr.IsIPv4MappedToIPv6) { $addr = $addr.MapToIPv4() }
+    return [System.Net.IPAddress]::IsLoopback($addr)
+  } catch { return $false }
+}
+function Read-JsonBody {
+  param([System.Net.HttpListenerRequest]$Request)
+  $reader = New-Object System.IO.StreamReader($Request.InputStream, $Request.ContentEncoding)
+  $text = $reader.ReadToEnd(); $reader.Close()
+  if (-not $text) { return @{} }
+  return $text | ConvertFrom-Json
+}
+function ConvertTo-Hashtable {
+  param($Obj)
+  $h = @{}
+  if ($null -eq $Obj) { return $h }
+  foreach ($p in $Obj.PSObject.Properties) { $h[$p.Name] = $p.Value }
+  return $h
+}
+
+$MimeTypes = @{ '.html'='text/html; charset=utf-8'; '.css'='text/css; charset=utf-8'; '.js'='application/javascript; charset=utf-8'; '.json'='application/json; charset=utf-8' }
+
+function Get-AllTracking {
+  $out = @{}
+  foreach ($store in $Stores.Keys) { $out[$store] = @(Read-Store $store) }
+  return $out
+}
+
+# ---------------------------------------------------------------- server --
+$listener = New-Object System.Net.HttpListener
+$boundPort = $null
+# The parentheses around each arithmetic term are load-bearing. Written as
+# @($Port, $Port + 1, $Port + 2) PowerShell does NOT parse three elements - it
+# parses FIVE: $Port, $Port, +1, $Port, +2, reading the '+' as a unary sign on
+# the following element rather than as addition. The fallback therefore retried
+# 8080 three times and then tried privileged ports 1 and 2, which always fail
+# with "Access is denied" - so the advertised 8080->8081->8082 fallback had
+# never once worked, and a busy 8080 killed the launcher outright.
+$portCandidates = @($Port, ($Port + 1), ($Port + 2))
+foreach ($tryPort in $portCandidates) {
+  try {
+    $listener = New-Object System.Net.HttpListener
+    # HTTP.sys matches a request's Host header against a registered prefix
+    # literally - a request to 127.0.0.1 does not match a "localhost" prefix
+    # and HTTP.sys itself rejects it with a 400 "Invalid Hostname" page before
+    # this script's routing (and Test-LoopbackRequest) ever run. Registering
+    # every loopback form means the app works regardless of which one a
+    # browser, bookmark or script happens to use. All three are still
+    # strictly loopback-only, so "no remote client can arrive here" - the
+    # property Test-LoopbackRequest asserts below - is unchanged.
+    $listener.Prefixes.Add("http://localhost:$tryPort/")
+    $listener.Prefixes.Add("http://127.0.0.1:$tryPort/")
+    try { $listener.Prefixes.Add("http://[::1]:$tryPort/") } catch { }
+    $listener.Start()
+    $boundPort = $tryPort
+    break
+  } catch {
+    Write-Log ("Could not bind port $tryPort : " + $_.Exception.Message) 'WARN'
+  }
+}
+if (-not $boundPort) {
+  Write-Log ('Could not bind any port (' + ($portCandidates -join ', ') + '). Exiting.') 'ERROR'
+  try { $mutex.ReleaseMutex() } catch { }
+  exit 1
+}
+Write-Log ("Listening on http://localhost:$boundPort/")
+if (-not $NoBrowser) { Start-Process ("http://localhost:$boundPort/") }
+
+try {
+  while ($listener.IsListening) {
+    $context = $listener.GetContext()
+    $req = $context.Request
+    $res = $context.Response
+    try {
+      $path = $req.Url.AbsolutePath
+      $method = $req.HttpMethod
+
+      if ($method -eq 'GET' -and ($path -eq '/' -or $path -eq '/index.html')) {
+        New-FileResponse -Response $res -Path (Join-Path $SystemDir 'index.html') -ContentType $MimeTypes['.html']
+      }
+      elseif ($method -eq 'GET' -and $path -match '^/(styles\.css|app\.js)$') {
+        $file = Join-Path $SystemDir $Matches[1]
+        $ext = [System.IO.Path]::GetExtension($file)
+        New-FileResponse -Response $res -Path $file -ContentType $MimeTypes[$ext]
+      }
+      # Vendored Tabler assets (v3.0) — narrow allowlist, same pattern as the
+      # styles.css/app.js route above, not a generic static-file server. Only
+      # the two files index.html actually references are reachable.
+      elseif ($method -eq 'GET' -and $path -match '^/vendor/tabler/(css/tabler\.min\.css|js/tabler\.min\.js)$') {
+        $file = Join-Path $SystemDir ('vendor\tabler\' + ($Matches[1] -replace '/', '\'))
+        $ext = [System.IO.Path]::GetExtension($file)
+        New-FileResponse -Response $res -Path $file -ContentType $MimeTypes[$ext]
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/data') {
+        $cfg = Get-Config
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{
+          config = $cfg; tracking = (Get-AllTracking)
+          paths = @{ root = $RootDir; vault = $EvidenceDir; templates = $TemplatesDir }
+        }
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/config') {
+        New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/family') {
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        $list = @($cfg.product_families)
+        if ($body.op -eq 'add') {
+          $list = @($list | Where-Object { $_.family_id -ne $body.family.family_id }) + ,$body.family
+          $cfg.product_families = $list
+          Save-Config $cfg
+          Add-Audit -User $body.user -Action ('Config_Family_' + $body.op) -ProjectId '' -ObjType 'ProductFamily' -ObjId $body.family.family_id -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; product_families = $cfg.product_families }
+        } elseif ($body.op -eq 'delete') {
+          $referencingProjects = @(Read-Store 'lb_projects' | Where-Object { [string]$_.family_id -eq $body.family_id })
+          if ($referencingProjects.Count -gt 0) {
+            $refList = ($referencingProjects | ForEach-Object { $_.project_id }) -join ', '
+            New-JsonResponse -Response $res -StatusCode 409 -Body @{
+              error = ("Cannot delete family '" + $body.family_id + "' — it is still referenced by project(s): " + $refList)
+            }
+          } else {
+          $list = @($list | Where-Object { $_.family_id -ne $body.family_id })
+          $cfg.product_families = $list
+          Save-Config $cfg
+          Add-Audit -User $body.user -Action ('Config_Family_' + $body.op) -ProjectId '' -ObjType 'ProductFamily' -ObjId $body.family_id -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; product_families = $cfg.product_families }
+          }
+        } else { throw "unknown op '$($body.op)'" }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/doctype') {
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        $list = @($cfg.document_types)
+        if ($body.op -eq 'add') {
+          $list = @($list | Where-Object { $_.doctype_id -ne $body.doctype.doctype_id }) + ,$body.doctype
+          $cfg.document_types = $list
+          Save-Config $cfg
+          Add-Audit -User $body.user -Action ('Config_DocType_' + $body.op) -ProjectId '' -ObjType 'DocumentType' -ObjId '' -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; document_types = $cfg.document_types }
+        } elseif ($body.op -eq 'delete') {
+          $referencingDocs = @(Read-Store 'lb_deliverables' | Where-Object { [string]$_.doc_code -eq $body.doctype_id })
+          if ($referencingDocs.Count -gt 0) {
+            $refProjects = ($referencingDocs | ForEach-Object { $_.project_id } | Select-Object -Unique) -join ', '
+            New-JsonResponse -Response $res -StatusCode 409 -Body @{
+              error = ("Cannot delete document type '" + $body.doctype_id + "' — it is still referenced by " + $referencingDocs.Count + " deliverable(s) in project(s): " + $refProjects)
+            }
+          } else {
+          $list = @($list | Where-Object { $_.doctype_id -ne $body.doctype_id })
+          $cfg.document_types = $list
+          Save-Config $cfg
+          Add-Audit -User $body.user -Action ('Config_DocType_' + $body.op) -ProjectId '' -ObjType 'DocumentType' -ObjId '' -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; document_types = $cfg.document_types }
+          }
+        } else { throw "unknown op '$($body.op)'" }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/issue-headers') {
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        # [ordered], not ConvertTo-Hashtable's plain @{} — the family/doctype
+        # list routes use that helper because array order doesn't matter there,
+        # but this map's key order IS the CSV column order for the template and
+        # export, and a plain hashtable does not survive a JSON round trip with
+        # its insertion order intact. $body.headers is itself already ordered
+        # (Read-JsonBody -> ConvertFrom-Json preserves source order), so just
+        # walk its properties in that order.
+        $ordered = [ordered]@{}
+        foreach ($p in $body.headers.PSObject.Properties) { $ordered[$p.Name] = [string]$p.Value }
+        $cfg.issue_tracker_headers = $ordered
+        Save-Config $cfg
+        Add-Audit -User $body.user -Action 'Config_IssueHeaders_Update' -ProjectId '' -ObjType 'Config' -ObjId 'issue_tracker_headers' -From '' -To '' -Detail ($body | ConvertTo-Json -Compress)
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; issue_tracker_headers = $cfg.issue_tracker_headers }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/changetypes') {
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        $incoming = @($body.change_types)
+        $errors = @()
+
+        # Build step-id sets for validation
+        $npiStepIds = @{}
+        foreach ($s in @($cfg.npi_workflow.steps)) { $npiStepIds[( [int]$s.step_id)] = $true }
+        $ecnStepIds = @{}
+        foreach ($s in @($cfg.ecn_workflow.steps)) { $ecnStepIds[( [int]$s.step_id)] = $true }
+
+        # Validate
+        $seenTypes = @{}
+        for ($i = 0; $i -lt $incoming.Count; $i++) {
+          $t = $incoming[$i]
+          $tid = [string]$t.type_id
+          if (-not $tid) { $errors += @{ index = $i; field = 'type_id'; msg = 'type_id is required' }; continue }
+          if ($seenTypes.ContainsKey($tid.ToUpperInvariant())) {
+            $errors += @{ index = $i; field = 'type_id'; msg = ("type_id '" + $tid + "' appears more than once") }; continue
+          }
+          $seenTypes[$tid.ToUpperInvariant()] = $true
+
+          # cycle_time_days: must be null or a non-negative integer
+          $ct = $t.cycle_time_days
+          if ($null -ne $ct) {
+            $ctVal = $null
+            if (-not [int]::TryParse([string]$ct, [ref]$ctVal) -or $ctVal -lt 0) {
+              $errors += @{ index = $i; field = 'cycle_time_days'; msg = ("cycle_time_days must be a non-negative integer or null (got '" + [string]$ct + "')") }
+            }
+          }
+
+          # Validate npi_steps
+          foreach ($sid in @($t.npi_steps)) {
+            if (-not $npiStepIds.ContainsKey([int]$sid)) {
+              $errors += @{ index = $i; field = 'npi_steps'; msg = ("step " + [string]$sid + " does not exist in the NPI workflow") }
+            }
+          }
+
+          # Validate ecn_steps
+          foreach ($sid in @($t.ecn_steps)) {
+            if (-not $ecnStepIds.ContainsKey([int]$sid)) {
+              $errors += @{ index = $i; field = 'ecn_steps'; msg = ("step " + [string]$sid + " does not exist in the ECN workflow") }
+            }
+          }
+        }
+
+        if ($errors.Count -gt 0) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{
+            error = 'Validation failed'; validation_errors = @($errors)
+          }
+        } else {
+        # v2.7 — guard against deleting a change type still referenced by projects
+        $currentTypeIds = @(@($cfg.change_types) | ForEach-Object { [string]$_.type_id })
+        $incomingTypeIds = @(@($incoming) | ForEach-Object { [string]$_.type_id })
+        $removedTypeIds = @($currentTypeIds | Where-Object { $_ -notin $incomingTypeIds })
+        if ($removedTypeIds.Count -gt 0) {
+          $allProjects = @(Read-Store 'lb_projects')
+          $conflictMsgs = @()
+          foreach ($tid in $removedTypeIds) {
+            $refs = @($allProjects | Where-Object { [string]$_.class_abcde -eq $tid })
+            if ($refs.Count -gt 0) {
+              $refList = ($refs | ForEach-Object { $_.project_id }) -join ', '
+              $conflictMsgs += ("Cannot delete change type '" + $tid + "' — it is still referenced by project(s): " + $refList)
+            }
+          }
+          if ($conflictMsgs.Count -gt 0) {
+            New-JsonResponse -Response $res -StatusCode 409 -Body @{
+              error = ($conflictMsgs -join '; ')
+            }
+          } else {
+            $cfg.change_types = $incoming
+            Save-Config $cfg
+            Add-Audit -User $body.user -Action 'Config_ChangeTypes_Update' -ProjectId '' -ObjType 'Config' -ObjId 'change_types' -From '' -To '' -Detail ($incoming.Count.ToString() + ' type(s) saved')
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; change_types = $cfg.change_types }
+          }
+        } else {
+          $cfg.change_types = $incoming
+          Save-Config $cfg
+          Add-Audit -User $body.user -Action 'Config_ChangeTypes_Update' -ProjectId '' -ObjType 'Config' -ObjId 'change_types' -From '' -To '' -Detail ($incoming.Count.ToString() + ' type(s) saved')
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; change_types = $cfg.change_types }
+        }
+        }   # end else (valid)
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/projects') {
+        $body = Read-JsonBody -Request $req
+        $now = (Get-Date).ToUniversalTime().ToString('o')
+        # v2.1 ID format: [NPI|ECN]-[Family_ID], e.g. NPI-9649LP, ECN-5612.
+        # Whatever the user typed as the family identifier IS the readable half.
+        $famId = ([string]$body.family_id).Trim()
+        if (-not $famId) { throw 'A Family ID is required — it forms the project ID.' }
+        $idPart = ($famId.ToUpperInvariant() -replace '[^A-Z0-9\.\-_]', '')
+        if (-not $idPart) { throw "Family ID '$famId' has no usable characters for an ID." }
+        $candidate = ([string]$body.process) + '-' + $idPart
+
+        # certifications arrive as an array from the browser; store them flat
+        $certs = ''
+        if ($body.certifications) { $certs = (@($body.certifications) | Where-Object { $_ }) -join '|' }
+
+        # Target date: honour a manual override, otherwise compute from the
+        # configured cycle-time baselines server-side so the stored date is
+        # always authoritative regardless of what the browser sends.
+        $target_date = ([string]$body.target_date).Trim()
+        if (-not $target_date) {
+          $target_date = Get-TargetDate -ClassAbcde $body.class_abcde `
+                                        -Identifier @($body.family, $famId) `
+                                        -PrfDate $body.prf_date -Config (Get-Config)
+        }
+
+        $row = @{
+          process = $body.process; family = $body.family; family_id = $famId; fg_id = ''
+          class_abcde = $body.class_abcde; target_date = $target_date; certifications = $certs
+          prf_date = $body.prf_date; market_manager = $body.market_manager; country = $body.country
+          customer_number = $body.customer_number; status = 'Active'; created_by = $body.created_by
+          created_utc = $now; updated_utc = $now; notes = $body.notes
+        }
+        $saved = Add-StoreRow -Store 'lb_projects' -IdField 'project_id' -IdCandidate $candidate -Row $row
+        Add-Audit -User $body.created_by -Action 'Create_Project' -ProjectId $saved.project_id -ObjType 'Project' -ObjId $saved.project_id -From '' -To 'Active' -Detail ('Type ' + $body.class_abcde + ' · target ' + $target_date)
+        New-JsonResponse -Response $res -StatusCode 200 -Body $saved
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/projects/batch') {
+        # Batch project registration (v3.1). Same field semantics and the same
+        # project-ID rule as POST /api/projects, but every row is validated up
+        # front and the accepted set is written in ONE locked transaction.
+        #
+        # Deliberately stricter than the single-project route in one respect:
+        # when a candidate ID already exists, the single route quietly appends
+        # -2/-3 to make it unique. In a bulk import that silently manufactures
+        # NPI-9649LP-2 from what is almost always a duplicated spreadsheet row,
+        # so here it is a rejection instead. Uniqueness suffixing still exists
+        # in Add-StoreRowsBatch purely as a last-resort race guard.
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        $csvText = [string]$body.csv
+        $EXPECTED = @('process','family_id','class_abcde','family','prf_date',
+                      'target_date','market_manager','country','customer_number','notes','certifications')
+
+        $records = ConvertFrom-CsvText $csvText
+
+        # Validation failures are collected into $fatal and answered in the else
+        # branch below. They must NOT use `return`: this handler runs at script
+        # scope inside the request loop, where `return` exits the entire script -
+        # it runs the outer finally, stops the listener and kills the server.
+        # An early-exit here would mean "upload a CSV with a missing column" is
+        # a remote shutdown.
+        $fatal = $null
+        $header = @(); $idx = @{}
+        if ($records.Count -lt 1) {
+          $fatal = 'The CSV is empty.'
+        } else {
+          $headerCells = $records[0]
+          foreach ($h in $headerCells) { $header += ([string]$h).Trim().ToLowerInvariant() }
+          $missing = @($EXPECTED | Where-Object { $header -notcontains $_ })
+          if ($missing.Count) {
+            $fatal = ('The CSV is missing required column(s): ' + ($missing -join ', ') +
+                      '. Use the Download CSV Template button to get the correct header row.')
+          }
+        }
+        if ($fatal) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = $fatal }
+        } else {
+        for ($h = 0; $h -lt $header.Count; $h++) { if (-not $idx.ContainsKey($header[$h])) { $idx[$header[$h]] = $h } }
+
+        # --- lookups for validation -------------------------------------------
+        $validClasses = @{}
+        foreach ($t in @($cfg.change_types)) { $validClasses[([string]$t.type_id).ToUpperInvariant()] = $t }
+        $famById = @{}; $famByName = @{}
+        foreach ($f in @($cfg.product_families)) {
+          $famById[([string]$f.family_id).ToUpperInvariant()] = $f
+          $famByName[([string]$f.family_name).Trim().ToLowerInvariant()] = $f
+        }
+        $existingIds = @{}
+        foreach ($p in @(Read-Store 'lb_projects')) { $existingIds[([string]$p.project_id).ToUpperInvariant()] = $true }
+
+        $now = (Get-Date).ToUniversalTime().ToString('o')
+        # Plain arrays, NOT List[object]: wrapping a List[object] of hashtables
+        # in @() yields a collection ConvertTo-Json cannot serialise under PS
+        # 5.1 - it throws "Argument types do not match" mid-response, after the
+        # rows have already been written. /api/issues/import uses plain arrays
+        # for the same reason; match it.
+        $accepted = @()
+        $idCandidates = @{}
+        $seenInFile = @{}
+        $rejections = @()
+        $total = 0
+
+        for ($r = 1; $r -lt $records.Count; $r++) {
+          $cells = $records[$r]
+          $get = {
+            param($name)
+            $k = $idx[$name]
+            if ($null -eq $k -or $k -ge $cells.Count) { return '' }
+            return ([string]$cells[$k]).Trim()
+          }
+          # A row whose every cell is blank is spreadsheet padding, not an error.
+          $anyContent = $false
+          foreach ($cc in $cells) { if (([string]$cc).Trim() -ne '') { $anyContent = $true; break } }
+          if (-not $anyContent) { continue }
+          # Template sample rows are commented out with a leading '#'. Skipping
+          # them here is what stops "download template, add a row, upload" from
+          # silently registering the example as a real project.
+          if ((& $get 'process').StartsWith('#')) { continue }
+
+          $total++
+          $rowNo = $r + 1          # 1-based including the header, so it matches Excel
+
+          $process = (& $get 'process').ToUpperInvariant()
+          $familyId = & $get 'family_id'
+          $fgId     = & $get 'fg_id'
+          $klass    = (& $get 'class_abcde').ToUpperInvariant()
+          $famRaw   = & $get 'family'
+
+          if ($process -ne 'NPI' -and $process -ne 'ECN') {
+            $rejections += @{ row = $rowNo; reason = ("process must be NPI or ECN (got '" + (& $get 'process') + "')") }; continue
+          }
+          if (-not $klass) {
+            $rejections += @{ row = $rowNo; reason = 'class_abcde is required' }; continue
+          }
+          if (-not $validClasses.ContainsKey($klass)) {
+            $rejections += @{ row = $rowNo; reason = ("class_abcde '" + $klass + "' is not a configured change type (" +
+              ((@($cfg.change_types) | ForEach-Object { $_.type_id }) -join '/') + ")") }; continue
+          }
+          # family_id forms the project ID.
+          $idSeed = $familyId
+          if (-not $idSeed) {
+            $rejections += @{ row = $rowNo; reason = 'family_id is required - it forms the project ID' }; continue
+          }
+          $idPart = ($idSeed.ToUpperInvariant() -replace '[^A-Z0-9\.\-_]', '')
+          if (-not $idPart) {
+            $rejections += @{ row = $rowNo; reason = ("family_id '" + $idSeed + "' has no characters usable in an ID") }; continue
+          }
+          $candidate = $process + '-' + $idPart
+
+          # family is optional, but a value that matches nothing configured is
+          # almost always a typo, so it is surfaced rather than stored as-is.
+          $familyResolved = ''
+          if ($famRaw) {
+            $hit = $null
+            if ($famById.ContainsKey($famRaw.ToUpperInvariant())) { $hit = $famById[$famRaw.ToUpperInvariant()] }
+            elseif ($famByName.ContainsKey($famRaw.ToLowerInvariant())) { $hit = $famByName[$famRaw.ToLowerInvariant()] }
+            else {
+              # tolerate the UI's own "Family Name (FAMILY_ID)" display form
+              $m = [regex]::Match($famRaw, '\(([^)]+)\)\s*$')
+              if ($m.Success -and $famById.ContainsKey($m.Groups[1].Value.Trim().ToUpperInvariant())) {
+                $hit = $famById[$m.Groups[1].Value.Trim().ToUpperInvariant()]
+              }
+            }
+            if (-not $hit) {
+              $rejections += @{ row = $rowNo; reason = ("family '" + $famRaw + "' is not a configured product family") }; continue
+            }
+            $familyResolved = [string]$hit.family_id
+          }
+
+          # Dates accept an ISO week (YYYY-Www, the v3.0 planning format) or a
+          # calendar date (YYYY-MM-DD, what a legacy sheet holds). Blank is fine.
+          $badDate = $null
+          foreach ($dcol in @('prf_date','target_date')) {
+            $dv = & $get $dcol
+            if (-not $dv) { continue }
+            if ($dv -notmatch '^\d{4}-W\d{2}$' -and $dv -notmatch '^\d{4}-\d{2}-\d{2}$') {
+              $badDate = ($dcol + " '" + $dv + "' must be an ISO week (2026-W32) or a date (2026-08-06)"); break
+            }
+            if ($dv -match '^\d{4}-W(\d{2})$' -and ([int]$Matches[1] -lt 1 -or [int]$Matches[1] -gt 53)) {
+              $badDate = ($dcol + " '" + $dv + "' has a week number outside 01-53"); break
+            }
+            if ($dv -match '^\d{4}-\d{2}-\d{2}$') {
+              $parsed = [datetime]::MinValue
+              if (-not [datetime]::TryParseExact($dv, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+                $badDate = ($dcol + " '" + $dv + "' is not a real calendar date"); break
+              }
+            }
+          }
+          if ($badDate) { $rejections += @{ row = $rowNo; reason = $badDate }; continue }
+
+          if ($seenInFile.ContainsKey($candidate.ToUpperInvariant())) {
+            $rejections += @{ row = $rowNo; reason = ("duplicate of row " + $seenInFile[$candidate.ToUpperInvariant()] +
+              " in this file - both produce project ID " + $candidate) }; continue
+          }
+          if ($existingIds.ContainsKey($candidate.ToUpperInvariant())) {
+            $rejections += @{ row = $rowNo; reason = ("project " + $candidate + " already exists - existing projects are never overwritten by an import") }; continue
+          }
+          $seenInFile[$candidate.ToUpperInvariant()] = $rowNo
+
+          $targetDate = & $get 'target_date'
+          if (-not $targetDate) {
+            $targetDate = Get-TargetDate -ClassAbcde $klass -Identifier @($familyResolved, $idSeed) `
+                                         -PrfDate (& $get 'prf_date') -Config $cfg
+          }
+          $certs = ((& $get 'certifications') -split '[|;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join '|'
+
+          $key = [string]$rowNo
+          $idCandidates[$key] = $candidate
+          $accepted += @{
+            __key = $key
+            process = $process; family = $familyResolved; family_id = $familyId; fg_id = ''
+            class_abcde = $klass; target_date = $targetDate; certifications = $certs
+            prf_date = (& $get 'prf_date'); market_manager = (& $get 'market_manager')
+            country = (& $get 'country'); customer_number = (& $get 'customer_number')
+            status = 'Active'; created_by = ([string]$body.user)
+            created_utc = $now; updated_utc = $now; notes = (& $get 'notes')
+          }
+        }
+
+        # --- single locked write for the whole accepted set --------------------
+        $createdIds = @()
+        if ($accepted.Count) {
+          $createdIds = @(Add-StoreRowsBatch -Store 'lb_projects' -Rows $accepted `
+                                             -IdField 'project_id' -IdCandidates $idCandidates)
+          foreach ($newId in $createdIds) {
+            try {
+              Add-Audit -User $body.user -Action 'Create_Project_Batch' -ProjectId $newId `
+                        -ObjType 'Project' -ObjId $newId -From '' -To 'Active' -Detail 'Batch CSV import'
+            } catch { }
+          }
+        }
+        Add-Audit -User $body.user -Action 'Import_Projects_Batch' -ProjectId '' -ObjType 'Project' -ObjId '' `
+                  -From '' -To '' -Detail ("$($accepted.Count) accepted, $($rejections.Count) rejected of $total row(s)")
+        Write-Log ("Batch project import: $($accepted.Count) accepted, $($rejections.Count) rejected of $total row(s)")
+
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{
+          ok = $true; total = $total; accepted = $accepted.Count; rejected = $rejections.Count
+          created_project_ids = $createdIds; rejections = @($rejections)
+        }
+        }   # end else (header validation passed)
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/templates') {
+        $files = @()
+        if (Test-Path -LiteralPath $TemplatesDir) {
+          $files = @(Get-ChildItem -LiteralPath $TemplatesDir -File |
+            Where-Object { $_.Name -notlike '.*' -and $_.Name -notlike '_*' -and $_.Name -notlike '~$*' } |
+            ForEach-Object { @{ name = $_.Name; bytes = $_.Length; modified = $_.LastWriteTime.ToString('yyyy-MM-dd') } })
+        }
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ templates = $files }
+      }
+      elseif ($method -eq 'GET' -and $path -like '/api/templates/*') {
+        # Serve only a plain file name out of system\templates — no directory
+        # component ever reaches the filesystem, so ..\..\ cannot escape.
+        $raw  = [System.Uri]::UnescapeDataString($path.Substring('/api/templates/'.Length))
+        $name = [System.IO.Path]::GetFileName($raw)
+        $file = Join-Path $TemplatesDir $name
+        $full = [System.IO.Path]::GetFullPath($file)
+        if (-not $name -or -not $full.StartsWith([System.IO.Path]::GetFullPath($TemplatesDir), [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
+          New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = "template '$name' not found" }
+        } else {
+          $bytes = [System.IO.File]::ReadAllBytes($full)
+          $res.StatusCode = 200
+          $res.ContentType = 'application/octet-stream'
+          $res.AddHeader('Content-Disposition', 'attachment; filename="' + $name + '"')
+          $res.ContentLength64 = $bytes.Length
+          $res.OutputStream.Write($bytes, 0, $bytes.Length)
+          $res.OutputStream.Close()
+          Write-Log ('Template downloaded: ' + $name)
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/templates/upload') {
+        $body = Read-JsonBody -Request $req
+        $fileName = [string]$body.fileName
+        $contentBase64 = [string]$body.contentBase64
+        $user = [string]$body.user
+        $overwrite = [bool]$body.overwrite
+
+        # ---- extension validation --------------------------------------------------
+        $ext = [System.IO.Path]::GetExtension($fileName).ToLowerInvariant()
+        if ($ext -notin @('.xlsx','.docx','.pdf')) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{
+            error = ("File extension '" + $ext + "' is not accepted. Only .xlsx, .docx and .pdf files are allowed.")
+          }
+        } else {
+        # ---- sanitise filename: strip any directory component, reject path traversal --
+        $safeName = [System.IO.Path]::GetFileName($fileName)
+        if (-not $safeName -or $safeName -ne $fileName) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{
+            error = 'The filename contains directory components. Provide only a plain file name — no folders, no slashes, no drive letters.'
+          }
+        } elseif ($safeName -eq '.' -or $safeName -eq '..') {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{
+            error = 'The filename is not valid.'
+          }
+        } elseif ($safeName -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]+)?$') {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{
+            error = 'This file name is reserved and cannot be used.'
+          }
+        } else {
+        # ---- canonical containment -------------------------------------------------
+        $destPath = Join-Path $TemplatesDir $safeName
+        $full = [System.IO.Path]::GetFullPath($destPath)
+        $rootFull = [System.IO.Path]::GetFullPath($TemplatesDir)
+        if (-not $full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{
+            error = 'The filename resolves outside the templates directory.'
+          }
+        } else {
+        # ---- collision check -------------------------------------------------------
+        if ((Test-Path -LiteralPath $destPath -PathType Leaf) -and -not $overwrite) {
+          New-JsonResponse -Response $res -StatusCode 409 -Body @{
+            error = ("Template '" + $safeName + "' already exists. Set overwrite to true to replace it.")
+          }
+        } else {
+        # ---- decode and save -------------------------------------------------------
+        try {
+          $bytes = [Convert]::FromBase64String($contentBase64)
+          [System.IO.File]::WriteAllBytes($destPath, $bytes)
+          Add-Audit -User $user -Action 'Upload_Template' -ProjectId '' -ObjType 'Template' -ObjId $safeName -From '' -To '' -Detail ('Size: ' + $bytes.Length + ' bytes, overwrite: ' + $overwrite)
+          Write-Log ('Template uploaded: ' + $safeName)
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{
+            ok = $true; fileName = $safeName; bytes = $bytes.Length
+          }
+        } catch {
+          Write-Log ('Template upload failed: ' + $_.Exception.Message) 'ERROR'
+          New-JsonResponse -Response $res -StatusCode 500 -Body @{
+            error = ('Could not save the uploaded file: ' + $_.Exception.Message)
+          }
+        }
+        }   # end else (no collision or overwrite)
+        }   # end else (containment)
+        }   # end else (safe filename)
+        }   # end else (valid extension)
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/issues/template.csv') {
+        $cfg = Get-Config
+        $labels = @($cfg.issue_tracker_headers.PSObject.Properties.Value)
+        $cells = foreach ($lbl in $labels) { ConvertTo-CsvCell ([string]$lbl) }
+        $csv = ($cells -join ',') + "`r`n"
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($csv)
+        $res.StatusCode = 200
+        $res.ContentType = 'text/csv; charset=utf-8'
+        $res.AddHeader('Content-Disposition', 'attachment; filename="issue_tracker_template.csv"')
+        $res.ContentLength64 = $bytes.Length
+        $res.OutputStream.Write($bytes, 0, $bytes.Length)
+        $res.OutputStream.Close()
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/issues/import') {
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        # Build reverse map: lowercased trimmed display label -> internal field name.
+        # Also accept bare internal field names directly (e.g. "sp_id" from a
+        # Power Apps export that adds columns), so they don't get silently dropped.
+        $rev = @{}
+        foreach ($p in $cfg.issue_tracker_headers.PSObject.Properties) {
+          $rev[([string]$p.Value).Trim().ToLowerInvariant()] = $p.Name
+        }
+        foreach ($storeCol in $Stores['lb_sp_issues']) {
+          $rev[$storeCol.ToLowerInvariant()] = $storeCol
+        }
+        $csvText = [string]$body.csv
+        $lines = @($csvText -split "`r?`n" | Where-Object { $_ -ne '' })
+        # NOT `return` on the empty case. This handler runs at script scope
+        # inside the request loop, so `return` exits the whole script - it runs
+        # the outer finally, stops the listener and kills the server. Posting an
+        # empty issues CSV was therefore a remote shutdown. Answer 400 and let
+        # the if/else fall through to the next request instead.
+        if ($lines.Count -lt 1) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'CSV is empty' }
+        } else {
+        # Header row — resolved column map: index -> internal field name (or $null if unmatched).
+        # No @() here: ConvertFrom-CsvLine already returns its List[string] via the
+        # comma operator (`return ,$out`) specifically so it comes back directly
+        # indexable, not unrolled. Wrapping that in @() a second time doesn't
+        # flatten it - it produces a 1-element array whose one element is the
+        # WHOLE list, which then string-concatenates via PowerShell's default
+        # $OFS-joined collection-to-string conversion. Every other call site in
+        # this file (Read-Store, Add-StoreRow, Set-StoreRow) already calls it bare
+        # for exactly this reason - match that.
+        $headerCells = ConvertFrom-CsvLine $lines[0]
+        $colMap = New-Object 'object[]' $headerCells.Count
+        for ($ci = 0; $ci -lt $headerCells.Count; $ci++) {
+          $key = $headerCells[$ci].Trim().ToLowerInvariant()
+          $colMap[$ci] = if ($rev.ContainsKey($key)) { $rev[$key] } else { $null }
+        }
+        # Read existing projects for validation
+        $projects = @(Read-Store 'lb_projects')
+        $projSet = @{}
+        foreach ($p in $projects) { $projSet[([string]$p.project_id).ToUpperInvariant()] = $true }
+        $accepted = 0; $rejected = @()
+        for ($li = 1; $li -lt $lines.Count; $li++) {
+          $cells = ConvertFrom-CsvLine $lines[$li]
+          $row = @{}
+          for ($ci = 0; $ci -lt $colMap.Count -and $ci -lt $cells.Count; $ci++) {
+            $fld = $colMap[$ci]
+            if ($fld) { $row[$fld] = $cells[$ci] }
+          }
+          # Status/priority defaults are applied ONLY for the always-brand-new
+          # branch below (no sp_id, no raised_utc), never here. Set-StoreRow
+          # only overwrites a column when $row actually contains that key —
+          # defaulting status/priority unconditionally at this point would mean
+          # every re-import of a CSV that happens to omit those columns (a
+          # partial Power Apps export, say) forces every matched row's real
+          # status back to Open, silently erasing progress. Leaving the key
+          # out of $row when the CSV doesn't supply it lets Set-StoreRow's own
+          # per-column merge do the right thing: preserve the existing value on
+          # an update, or fall back to '' on a genuinely new row via that path.
+          # Validate project_id. Named $rowProjId, not $pid - PowerShell variable
+          # names are case-insensitive, so $pid IS $PID, the read-only automatic
+          # variable holding the process ID, and assigning to it throws "Cannot
+          # overwrite variable PID because it is read-only or constant."
+          $rowProjId = ([string]$row['project_id']).Trim()
+          if (-not $rowProjId) {
+            $rejected += @{ row = ($li + 1); reason = "ProjectID is blank" }
+            continue
+          }
+          if (-not $projSet.ContainsKey($rowProjId.ToUpperInvariant())) {
+            $rejected += @{ row = ($li + 1); reason = "ProjectID '$rowProjId' does not match any registered project" }
+            continue
+          }
+          # Upsert or insert
+          $spId = ([string]$row['sp_id']).Trim()
+          $raisedUtc = ([string]$row['raised_utc']).Trim()
+          if ($spId) {
+            # Round-tripped export: match on sp_id
+            Set-StoreRow -Store 'lb_sp_issues' -KeyFields @('sp_id') -IdField 'sp_id' -Row $row | Out-Null
+          } elseif ($raisedUtc) {
+            # Genuinely new row with a timestamp: dedup on natural key
+            Set-StoreRow -Store 'lb_sp_issues' -KeyFields @('project_id','title','raised_utc') -IdField 'sp_id' -Row $row | Out-Null
+          } else {
+            # No sp_id and no timestamp — always brand-new, so defaulting
+            # status/priority here is unconditionally safe: there is no
+            # existing row this could ever clobber.
+            $row['raised_utc'] = (Get-Date).ToUniversalTime().ToString('o')
+            if (-not $row['status'] -or [string]$row['status'] -eq '') { $row['status'] = 'Open' }
+            if (-not $row['priority'] -or [string]$row['priority'] -eq '') { $row['priority'] = 'Medium' }
+            Add-StoreRow -Store 'lb_sp_issues' -IdField 'sp_id' -Row $row | Out-Null
+          }
+          $accepted++
+        }
+        $detail = "$accepted accepted"
+        if ($rejected.Count) { $detail += ", $($rejected.Count) rejected" }
+        Add-Audit -User $body.user -Action 'Import_SP_Issues' -ProjectId '' -ObjType 'SPIssue' -ObjId '' -From '' -To '' -Detail $detail
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; accepted = $accepted; rejected = $rejected }
+        }   # end else (CSV not empty)
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/action') {
+        $body = Read-JsonBody -Request $req
+        $store = [string]$body.store
+        if (-not $Stores.Contains($store)) { throw "unknown store '$store'" }
+        $rowH = ConvertTo-Hashtable $body.row
+        $idField = $Stores[$store][0]
+        $saved =
+          if ($body.upsertKeys) { Set-StoreRow -Store $store -Row $rowH -KeyFields @($body.upsertKeys) -IdField $idField }
+          else { Add-StoreRow -Store $store -Row $rowH -IdField $idField }
+        if ($body.audit) {
+          $a = ConvertTo-Hashtable $body.audit
+          Add-Audit -User $a.user -Action $a.action -ProjectId $a.projectId -ObjType $a.objType -ObjId $a.objId -From $a.from -To $a.to -Detail $a.detail
+        }
+        New-JsonResponse -Response $res -StatusCode 200 -Body $saved
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/upload') {
+        $body = Read-JsonBody -Request $req
+        $bytes = [Convert]::FromBase64String([string]$body.contentBase64)
+        if ($bytes.Length -gt 25MB) { throw 'File exceeds the 25 MB MVP limit.' }
+        $original = [string]$body.fileName
+        # v2.2: the server names the file, so the convention holds even when
+        # somebody uploads "final FINAL v3 (2).xlsx" from their desktop.
+        $stdName = Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
+                     -WnbId $body.wnbId -Description $body.description -OriginalName $original
+        $saved = Save-Evidence -DocType $body.docType -Family $body.family -FgId $body.fgId -PartId $body.partId -FileName $stdName -Bytes $bytes
+        $saved | Add-Member -NotePropertyName originalName -NotePropertyValue $original -Force
+        New-JsonResponse -Response $res -StatusCode 200 -Body $saved
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/shutdown') {
+        # This endpoint kills the process, and the tool has no authentication.
+        # Two cheap checks bound who can reach it:
+        #   - the caller must be on the loopback interface (Test-LoopbackRequest),
+        #     so no other machine can stop this server
+        #   - the request must be application/json, which a plain cross-origin
+        #     <form> cannot send and which forces a CORS preflight we never answer
+        # Neither is real authentication. Anyone at this keyboard can still stop
+        # the server deliberately - that is by design, it is their own machine -
+        # but a random web page cannot do it by accident.
+        #
+        # The Origin authority comparison this replaced was the cause of the
+        # spurious 403s: it demanded the browser's Origin match $req.Url.Authority
+        # exactly, which breaks the moment the launcher falls back from 8080 to
+        # 8081/8082. Locality is the property actually worth enforcing.
+        $ctype  = [string]$req.ContentType
+        $okType = $ctype -and $ctype.ToLowerInvariant().StartsWith('application/json')
+        $okLocal = Test-LoopbackRequest -Request $req
+        if (-not $okLocal) {
+          Write-Log ("Shutdown refused - non-loopback caller " + [string]$req.RemoteEndPoint) 'WARN'
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{
+            error = 'Shutdown may only be requested from this machine.'
+          }
+        } elseif (-not $okType) {
+          Write-Log ("Shutdown refused - content-type '" + $ctype + "'") 'WARN'
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{
+            error = 'Shutdown must be an application/json request from this tool.'
+          }
+        } else {
+          $body = Read-JsonBody -Request $req
+          $who = [string]$body.user
+          Write-Log ('Shutdown requested' + $(if ($who) { ' by ' + $who } else { '' }) + ' — stopping cleanly.')
+          try { Add-Audit -User $who -Action 'Stop_Server' -ProjectId '' -ObjType 'Server' -ObjId ("port $boundPort") -From 'Listening' -To 'Stopped' -Detail '' } catch { }
+          # Response first, and fully: New-JsonResponse sets ContentLength64,
+          # writes, flushes and closes the stream, so the 200 is complete on the
+          # wire before anything below runs.
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{
+            status = 'stopping'; message = 'Server process shutting down cleanly.'
+          }
+          try { $res.Close() } catch { }
+
+          # Graceful stop, not a forced self-kill. Stop-Process -Id $PID -Force
+          # is a much more unusual thing for a process to do to itself than a
+          # plain listener stop + process exit, and on a machine running a VPN
+          # client or an EDR/security agent that kind of self-termination call
+          # can be exactly the sort of thing that gets intercepted, delayed or
+          # silently swallowed - the UI would report success while the server
+          # never actually went down. $listener.Stop() + Environment.Exit(0)
+          # is what this app shipped with originally and is a completely
+          # ordinary .NET shutdown path with nothing that reads as evasive.
+          # The short sleep gives the response time to actually leave the
+          # socket before the listener that carries it goes away.
+          Start-Sleep -Milliseconds 300
+          try { $listener.Stop() } catch { }
+          try { $mutex.ReleaseMutex() } catch { }
+          try { $mutex.Dispose() } catch { }
+          Write-Log 'Stopped by user request.'
+          [System.Environment]::Exit(0)
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/filename/preview') {
+        # lets the browser show the name before anything is written
+        $body = Read-JsonBody -Request $req
+        $n = Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
+               -WnbId $body.wnbId -Description $body.description -OriginalName ([string]$body.fileName)
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ fileName = $n }
+      }
+      elseif ($method -eq 'GET' -and $path -like '/api/package/*') {
+        # Transfer package: every filed document for one project, zipped, with a
+        # manifest. Deliberately works on an incomplete project - the point is
+        # to hand over what exists today.
+        $projectId = [System.Uri]::UnescapeDataString($path.Substring('/api/package/'.Length))
+        $rows = @(Read-Store 'lb_deliverables' | Where-Object { $_.project_id -eq $projectId })
+        $proj = @(Read-Store 'lb_projects' | Where-Object { $_.project_id -eq $projectId })
+        if (-not $proj.Count) { throw "unknown project '$projectId'" }
+        $safePid = ConvertTo-NamePart $projectId
+        $stage = Join-Path $env:TEMP ('wvnpkg_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $stage -Force | Out-Null
+        try {
+          $manifest = New-Object System.Collections.Generic.List[string]
+          $manifest.Add('Transfer package for ' + $projectId)
+          $manifest.Add('Generated ' + (Get-Date).ToUniversalTime().ToString('u') + ' by the WVN NPI & ECN Command Center')
+          $manifest.Add('')
+          $manifest.Add('THIS PACKAGE IS A SNAPSHOT OF WHAT HAS BEEN FILED, NOT A CERTIFICATE OF COMPLETENESS.')
+          $manifest.Add('')
+          $manifest.Add(('Step' + "`t" + 'Document' + "`t" + 'File or link' + "`t" + 'Filed by' + "`t" + 'Approved' + "`t" + 'SHA-256'))
+          $copied = 0; $missing = 0; $links = 0
+          foreach ($r in $rows) {
+            if ([string]$r.kind -eq 'link') {
+              $links++
+              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + '[link] ' + $r.link_url + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t"))
+              continue
+            }
+            $src = [string]$r.file_path
+            if ($src -and (Test-Path -LiteralPath $src -PathType Leaf)) {
+              $sub = Join-Path $stage (ConvertTo-NamePart $r.step_key)
+              if (-not (Test-Path -LiteralPath $sub)) { New-Item -ItemType Directory -Path $sub -Force | Out-Null }
+              $dest = Join-Path $sub ([System.IO.Path]::GetFileName($src))
+              if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $src -Destination $dest -Force }
+              $copied++
+              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + [System.IO.Path]::GetFileName($src) + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
+            } else {
+              $missing++
+              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + '*** FILE NOT FOUND: ' + $src + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
+            }
+          }
+          $manifest.Add('')
+          $manifest.Add(('Files included: ' + $copied + '   links cited: ' + $links + '   missing from disk: ' + $missing))
+          Set-Content -LiteralPath (Join-Path $stage '_MANIFEST.txt') -Value ($manifest -join "`r`n") -Encoding UTF8
+
+          $zipPath = Join-Path $env:TEMP ($safePid + '_Transfer_Package.zip')
+          if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)
+          Remove-Item -LiteralPath $zipPath -Force
+          $res.StatusCode = 200
+          $res.ContentType = 'application/zip'
+          $res.AddHeader('Content-Disposition', 'attachment; filename="' + $safePid + '_Transfer_Package.zip"')
+          $res.ContentLength64 = $zipBytes.Length
+          $res.OutputStream.Write($zipBytes, 0, $zipBytes.Length)
+          $res.OutputStream.Close()
+          Write-Log ('Transfer package for ' + $projectId + ': ' + $copied + ' file(s), ' + $links + ' link(s), ' + $missing + ' missing')
+        } finally {
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+      }
+      else {
+        New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'not found' }
+      }
+    } catch {
+      Write-Log ('Request failed: ' + $req.Url + ' — ' + $_.Exception.Message) 'ERROR'
+      try { New-JsonResponse -Response $res -StatusCode 500 -Body @{ error = $_.Exception.Message } } catch { }
+    }
+  }
+} finally {
+  # Every step is guarded: on the /api/shutdown path the background runspace
+  # has already stopped the listener, so GetContext() throws and unwinds to
+  # here. An unguarded Stop()/ReleaseMutex() would then throw again and turn a
+  # clean, user-requested shutdown into a non-zero exit with a red error dump.
+  try { $listener.Stop() } catch { }
+  try { $mutex.ReleaseMutex() } catch { }
+  Write-Log 'Stopped.'
+}

@@ -1,0 +1,12 @@
+issue_id,project_id,step_key,raised_utc,raised_by,category,description,owner,due_date,status,resolution,closed_utc
+LFI-0001,NPI-9655N,NPI-4,2026-07-09T09:30:00.0000000Z,Pham Van Duc,LFI,Tooling rework on the housing cavity pushed T1 samples 3 weeks late,Pham Van Duc,2026-W30,Open,,
+LFI-0002,NPI-9855,NPI-5,2026-07-16T09:30:00.0000000Z,Nguyen Thi Lan,LFI,CB certification lead time underestimated at planning - 6 weeks lost,Nguyen Thi Lan,2026-W31,Open,,
+LFI-0003,NPI-2983L,NPI-3,2026-07-16T09:30:00.0000000Z,Le Hoang Nam,LFI,Kit component supplier changed resin grade without notice,Le Hoang Nam,2026-W33,Open,,
+LFI-0004,NPI-09155-1701,NPI-1,2026-07-09T09:30:00.0000000Z,Vo Thi Hong,LFI,Blister artwork approval loop with marketing not in the plan,Vo Thi Hong,2026-W34,Open,,
+LFI-0005,ECN-4501,ECN-9,2026-07-02T09:30:00.0000000Z,Bui Thanh Ha,LFI,Old-version stock not quarantined before changeover,Bui Thanh Ha,2026-W29,Open,,
+LFI-0006,NPI-9649LP,NPI-6,2025-12-25T09:30:00.0000000Z,Tran Minh Quan,LFI,Trial yield below target on first run - fixture alignment,Tran Minh Quan,2026-W02,Closed,Fixture re-datumed; yield 98.4% on re-run,2026-01-08T09:30:00.0000000Z
+LFI-0007,NPI-5612,NPI-5,2025-10-16T09:30:00.0000000Z,Hoang Kim Chi,LFI,Inspection standard missing a critical dimension,Hoang Kim Chi,2025-W44,Closed,INSP-STD revised to rev C and re-approved,2025-10-30T09:30:00.0000000Z
+LFI-0008,NPI-6275,NPI-7,2026-01-29T09:30:00.0000000Z,Dang Quoc Bao,LFI,Ramp-up manning plan not aligned with IE cycle time study,Dang Quoc Bao,2026-W07,Closed,Line rebalanced; standard time updated,2026-02-12T09:30:00.0000000Z
+LFI-0009,ECN-5612C,ECN-12,2026-03-19T09:30:00.0000000Z,Nguyen Thi Lan,LFI,SOP not reissued to the line before handover,Nguyen Thi Lan,2026-W14,Closed,SOP rev D issued and operators re-briefed,2026-04-02T09:30:00.0000000Z
+LFI-0010,ECN-5640,ECN-4,2026-03-05T09:30:00.0000000Z,Pham Van Duc,LFI,Customer approval evidence filed against the wrong step,Pham Van Duc,2026-W12,Closed,Refiled under step 4 and audit corrected,2026-03-19T09:30:00.0000000Z
+LFI-0011,NPI-5546S,NPI-6,2026-02-19T09:30:00.0000000Z,Vo Thi Hong,LFI,Trial request form submitted without batch quantities,Vo Thi Hong,2026-W10,Closed,QA-F-GEN-0010 template updated with mandatory fields,2026-03-05T09:30:00.0000000Z

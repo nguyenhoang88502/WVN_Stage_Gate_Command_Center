@@ -1,0 +1,1031 @@
+/* ===========================================================================
+   WAHL Vietnam — NPI & ECN Stage Gate Command Center
+   styles.css — token-based design system (v3.1)
+
+   Load order matters: vendor/tabler/css/tabler.min.css loads FIRST, this file
+   second. Everything here is therefore the override layer. Section 3 bridges
+   these tokens onto Tabler's --tblr-* variables so Tabler's own components
+   (badges, cards, buttons, tables) inherit this palette instead of shipping
+   their defaults, and follow the light/dark toggle.
+
+   No @font-face, no url() to any host, no @import. The app runs air-gapped.
+
+   1  Design tokens              11  Buttons and actions
+   2  Theme variables            12  Tables and matrices
+   3  Tabler variable bridge     13  Status components
+   4  Reset and base typography  14  Project and workflow components
+   5  Application layout         15  Upload and empty states
+   6  Header and command bar     16  Drawers and modals
+   7  Workspace navigation       17  Utility classes
+   8  Cards and sections         18  Responsive rules
+   9  KPI components             19  Reduced-motion rules
+   10 Forms and inputs           20  Print rules
+   ======================================================================== */
+
+/* == 1 + 2. DESIGN TOKENS / THEME VARIABLES ============================== */
+:root {
+  /* surfaces */
+  --bg: #eef2f7;
+  --panel: #ffffff;
+  --soft: #f5f8fb;
+  --input: #ffffff;
+  --sticky: #ffffff;
+  --grey2: #e6ecf3;
+  --header-bg: #0f2438;
+  --header-ink: #eaf1f8;
+  --header-muted: #9db2c7;
+  --header-line: #1e3a52;
+
+  /* brand + status */
+  --blue: #14589f;
+  --blue-hover: #0f4884;
+  --blue2: #e7f0fa;
+  --steel: #46586b;
+  --good: #16703c;
+  --good2: #e5f3ea;
+  --warn: #8a5800;
+  --warn2: #fdf2df;
+  --bad: #b02318;
+  --bad2: #fdeceb;
+  --neutral: #62748a;
+  --neutral2: #eef1f5;
+
+  /* text */
+  --ink: #14202c;
+  --ink2: #42556a;
+  /* #68798d measured 4.46:1 on --panel, just under the 4.5 AA floor for the
+     10.5px uppercase .kpi-label. Darkened until it clears. */
+  --muted: #5d6e83;
+
+  /* lines + focus */
+  --line: #d7e0e9;
+  --line-strong: #b6c4d3;
+  --focus: #2b7fd4;
+  --focus-ring: 0 0 0 3px rgba(43, 127, 212, .35);
+
+  /* elevation */
+  --sh1: 0 1px 2px rgba(16, 34, 51, .06);
+  --sh2: 0 2px 6px rgba(16, 34, 51, .08), 0 1px 2px rgba(16, 34, 51, .06);
+  --sh3: 0 10px 30px rgba(16, 34, 51, .18);
+
+  /* geometry */
+  --r1: 4px;
+  --r2: 6px;
+  --r3: 9px;
+  --ctl-h: 40px;
+  --ctl-h-sm: 32px;
+
+  /* spacing scale */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  /* motion */
+  --t-fast: .12s ease;
+  --t-med: .18s ease-out;
+
+  --row-hover: #f2f6fa;
+}
+
+
+html[data-theme="dark"] {
+  --bg: #0d151f;
+  --panel: #16212d;
+  --soft: #1d2937;
+  --input: #1b2733;
+  --sticky: #16212d;
+  --grey2: #263443;
+  --header-bg: #08111b;
+  --header-ink: #e6eef7;
+  --header-muted: #8ba1b8;
+  --header-line: #1b2b3c;
+
+  --blue: #4c9de6;
+  --blue-hover: #6bb2ee;
+  --blue2: #14304c;
+  --steel: #93a7bb;
+  --good: #4fd188;
+  --good2: #10331f;
+  --warn: #e8b85f;
+  --warn2: #382d19;
+  --bad: #ff8a7e;
+  --bad2: #3b1f1c;
+  --neutral: #90a2b6;
+  --neutral2: #222f3d;
+
+  --ink: #e6edf5;
+  --ink2: #b5c4d3;
+  --muted: #8b9db0;
+
+  --line: #2a3a4b;
+  --line-strong: #3b4f63;
+  --focus: #5aa9ee;
+  --focus-ring: 0 0 0 3px rgba(90, 169, 238, .38);
+
+  --sh1: 0 1px 2px rgba(0, 0, 0, .4);
+  --sh2: 0 2px 8px rgba(0, 0, 0, .45);
+  --sh3: 0 12px 34px rgba(0, 0, 0, .6);
+
+  --row-hover: #1d2b3a;
+  color-scheme: dark;
+}
+
+/* == 3. TABLER VARIABLE BRIDGE =========================================== */
+/* Maps this system's tokens onto the --tblr-* names Tabler's compiled CSS
+   reads, so a Tabler .card / .badge / .btn / .table picks up the app palette
+   and follows the data-theme toggle rather than rendering Tabler defaults. */
+:root,
+html[data-theme="dark"] {
+  --tblr-primary: var(--blue);
+  --tblr-secondary: var(--neutral);
+  --tblr-success: var(--good);
+  --tblr-warning: var(--warn);
+  --tblr-danger: var(--bad);
+  --tblr-body-bg: var(--bg);
+  --tblr-body-color: var(--ink);
+  --tblr-secondary-color: var(--muted);
+  --tblr-border-color: var(--line);
+  --tblr-border-radius: var(--r2);
+  --tblr-card-bg: var(--panel);
+  --tblr-card-border-color: var(--line);
+  --tblr-card-cap-bg: var(--panel);
+  --tblr-navbar-bg: var(--header-bg);
+  --tblr-bg-surface: var(--panel);
+  --tblr-bg-surface-secondary: var(--soft);
+  --tblr-bg-surface-tertiary: var(--grey2);
+  --tblr-table-bg: var(--panel);
+  --tblr-table-color: var(--ink);
+  --tblr-table-border-color: var(--line);
+  --tblr-table-hover-bg: var(--row-hover);
+  --tblr-font-sans-serif: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+                          Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* == 4. RESET AND BASE TYPOGRAPHY ======================================== */
+* { box-sizing: border-box }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { color: var(--ink); font-weight: 600; letter-spacing: -.01em }
+h2 { font-size: 16px; margin: 0 0 var(--s2) }
+h3 { font-size: 13.5px; margin: 0 0 var(--s2) }
+
+a { color: var(--blue); text-decoration: none }
+a:hover { text-decoration: underline }
+
+code {
+  background: var(--grey2); color: var(--ink);
+  padding: 1px 5px; border-radius: var(--r1); font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.note { color: var(--muted); font-size: 11.5px; margin: var(--s1) 0 0; line-height: 1.5 }
+
+/* Visible focus for every interactive element — never removed, only restyled. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--r1);
+}
+
+/* == 5. APPLICATION LAYOUT =============================================== */
+.app { max-width: 1560px; margin: auto; padding: 0 var(--s4) 60px }
+
+.banner {
+  background: var(--blue2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--r1);
+  padding: var(--s3) var(--s4);
+  font-size: 12.2px; line-height: 1.55;
+  margin-bottom: var(--s3);
+  color: var(--ink);
+}
+.banner.warn { background: var(--warn2); border-left-color: var(--warn) }
+.banner.bad { background: var(--bad2); border-left-color: var(--bad) }
+
+.err {
+  background: var(--bad2); border: 1px solid var(--bad);
+  border-radius: var(--r2); padding: var(--s3) var(--s4); color: var(--ink);
+}
+
+.sub {
+  border-left: 3px solid var(--line-strong);
+  margin: var(--s3) 0; padding: var(--s3) var(--s4);
+  background: var(--soft); border-radius: 0 var(--r2) var(--r2) 0;
+}
+.sub h3 {
+  margin: 0 0 var(--s2); font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
+}
+
+/* == 6. HEADER AND COMMAND BAR =========================================== */
+/* Deep navy in BOTH themes. It anchors the page as a command bar rather than a
+   web-app toolbar, and it keeps the brand block identical whichever theme the
+   user picked — an operations tool should look the same to everyone. */
+header.navbar {
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--header-line);
+  box-shadow: var(--sh2);
+  position: sticky; top: 0; z-index: 50;
+  padding: 0; min-height: 56px;
+  margin-bottom: var(--s3);
+}
+header.navbar .container-xl {
+  display: flex; align-items: center; gap: var(--s3);
+  flex-wrap: wrap; padding: var(--s2) var(--s4); max-width: 1560px;
+}
+header.navbar .navbar-brand {
+  color: var(--header-ink); font-weight: 700; font-size: 15px;
+  letter-spacing: -.01em; padding: 0; margin: 0; display: flex;
+  align-items: baseline; gap: var(--s2); white-space: nowrap;
+}
+header.navbar .navbar-brand .brand-sub {
+  color: var(--header-muted); font-weight: 500; font-size: 12px; letter-spacing: 0;
+}
+header.navbar .navbar-text,
+header.navbar #stamp {
+  color: var(--header-muted); font-size: 11.5px; padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+header.navbar .cmdbar { display: flex; align-items: center; gap: var(--s2); margin-left: auto }
+
+/* live server-status pill: dot + text, so state is never colour-only */
+#srvState {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(255, 255, 255, .09); color: var(--header-ink);
+  border: 1px solid rgba(255, 255, 255, .16);
+}
+#srvState::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+#srvState.bg-success { background: rgba(79, 209, 136, .16); color: #7ee2a8; border-color: rgba(79, 209, 136, .4) }
+#srvState.bg-danger { background: rgba(255, 138, 126, .16); color: #ff9c92; border-color: rgba(255, 138, 126, .42) }
+#srvState.bg-warning { background: rgba(232, 184, 95, .16); color: #f0c777; border-color: rgba(232, 184, 95, .42) }
+
+#whoInput {
+  height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  background: rgba(255, 255, 255, .08); color: var(--header-ink);
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: var(--r1);
+  padding: 0 var(--s2); font-size: 12px; width: 140px;
+}
+#whoInput::placeholder { color: var(--header-muted) }
+#whoInput:focus { border-color: var(--focus); background: rgba(255, 255, 255, .14); outline: none }
+
+#themeBtn {
+  height: var(--ctl-h-sm); min-width: var(--ctl-h-sm);
+  background: rgba(255, 255, 255, .08); color: var(--header-ink);
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: var(--r1);
+  cursor: pointer; font-size: 14px; line-height: 1;
+}
+#themeBtn:hover { background: rgba(255, 255, 255, .16) }
+
+/* Stop Server is destructive but must NOT shout louder than the work on the
+   page. Quiet outline at rest, unmistakably dangerous on hover/focus. */
+#stopBtn {
+  height: var(--ctl-h-sm); padding: 0 var(--s3);
+  background: transparent; color: #ffb0a8;
+  border: 1px solid rgba(255, 138, 126, .45); border-radius: var(--r1);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+#stopBtn:hover:not(:disabled),
+#stopBtn:focus-visible:not(:disabled) { background: var(--bad); border-color: var(--bad); color: #fff }
+#stopBtn:disabled { opacity: .5; cursor: not-allowed }
+
+/* Light-theme command bar refinement: the base #whoInput above is tuned for
+   the navy header; these scoped rules guarantee a crisp white field surface
+   with an always-white caret and a soft placeholder in both themes. */
+header.navbar #whoInput {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+header.navbar #whoInput::placeholder { color: #94a3b8; }
+
+/* == 7. WORKSPACE NAVIGATION ============================================= */
+/* One row, always. Overflows to a horizontal scroll on narrow screens rather
+   than wrapping to a second line, which broke the tab-strip metaphor. */
+nav.tabs {
+  display: flex; gap: 2px; flex-wrap: nowrap;
+  overflow-x: auto; overflow-y: hidden;
+  margin-bottom: var(--s4);
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+  position: sticky; top: 56px; z-index: 40;
+  background: var(--bg);
+}
+nav.tabs::-webkit-scrollbar { height: 5px }
+nav.tabs::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px }
+nav.tabs button {
+  flex: none;
+  border: 1px solid transparent; border-bottom: 2px solid transparent;
+  border-radius: var(--r1) var(--r1) 0 0;
+  background: transparent; color: var(--ink2);
+  padding: 10px 18px; font-size: 13px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
+  min-height: 40px;
+}
+nav.tabs button:hover:not(.on) { background: var(--soft); color: var(--ink) }
+nav.tabs button.on {
+  color: var(--blue); font-weight: 650;
+  border-bottom-color: var(--blue); background: var(--panel);
+}
+
+/* == 8. CARDS AND SECTIONS =============================================== */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r3);
+  box-shadow: var(--sh1);
+  margin-bottom: var(--s4);
+}
+.card-header {
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s3); flex-wrap: wrap;
+  border-radius: var(--r3) var(--r3) 0 0;
+}
+.card-title { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -.01em; color: var(--ink) }
+.card-body { padding: var(--s4) }
+
+/* == 9. KPI COMPONENTS =================================================== */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+.kpi-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--neutral);
+  border-radius: var(--r2);
+  padding: var(--s3) var(--s4);
+  box-shadow: var(--sh1);
+  display: flex; flex-direction: column; gap: 2px;
+  min-height: 92px;
+  transition: transform var(--t-fast), box-shadow var(--t-fast);
+}
+.kpi-card.clickable { cursor: pointer }
+.kpi-card.clickable:hover { transform: translateY(-1px); box-shadow: var(--sh2); border-color: var(--line-strong) }
+.kpi-card.k-good { border-top-color: var(--good) }
+.kpi-card.k-blue { border-top-color: var(--blue) }
+.kpi-card.k-warn { border-top-color: var(--warn) }
+.kpi-card.k-bad { border-top-color: var(--bad) }
+.kpi-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+}
+.kpi-value {
+  font-size: 25px; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; color: var(--ink); letter-spacing: -.02em;
+}
+/* the "/12" in "8/12" — present but subordinate to the achieved number */
+.kpi-of { font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 1px }
+.kpi-sub { font-size: 11px; color: var(--muted); line-height: 1.45 }
+.kpi-card .bar { margin-top: var(--s1) }
+
+/* small process/grouping label above a band of cards (e.g. "NPI", "ECN") */
+.section-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+  margin: var(--s4) 0 var(--s2);
+}
+
+/* == 10. FORMS AND INPUTS ================================================ */
+input, select, textarea {
+  background: var(--input); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  padding: 0 10px; height: var(--ctl-h); min-height: var(--ctl-h);
+  font: inherit; font-size: 12.8px;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  max-width: 100%;
+}
+textarea { padding: 8px 10px; height: auto; min-height: 72px; line-height: 1.5 }
+input:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--steel) }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--focus); box-shadow: var(--focus-ring);
+}
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .85 }
+input:disabled, select:disabled, textarea:disabled {
+  background: var(--grey2); color: var(--muted); cursor: not-allowed; opacity: 1;
+}
+input[type="checkbox"], input[type="radio"] {
+  height: auto; min-height: 0; width: auto; accent-color: var(--blue);
+  vertical-align: middle; margin-right: 5px;
+}
+input[type="file"] { padding: 6px 8px; height: auto }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--s3) var(--s4) }
+.fld { display: flex; flex-direction: column; gap: 3px; min-width: 0 }
+.fld > span {
+  color: var(--ink2); font-size: 11px; font-weight: 600;
+  letter-spacing: .02em;
+}
+.fld input, .fld select, .fld textarea { width: 100% }
+.fld .note { margin-top: 2px }
+
+.filters {
+  display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
+  margin-bottom: var(--s3);
+}
+.filters label { color: var(--muted); font-size: 11.5px; font-weight: 600 }
+.filters input, .filters select { height: var(--ctl-h-sm); min-height: var(--ctl-h-sm); font-size: 12px }
+
+/* typing-enabled comboboxes: must not read as a second class of control next
+   to the <select> beside them, so only the affordance is added here — the
+   drop-down arrow Chrome and Edge render for input[list]. Firefox and Safari
+   draw nothing, which is why the control still has to read as a text box. */
+input[list] { min-width: 110px }
+input[list]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .5 }
+input[list]:hover::-webkit-calendar-picker-indicator { opacity: 1 }
+
+/* == 11. BUTTONS AND ACTIONS ============================================= */
+/* Base for the app's own bare <button> elements. Tabler's .btn family is used
+   where markup opts into it; these rules cover everything that does not. */
+button {
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  height: var(--ctl-h); min-height: var(--ctl-h); padding: 0 var(--s4);
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  cursor: pointer; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+button:hover:not(:disabled) { background: var(--soft); border-color: var(--steel) }
+button:active:not(:disabled) { background: var(--grey2) }
+button:disabled { opacity: .55; cursor: not-allowed }
+
+/* .primary / .danger are the app's own semantic button classes, applied by
+   app.js as el('button','primary',...). They are NOT Tabler classes — losing
+   these rules leaves "Register project", "Raise issue" and the modal's
+   destructive confirm looking like plain grey buttons. */
+button.primary, .btn-primary {
+  background: var(--blue); border-color: var(--blue); color: #fff;
+}
+button.primary:hover:not(:disabled), .btn-primary:hover:not(:disabled) {
+  background: var(--blue-hover); border-color: var(--blue-hover); color: #fff;
+}
+button.danger, .btn-danger {
+  background: var(--bad); border-color: var(--bad); color: #fff;
+}
+button.danger:hover:not(:disabled), .btn-danger:hover:not(:disabled) { filter: brightness(.92); color: #fff }
+
+button.ghost, .btn-ghost {
+  background: transparent; border-color: transparent; color: var(--ink2);
+}
+button.ghost:hover:not(:disabled), .btn-ghost:hover:not(:disabled) {
+  background: var(--soft); border-color: var(--line); color: var(--ink);
+}
+button.success { background: var(--good); border-color: var(--good); color: #fff }
+button.warn { background: var(--warn); border-color: var(--warn); color: #fff }
+
+.btn-sm, button.sm {
+  height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  padding: 0 var(--s3); font-size: 11.5px;
+}
+.btn-outline-primary {
+  background: transparent; border-color: var(--blue); color: var(--blue);
+}
+.btn-outline-primary:hover:not(:disabled) { background: var(--blue2); color: var(--blue) }
+.btn-icon { padding: 0; width: var(--ctl-h-sm); min-width: var(--ctl-h-sm) }
+
+/* claimed-state button — green-tinted to signal ownership without implying success/failure */
+button.claimed-btn {
+  background: var(--good2); border-color: var(--good); color: var(--good);
+}
+button.claimed-btn:hover:not(:disabled) {
+  background: var(--good); color: #fff;
+}
+
+/* segmented control */
+.seg {
+  display: inline-flex; border: 1px solid var(--line-strong);
+  border-radius: var(--r2); overflow: hidden; margin-bottom: var(--s3);
+}
+.seg button {
+  border: 0; border-radius: 0; padding: 0 var(--s4);
+  background: transparent; height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  color: var(--ink2); font-size: 12px;
+}
+.seg button:hover:not(.on) { background: var(--soft) }
+.seg button.on { background: var(--blue); color: #fff }
+
+.acts { display: flex; gap: var(--s2); justify-content: flex-end; margin-top: var(--s4); flex-wrap: wrap }
+
+/* == 12. TABLES AND MATRICES ============================================= */
+table { border-collapse: collapse; width: 100%; font-size: 12.2px }
+th, td {
+  text-align: left; padding: 7px 10px;
+  border-bottom: 1px solid var(--line); vertical-align: top;
+}
+th {
+  background: var(--soft); color: var(--ink2);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; white-space: nowrap;
+}
+tbody tr:hover { background: var(--row-hover) }
+tbody tr:nth-child(even) { background: rgba(127, 150, 173, .045) }
+tbody tr:nth-child(even):hover { background: var(--row-hover) }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
+
+.scroll {
+  overflow: auto; max-height: 62vh;
+  border: 1px solid var(--line); border-radius: var(--r2);
+  background: var(--panel);
+}
+
+/* stage matrix — sticky header row AND sticky identifier column, so a wide
+   matrix stays readable when scrolled in both directions */
+.matrix th, .matrix td { border-right: 1px solid var(--line); vertical-align: top }
+.matrix th {
+  position: sticky; top: 0; z-index: 2;
+  max-width: 160px; white-space: normal;
+  background: var(--sticky); box-shadow: inset 0 -1px 0 var(--line);
+}
+.matrix th:first-child, .matrix td:first-child {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--sticky); box-shadow: inset -1px 0 0 var(--line);
+}
+.matrix th:first-child { z-index: 3 }
+.mcell { min-width: 132px; font-size: 11px }
+.mcell .badge { margin: 1px 0; white-space: normal; text-align: left; display: inline-block }
+.mcell:hover { background: var(--row-hover); cursor: pointer }
+
+/* == 13. STATUS COMPONENTS =============================================== */
+/* State is never carried by colour alone: every badge keeps its text label,
+   and bypassed additionally carries a dashed outline. */
+.badge {
+  font-size: 10.5px; font-weight: 650; letter-spacing: .02em;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid transparent;
+}
+/* Solid high-contrast fills — white text on the saturated status colour,
+   legible on both light and dark themes. Soft .bg-*-lt variants keep the
+   pale fill + tinted text for secondary emphasis. */
+.badge.bg-success { background-color: var(--good) !important; color: #ffffff !important; }
+.badge.bg-danger { background-color: var(--bad) !important; color: #ffffff !important; }
+.badge.bg-primary { background-color: var(--blue) !important; color: #ffffff !important; }
+.badge.bg-warning { background-color: var(--warn) !important; color: #ffffff !important; }
+.badge.bg-secondary { background-color: var(--neutral) !important; color: #ffffff !important; }
+
+/* Soft variants */
+.badge.bg-success-lt { background-color: var(--good2) !important; color: var(--good) !important; border: 1px solid var(--good); }
+.badge.bg-danger-lt { background-color: var(--bad2) !important; color: var(--bad) !important; border: 1px solid var(--bad); }
+.badge.bg-warning-lt { background-color: var(--warn2) !important; color: var(--warn) !important; border: 1px solid var(--warn); }
+.badge.bg-primary-lt { background-color: var(--blue2) !important; color: var(--blue) !important; border: 1px solid var(--blue); }
+
+/* dashed-outline variant for a bypassed gate — must read as distinct from a
+   plain failure, not merely a different colour. A bypass clears progression
+   but stays visible as unresolved process debt. */
+.bg-bypassed-dashed { border-style: dashed !important; border-width: 1.5px !important }
+
+.bar {
+  height: 8px; background: var(--grey2); border-radius: 999px;
+  overflow: hidden; min-width: 90px; display: inline-block; vertical-align: middle;
+}
+.bar > i { display: block; height: 100%; background: var(--blue); border-radius: 999px }
+.bar-sm { height: 5px; min-width: 50px; margin-right: 2px }
+
+/* == 14. PROJECT AND WORKFLOW COMPONENTS ================================= */
+.stepcard {
+  border: 1px solid var(--line); border-left-width: 4px;
+  border-radius: var(--r2); padding: var(--s3) var(--s4);
+  margin: var(--s2) 0; background: var(--panel); box-shadow: var(--sh1);
+  /* The evidence table inside a step card has five columns and does not fit a
+     phone. Without this the table widens the whole document and the entire
+     page scrolls sideways; with it, only the table scrolls inside its card. */
+  overflow-x: auto;
+}
+.stepcard.s-COMPLETE { border-left-color: var(--good) }
+.stepcard.s-IN_PROGRESS { border-left-color: var(--blue) }
+.stepcard.s-AT_RISK { border-left-color: var(--bad); background: var(--bad2) }
+.stepcard.s-BYPASSED { border-left-color: var(--bad); border-left-style: dashed }
+.stepcard.s-NOT_STARTED { border-left-color: var(--warn) }
+.stephead {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--s3); flex-wrap: wrap;
+}
+
+/* family / FG tree (v2.6). Was never given rules of its own — it inherited
+   spacing from .treeg and looked unstructured next to the cards around it. */
+.ftree { display: flex; flex-direction: column; gap: 2px }
+.ftree .fg-row {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 6px var(--s2); border-radius: var(--r1);
+  border: 1px solid transparent; cursor: pointer;
+}
+.ftree .fg-row:hover { background: var(--soft); border-color: var(--line) }
+.ftree .fg-row.on { background: var(--blue2); border-color: var(--blue) }
+
+.famhead {
+  cursor: pointer; padding: 7px 0; margin: var(--s3) 0 var(--s1);
+  font-weight: 650; font-size: 12.5px; color: var(--ink);
+  border-bottom: 1px solid var(--line); user-select: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.famhead:hover { color: var(--blue) }
+.treeg { display: flex; flex-direction: column; gap: 4px; margin: 0 0 0 var(--s3) }
+
+/* project selection card — the clickable list used to pick a project from the
+   register. Reads as a row card at rest, lifts with a blue ring on hover, and
+   locks to a solid blue outline once selected (.on). */
+.pcard {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+.pcard:hover {
+  border-color: var(--blue);
+  box-shadow: 0 4px 12px rgba(11, 92, 171, 0.15);
+  transform: translateY(-2px);
+  background: var(--soft);
+}
+.pcard.on {
+  border: 2px solid var(--blue) !important;
+  background: var(--blue2) !important;
+  box-shadow: 0 2px 8px rgba(11, 92, 171, 0.2);
+}
+
+/* family transfer chart — §14.3: every bar must have the SAME available width
+   regardless of how long the family label is. A three-column grid guarantees
+   it: the label column is fixed, the bar column takes all remaining space, the
+   count column is sized to content. A flex row with a min-width label could
+   not promise this — a long label stole width from its own bar, so the rows
+   were not comparable, which is the whole point of the chart. */
+.famchart { display: flex; flex-direction: column; gap: 3px }
+.famchart-row {
+  display: grid;
+  /* All three tracks are FIXED or fr — none is `auto`. Each row is its own
+     grid container, so an `auto` track sizes to that row's own text: the
+     count column would be a different width on every row and the 1fr bar
+     column would absorb a different remainder each time, giving bars that
+     differ by 100px+ between families. Fixed outer tracks are what actually
+     guarantees "every bar has the same available width". */
+  grid-template-columns: 210px minmax(120px, 1fr) 310px;
+  align-items: center; gap: var(--s3);
+  padding: 4px var(--s2); border-radius: var(--r1); cursor: pointer;
+}
+.famchart-row:hover { background: var(--soft) }
+.famchart-label {
+  font-size: 12px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.famchart-bar {
+  width: 100%; flex: 1 1 auto;
+  height: 15px; display: flex; border-radius: var(--r1);
+  overflow: hidden; background: var(--grey2); min-width: 0;
+}
+.famchart-bar > i { display: block; height: 100%; flex: none }
+.famchart-count {
+  font-size: 11px; color: var(--muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.famchart-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s3);
+  font-size: 11px; color: var(--muted); margin-top: var(--s2);
+}
+.famchart-legend span { display: inline-flex; align-items: center; gap: 5px }
+.famchart-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block }
+
+/* tag inputs for certifications and other small multi-value fields */
+.taglist { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 }
+.tagin {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  padding: 4px 6px; background: var(--input); min-height: var(--ctl-h);
+}
+.tagin:focus-within { border-color: var(--focus); box-shadow: var(--focus-ring) }
+.tagin .tg {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--blue2); color: var(--blue); border: 1px solid var(--blue);
+  border-radius: 999px; padding: 1px 4px 1px 9px; font-size: 11px; font-weight: 600;
+}
+.tagin .tg button {
+  border: 0; background: transparent; color: inherit; padding: 0 3px;
+  font-weight: bold; height: auto; min-height: 0; font-size: 12px;
+}
+.tagin input { border: 0; outline: 0; flex: 1; min-width: 90px; background: transparent; height: 26px; min-height: 26px; padding: 2px }
+.certpick { display: flex; flex-wrap: wrap; gap: var(--s1); margin-top: var(--s1) }
+.certpick button {
+  font-size: 10.5px; padding: 0 10px; border-radius: 999px;
+  height: 26px; min-height: 26px;
+}
+.certpick button.on { background: var(--blue); color: #fff; border-color: var(--blue) }
+.tagrow {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 6px 3px 12px; font-size: 11.5px; background: var(--soft);
+}
+.tagrow button {
+  border: 0; background: transparent; color: var(--bad);
+  padding: 0 4px; border-radius: 999px; font-weight: bold;
+  height: auto; min-height: 0;
+}
+
+/* == 15. UPLOAD AND EMPTY STATES ========================================= */
+.dz {
+  border: 2px dashed var(--line-strong); border-radius: var(--r3);
+  padding: var(--s5) var(--s4); text-align: center; color: var(--muted);
+  cursor: pointer; background: var(--soft);
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.dz:hover { border-color: var(--blue); background: var(--blue2); color: var(--ink2) }
+.dz.on { border-color: var(--blue); background: var(--blue2); color: var(--blue) }
+.dz:focus-visible { border-color: var(--focus); box-shadow: var(--focus-ring); outline: none }
+.dz-icon { color: var(--steel); line-height: 0 }
+.dz:hover .dz-icon, .dz.on .dz-icon { color: var(--blue) }
+.dz-main { font-size: 13px; font-weight: 600; color: var(--ink) }
+.dz-sub { font-size: 11.5px; color: var(--muted) }
+
+.batch-file {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  margin: var(--s3) 0; padding: var(--s2) var(--s3);
+  background: var(--soft); border: 1px solid var(--line); border-radius: var(--r2);
+}
+.batch-file-name { font-size: 12.2px; font-weight: 600; color: var(--ink) }
+
+.import-result {
+  margin-top: var(--s4); padding: var(--s3) var(--s4);
+  border: 1px solid var(--line); border-left-width: 4px;
+  border-radius: var(--r2); background: var(--soft);
+}
+.import-result.good { border-left-color: var(--good); background: var(--good2) }
+.import-result.warn { border-left-color: var(--warn); background: var(--warn2) }
+.import-result.bad { border-left-color: var(--bad); background: var(--bad2) }
+.import-result-head {
+  display: flex; align-items: baseline; gap: var(--s3);
+  flex-wrap: wrap; margin-bottom: var(--s2);
+}
+.import-result-head b { font-size: 13.5px }
+.import-result .scroll { max-height: 260px; margin-top: var(--s2) }
+
+.empty {
+  text-align: center; padding: var(--s6) var(--s4); color: var(--muted);
+  display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+}
+.empty-icon { color: var(--line-strong); line-height: 0 }
+.empty-title { font-size: 13.5px; font-weight: 650; color: var(--ink2) }
+.empty p { margin: 0; font-size: 12px; max-width: 46ch; line-height: 1.55 }
+
+.loader { padding: var(--s6); text-align: center; color: var(--muted) }
+
+/* -- dashboard slicer controls ------------------------------------------- */
+.dashboard-slicers {
+  display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center;
+  margin-bottom: var(--s3); padding: var(--s2) var(--s3);
+  background: var(--soft); border: 1px solid var(--line);
+  border-radius: var(--r2);
+}
+.dashboard-slicer {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 600; color: var(--ink2);
+}
+.dashboard-slicer select {
+  height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  font-size: 12px; min-width: 100px;
+}
+
+/* -- dashboard export toolbar -------------------------------------------- */
+.dash-toolbar {
+  display: flex; gap: var(--s2); margin-bottom: var(--s2); flex-wrap: wrap;
+}
+
+/* -- document link ------------------------------------------------------- */
+.doc-link {
+  color: var(--blue); cursor: pointer; font-weight: 600;
+  text-decoration: none; transition: color var(--t-fast);
+}
+.doc-link:hover { color: var(--blue-hover); text-decoration: underline }
+
+/* -- sidebar components -------------------------------------------------- */
+.sidebar-project-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--s3) }
+.sidebar-project-item {
+  padding: 6px 8px; border: 1px solid var(--line);
+  border-radius: var(--r1); cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+  font-size: 12px;
+}
+.sidebar-project-item:hover { background: var(--soft); border-color: var(--blue) }
+.sidebar-project-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px }
+.sidebar-notes { margin-top: var(--s3); padding-top: var(--s2); border-top: 1px solid var(--line) }
+
+/* -- comment threads ----------------------------------------------------- */
+.comment-thread {
+  background: var(--soft); border: 1px solid var(--line);
+  border-radius: var(--r2); padding: var(--s2) var(--s3);
+  margin-top: var(--s1); max-width: 22rem;
+}
+.comment-item {
+  padding: var(--s1) 0; margin-bottom: var(--s1); border-bottom: 1px solid var(--line);
+  font-size: 11px; line-height: 1.4;
+}
+.comment-item:last-child { border-bottom: none }
+.comment-add {
+  margin-top: var(--s2); display: flex; gap: var(--s1);
+}
+.comment-add input {
+  flex: 1; height: 28px; min-height: 28px; font-size: 11px;
+}
+
+/* -- matrix note indicator ----------------------------------------------- */
+.matrix-note-indicator {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  background: var(--warn2); color: var(--warn);
+  border: 1px solid var(--warn); border-radius: 999px;
+  padding: 1px 6px; margin-left: 3px; cursor: pointer;
+  white-space: nowrap; vertical-align: middle;
+  transition: background var(--t-fast);
+}
+.matrix-note-indicator:hover { background: var(--warn); color: #fff }
+
+/* -- matrix issue badge — red chip with count, title lists the issue titles -- */
+.matrix-issue-badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  background: var(--bad2); color: var(--bad);
+  border: 1px solid var(--bad); border-radius: 999px;
+  padding: 1px 6px; margin: 2px 0; cursor: default;
+  white-space: nowrap; vertical-align: middle;
+}
+
+/* -- dark theme overrides ------------------------------------------------ */
+html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hover) }
+
+/* == 16. DRAWERS AND MODALS ============================================== */
+.scrim { position: fixed; inset: 0; background: rgba(9, 20, 31, .42); z-index: 90 }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(720px, 96vw); z-index: 91;
+  background: var(--panel); border-left: 1px solid var(--line);
+  box-shadow: var(--sh3); padding: var(--s5) var(--s5) 60px;
+  overflow: auto;
+}
+.drawer h2 { margin: 0 0 var(--s1); font-size: 16px }
+
+.modal-scrim {
+  position: fixed; inset: 0; background: rgba(9, 20, 31, .5); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: var(--s4);
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r3); padding: var(--s5);
+  max-width: 500px; width: 100%; box-shadow: var(--sh3);
+}
+.modal h2 { margin: 0 0 var(--s2); font-size: 15px }
+
+.stopped {
+  position: fixed; inset: 0; z-index: 300; background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s5); text-align: center;
+}
+.stopped .card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-top: 4px solid var(--bad); border-radius: var(--r3);
+  padding: var(--s6); max-width: 540px; box-shadow: var(--sh3);
+}
+.stopped .big { font-size: 20px; font-weight: 700; margin-bottom: var(--s2) }
+.stopped .mark { font-size: 40px; line-height: 1; margin-bottom: var(--s3) }
+
+@media (prefers-reduced-motion: no-preference) {
+  .drawer { animation: slidein .18s ease-out }
+  .modal { animation: popin .14s ease-out }
+}
+@keyframes slidein { from { transform: translateX(24px); opacity: .3 } to { transform: none; opacity: 1 } }
+@keyframes popin { from { transform: scale(.97); opacity: .4 } to { transform: none; opacity: 1 } }
+
+/* claim row inside drawer — button + owner badge side by side */
+.claim-row {
+  display: flex; align-items: center; gap: var(--s2);
+  margin: var(--s2) 0 var(--s3);
+}
+.claim-badge {
+  font-size: 11.5px;
+}
+.claim-issue-row {
+  display: flex; align-items: center; gap: var(--s2); margin-top: 2px;
+}
+.claim-issue-row button {
+  height: var(--ctl-h-sm); min-height: var(--ctl-h-sm); font-size: 11px; padding: 0 var(--s2);
+}
+
+/* custom doc section in drawer */
+.custom-doc-section {
+  margin: var(--s3) 0 var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line);
+}
+
+/* model custom label in evidence lists */
+.custom-mark { font-style: italic; }
+
+/* claimed-work overdue row */
+.claimed-overdue {
+  color: var(--bad); font-weight: 600;
+}
+
+/* == 17. UTILITY CLASSES ================================================= */
+.hide { display: none !important }
+.print-only { display: none }
+.g { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap }
+.mt-s2 { margin-top: var(--s2) }
+
+/* == 18. RESPONSIVE RULES ================================================ */
+@media (max-width: 1024px) {
+  .famchart-row { grid-template-columns: 160px minmax(80px, 1fr) 240px }
+}
+@media (max-width: 768px) {
+  .app { padding: 0 var(--s3) 48px }
+  /* same reasoning as .stepcard: any wide table in a card scrolls inside the
+     card rather than dragging the document width out with it */
+  .card-body { overflow-x: auto }
+  header.navbar .container-xl { padding: var(--s2) var(--s3); gap: var(--s2) }
+  header.navbar .navbar-brand { font-size: 14px; width: 100%; }
+  header.navbar .cmdbar { margin-left: 0; width: 100%; justify-content: flex-start }
+  header.navbar #stamp { order: 3 }
+  nav.tabs { top: 0; position: static }
+  .grid2 { grid-template-columns: 1fr }
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) }
+  .drawer { width: 100vw; padding: var(--s4) var(--s4) 60px }
+  .modal { max-width: 100% }
+  /* the label column would starve the bar on a phone — stack instead, so the
+     bars stay full-width and still comparable to each other */
+  .famchart-row { grid-template-columns: 1fr; gap: var(--s1); padding: var(--s2) }
+  .famchart-count { justify-self: start }
+}
+@media (max-width: 420px) {
+  .kpi-grid { grid-template-columns: 1fr 1fr }
+  .kpi-value { font-size: 21px }
+  #whoInput { width: 110px }
+}
+
+/* == 19. REDUCED-MOTION RULES ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .kpi-card.clickable:hover { transform: none }
+}
+
+/* == 20. PRINT RULES ===================================================== */
+/* The executive PDF is produced by the browser's own print-to-PDF against
+   #dashExec. Everything else is hidden rather than restyled. */
+@media print {
+  body * { visibility: hidden }
+  #dashExec, #dashExec * { visibility: visible }
+  #dashExec { position: absolute; left: 0; top: 0; width: 100% }
+  #dashExec .no-print { display: none !important }
+  .print-only { display: block }
+
+  /* always a light report, whatever theme is on screen */
+  html[data-theme="dark"], :root {
+    --bg: #fff; --panel: #fff; --soft: #fff; --grey2: #eee;
+    --ink: #000; --ink2: #222; --muted: #444;
+    --line: #999; --line-strong: #666; --row-hover: transparent;
+  }
+  body { background: #fff; color: #000; font-size: 11pt }
+
+  .card, .kpi-card, .stepcard, .scroll {
+    box-shadow: none !important; border-color: #999 !important;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .scroll { max-height: none !important; overflow: visible !important }
+  .kpi-grid { grid-template-columns: repeat(5, 1fr) }
+  .kpi-value { font-size: 18pt }
+
+  /* nothing sticky in a printed page — it lands on top of the content */
+  header.navbar, nav.tabs, .matrix th, .matrix th:first-child, .matrix td:first-child {
+    position: static !important;
+  }
+  thead { display: table-header-group }   /* repeat headers across pages */
+  tr, img { break-inside: avoid; page-break-inside: avoid }
+  a[href]::after { content: "" }          /* no URL noise in the report */
+  button, input, select, textarea, .dz, .seg { display: none !important }
+}

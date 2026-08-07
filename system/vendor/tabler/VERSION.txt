@@ -1,0 +1,1 @@
+Tabler @tabler/core v1.4.0 - MIT License - vendored locally for offline/air-gapped use

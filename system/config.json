@@ -1,0 +1,1438 @@
+﻿{
+    "system_info":  {
+                        "version":  "3.5.0",
+                        "app_name":  "WVN NPI \u0026 ECN Command Center",
+                        "deployment_path":  "",
+                        "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam â€”Â WOS Pillar 09",
+                        "compiled_from":  [
+                                              "QA-SOP-NPI-0001-05 New Product Introduction (Rev 05, Aug 2020)",
+                                              "QA-SOP-NPI-0002-03 ECN Procedure (Rev 03)",
+                                              "QA-SOP-NPI-0003 NPI Management RACI Matrix (Aug 2025)",
+                                              "0.EPM_Nov.2025_final.pptx + 0.EPM-VN_Jul.2026.pptx (EPM pillar decks)",
+                                              "Wahl Operating System â€”Â Technical Pillars Criteria.xlsx",
+                                              "WOS Assessment Scoring Summary (Vietnam â€”Â Q4 2025).xlsx",
+                                              "Forms_Used_in_EPM_EEM_Process.md (DeepSeek extraction, 2026-07-31)",
+                                              "01_Current_State_and_Gap_Analysis.md (thesis diagnosis)",
+                                              "7_Steps_of_EPM_Pillar.html (compiled pillar reference)",
+                                              "9649 full package (real transfer-project evidence)"
+                                          ],
+                        "workflow_rationalization_ref":  "04_Analysis\\Current_State\\Workflow_Rationalization\\NPI_ECN_Workflow_Rationalized.md (re-derived from source SOPs 2026-08-03)"
+                    },
+    "deployment_defaults":  {
+                                "default_relative_path":  "~Project Management\\5. Tools for NPI",
+                                "evidence_folder_pattern":  "[Model]\\[FG_ID]\\[DocType]\\[PartID]",
+                                "stage_gate_log_subpath":  "system\\stage_gate_log",
+                                "ecn_log_subpath":  "system\\ecn_log",
+                                "evidence_vault_folder_name":  "NPI_EPM_Documents_Control",
+                                "evidence_vault_relative_to_root":  "..",
+                                "evidence_vault_path":  "",
+                                "templates_subpath":  "system\\templates",
+                                "filename_conventions":  {
+                                                             "DWG":  "PD[WVN_Code]_01 [Description]_[WNB_Code].[ext]",
+                                                             "default":  "[doctype_id]_[Model]_[WVN_ID]_[WNB_ID]_[Description].[ext]",
+                                                             "note":  "Applied server-side on upload. Invalid characters become _, runs collapse, extension is lowercased, empty segments are dropped. Drawings keep spaces; everything else uses underscores."
+                                                         },
+                                "sharepoint_path":  "",
+                                "ticketing_center_note":  "The WVN_Ticketing_Center app shares system\tracking with this tool. Column order in its $Stores must stay identical - both parse positionally.",
+                                "evidence_folder_pattern_note":  "Blank levels are dropped, never left as an empty folder or a doubled slash. PartID is usually blank and sits below DocType when present.",
+                                "staging_subpath":  "system\tmp_staging",
+                                "default_certifications":  [
+
+                                                           ],
+                                "evidence_vault_root":  ""
+                            },
+    "product_families":  [
+                             {
+                                 "family_id":  "CL-CORDED",
+                                 "family_name":  "Hair Clipper (Corded)",
+                                 "description":  "Mains-powered professional \u0026 consumer hair clippers",
+                                 "sample_fg_ids":  [
+                                                       "5612",
+                                                       "7067",
+                                                       "5612C",
+                                                       "09155-1701",
+                                                       "09670-1201",
+                                                       "3026452",
+                                                       "79449-1001"
+                                                   ],
+                                 "complexity_class":  "B",
+                                 "typical_lead_time_days":  178
+                             },
+                             {
+                                 "family_id":  "CL-CORDLESS",
+                                 "family_name":  "Hair Clipper (Cordless / Rechargeable)",
+                                 "description":  "Lithium-ion/NiMH rechargeable clippers with charging stands",
+                                 "sample_fg_ids":  [
+                                                       "9649LP",
+                                                       "9639",
+                                                       "9655N",
+                                                       "2983LP",
+                                                       "9649P",
+                                                       "9649",
+                                                       "6245LP",
+                                                       "6275LP",
+                                                       "2240LC"
+                                                   ],
+                                 "complexity_class":  "E",
+                                 "typical_lead_time_days":  210
+                             },
+                             {
+                                 "family_id":  "TRIMMER",
+                                 "family_name":  "Beard \u0026 Hair Trimmer",
+                                 "description":  "Detail trimmers, beard trimmers, multi-grooming attachments",
+                                 "sample_fg_ids":  [
+                                                       "6275",
+                                                       "5537",
+                                                       "4501",
+                                                       "3282",
+                                                       "3028666",
+                                                       "3028671",
+                                                       "9855",
+                                                       "9893LP",
+                                                       "5616L",
+                                                       "9906",
+                                                       "9336",
+                                                       "9685",
+                                                       "9891"
+                                                   ],
+                                 "complexity_class":  "D",
+                                 "typical_lead_time_days":  108
+                             },
+                             {
+                                 "family_id":  "SHAVER",
+                                 "family_name":  "Shaver (Foil / Rotary)",
+                                 "description":  "Electric shavers â€”Â foil and rotary head types",
+                                 "sample_fg_ids":  [
+                                                       "5619",
+                                                       "7066",
+                                                       "7065",
+                                                       "7067"
+                                                   ],
+                                 "complexity_class":  "D",
+                                 "typical_lead_time_days":  108
+                             },
+                             {
+                                 "family_id":  "STYLER",
+                                 "family_name":  "Nose, Ear \u0026 Eyebrow Trimmer",
+                                 "description":  "Nose, ear and eyebrow trimmers (5640, 5560, 5546, 5545, 5608 families). Renamed 2026-08-03: the config previously called this \"Hair Dryer \u0026 Hot Air Styler\", but the item master carries 201 items here and none of them is a hair dryer. family_id kept as STYLER so existing project references stay valid.",
+                                 "sample_fg_ids":  [
+                                                       "5546S",
+                                                       "5560-ALK",
+                                                       "5560N",
+                                                       "5640",
+                                                       "5545",
+                                                       "5546",
+                                                       "5560",
+                                                       "5608"
+                                                   ],
+                                 "complexity_class":  "C",
+                                 "typical_lead_time_days":  103,
+                                 "renamed_from":  "Hair Dryer \u0026 Hot Air Styler"
+                             },
+                             {
+                                 "family_id":  "KIT",
+                                 "family_name":  "Grooming Kit (Multi-piece Sets)",
+                                 "description":  "Bundled clipper + trimmer + accessory kits in hard/soft cases",
+                                 "sample_fg_ids":  [
+                                                       "2983L",
+                                                       "9865",
+                                                       "79434",
+                                                       "3026590",
+                                                       "3193",
+                                                       "3155"
+                                                   ],
+                                 "complexity_class":  "A",
+                                 "typical_lead_time_days":  94
+                             }
+                         ],
+    "change_types":  [
+                         {
+                             "type_id":  "A",
+                             "name":  "Packaging-Only Change",
+                             "description":  "Box, card, colour box, PDQ and printing changes only - no product hardware change.",
+                             "cycle_time_days":  null,
+                             "cycle_time_note":  "TBD - not yet baselined at WVN. Target date cannot be auto-calculated for Type A.",
+                             "trial_preset":  "Simple",
+                             "npi_steps":  [
+                                               1,
+                                               5,
+                                               6,
+                                               7
+                                           ],
+                             "ecn_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7,
+                                               8,
+                                               9,
+                                               10,
+                                               11,
+                                               12
+                                           ],
+                             "excluded_step_reason":  "No design, mould or prototype work: NPI steps 2-4 do not apply."
+                         },
+                         {
+                             "type_id":  "B",
+                             "name":  "Blister Card Change Only",
+                             "description":  "Blister and blister-card changes; product itself unchanged.",
+                             "cycle_time_days":  178,
+                             "cycle_time_note":  "From the ABCDE classification scheme in use since 2025. SUSPECT: 178 days exceeds C (103) and D (108) for a simpler change; likely inflated by outliers in the Class ABCDE tracker. Re-measure from raw project data before using it for commitments.",
+                             "trial_preset":  "Simple",
+                             "npi_steps":  [
+                                               1,
+                                               5,
+                                               6,
+                                               7
+                                           ],
+                             "ecn_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7,
+                                               8,
+                                               9,
+                                               10,
+                                               11,
+                                               12
+                                           ],
+                             "excluded_step_reason":  "No design, mould or prototype work: NPI steps 2-4 do not apply."
+                         },
+                         {
+                             "type_id":  "C",
+                             "name":  "Housing Unit Change Only",
+                             "description":  "Housing unit changed - new or modified plastic tooling required.",
+                             "cycle_time_days":  103,
+                             "cycle_time_note":  "From the ABCDE classification scheme in use since 2025. Observed average from the Class ABCDE tracker, not an SOP-defined target.",
+                             "trial_preset":  "Medium",
+                             "npi_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7
+                                           ],
+                             "ecn_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7,
+                                               8,
+                                               9,
+                                               10,
+                                               11,
+                                               12
+                                           ],
+                             "excluded_step_reason":  ""
+                         },
+                         {
+                             "type_id":  "D",
+                             "name":  "Housing Surface Change Only",
+                             "description":  "Surface finish, texture or colour of the housing changes; geometry does not.",
+                             "cycle_time_days":  108,
+                             "cycle_time_note":  "From the ABCDE classification scheme in use since 2025. Observed average from the Class ABCDE tracker, not an SOP-defined target.",
+                             "trial_preset":  "Medium",
+                             "npi_steps":  [
+                                               1,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7
+                                           ],
+                             "ecn_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7,
+                                               8,
+                                               9,
+                                               10,
+                                               11,
+                                               12
+                                           ],
+                             "excluded_step_reason":  "Geometry is unchanged, so the Basic Design tear-down (NPI step 2) does not apply."
+                         },
+                         {
+                             "type_id":  "E",
+                             "name":  "New Product Development (Seed Develop)",
+                             "description":  "Brand-new product development. New production tooling and equipment required.",
+                             "cycle_time_days":  210,
+                             "cycle_time_note":  "Full development cycle; baselined on the SKU 9649 transfer project. Observed average from the Class ABCDE tracker, not an SOP-defined target.",
+                             "trial_preset":  "Very Complex",
+                             "npi_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7
+                                           ],
+                             "ecn_steps":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7,
+                                               8,
+                                               9,
+                                               10,
+                                               11,
+                                               12
+                                           ],
+                             "excluded_step_reason":  ""
+                         }
+                     ],
+    "certification_types":  [
+                                {
+                                    "cert_id":  "CB",
+                                    "name":  "IEC CB Scheme",
+                                    "scope":  "International",
+                                    "note":  "Base report other national schemes are derived from."
+                                },
+                                {
+                                    "cert_id":  "CE-EMC",
+                                    "name":  "CE marking - EMC / LVD",
+                                    "scope":  "EU",
+                                    "note":  "Required before any EU shipment."
+                                },
+                                {
+                                    "cert_id":  "UL",
+                                    "name":  "UL listing",
+                                    "scope":  "US / Canada",
+                                    "note":  ""
+                                },
+                                {
+                                    "cert_id":  "ETL",
+                                    "name":  "ETL listed (Intertek)",
+                                    "scope":  "US / Canada",
+                                    "note":  "Accepted in place of UL by most US retailers."
+                                },
+                                {
+                                    "cert_id":  "KC",
+                                    "name":  "KC certification",
+                                    "scope":  "South Korea",
+                                    "note":  ""
+                                },
+                                {
+                                    "cert_id":  "PSE",
+                                    "name":  "PSE mark",
+                                    "scope":  "Japan",
+                                    "note":  ""
+                                }
+                            ],
+    "document_types":  [
+                           {
+                               "doctype_id":  "PRF",
+                               "name":  "Product Request Form",
+                               "form_code":  "PRF",
+                               "owner_dept":  "NPI",
+                               "source":  "ERP (D365/AX)",
+                               "description":  "Customer-initiated project request; triggers NPI process entry",
+                               "stage_required":  "NPI 1",
+                               "keywords":  [
+                                                "prf",
+                                                "product request",
+                                                "request form"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "QA-F-NPI-0001",
+                               "name":  "Product Planning Form",
+                               "form_code":  "QA-F-NPI-0001",
+                               "owner_dept":  "QA",
+                               "source":  "00_forms",
+                               "description":  "Master planning document guiding the entire NPI process per QA-SOP-NPI-0001-05",
+                               "stage_required":  "not gated",
+                               "keywords":  [
+                                                "product planning",
+                                                "planning form",
+                                                "npi 0001"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "GANTT",
+                               "name":  "Gantt Chart / Project Plan",
+                               "form_code":  null,
+                               "owner_dept":  "NPI",
+                               "source":  "SharePoint / Excel",
+                               "description":  "Detail-level project schedule: BOM setup, certification, tooling, jig, trial, MP dates",
+                               "stage_required":  "NPI 1",
+                               "keywords":  [
+                                                "gantt",
+                                                "project plan",
+                                                "timeline",
+                                                "schedule"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "QUOTE",
+                               "name":  "Quotation for Customer",
+                               "form_code":  null,
+                               "owner_dept":  "NPI / Finance",
+                               "source":  "NPI costing sheet",
+                               "description":  "Priced quotation issued to the customer during project planning.",
+                               "stage_required":  "NPI 1",
+                               "keywords":  [
+                                                "quote",
+                                                "quotation",
+                                                "pricing",
+                                                "price"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "IR",
+                               "name":  "Investment Request",
+                               "form_code":  "IR",
+                               "owner_dept":  "Finance",
+                               "source":  "Finance process",
+                               "description":  "CapEx request for molds, tools, certification, and machines per project",
+                               "stage_required":  "NPI 1",
+                               "keywords":  [
+                                                "investment request",
+                                                "investment",
+                                                "capex"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "CLASS",
+                               "name":  "Product Classification (ABCDE)",
+                               "form_code":  null,
+                               "owner_dept":  "NPI",
+                               "source":  "Excel tracker",
+                               "description":  "Complexity classification determining lead time and EEM investment requirements",
+                               "stage_required":  "NPI 1",
+                               "keywords":  [
+                                                "class",
+                                                "classification",
+                                                "abcde",
+                                                "change type",
+                                                "change class"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "DESIGN-CHK",
+                               "name":  "Design Checklist",
+                               "form_code":  null,
+                               "owner_dept":  "NPI",
+                               "source":  "NPI team checklist",
+                               "description":  "Design review checklist confirmed jointly with Ningbo (NB) team before DFM",
+                               "stage_required":  "NPI 1",
+                               "keywords":  [
+                                                "design check",
+                                                "design checklist",
+                                                "dfx checklist"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "DFM",
+                               "name":  "Design for Manufacturing Review",
+                               "form_code":  null,
+                               "owner_dept":  "NPI / IE",
+                               "source":  "NPI design review",
+                               "description":  "DFM pass confirming the design can be made on WVN machines and tooling; signed off at NPI step 2 and finalised at step 3.",
+                               "stage_required":  "NPI 2",
+                               "keywords":  [
+                                                "dfm",
+                                                "design for manufacturing",
+                                                "manufacturability"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "PFMEA",
+                               "name":  "Process Failure Mode \u0026 Effects Analysis",
+                               "form_code":  null,
+                               "owner_dept":  "QA / Production",
+                               "source":  "12_fmea",
+                               "description":  "Per-project PFMEA workbook; introduced at Step 3, reviewed after Step 6",
+                               "stage_required":  "NPI 3, NPI 4, NPI 6",
+                               "keywords":  [
+                                                "pfmea",
+                                                "fmea",
+                                                "failure mode",
+                                                "failure mode analysis"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "BOM",
+                               "name":  "Bill of Materials",
+                               "form_code":  null,
+                               "owner_dept":  "NPI / Production",
+                               "source":  "ERP (AX/D365)",
+                               "description":  "Multi-level BOM with source, quantity, specification per component",
+                               "stage_required":  "NPI 3, NPI 4, ECN 4, ECN 6, ECN 7, ECN 8, ECN 9, ECN 10, ECN 12",
+                               "keywords":  [
+                                                "bom",
+                                                "bill of materials",
+                                                "parts list"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "DWG",
+                               "name":  "Engineering Drawing / Technical Drawing",
+                               "form_code":  null,
+                               "owner_dept":  "R\u0026D / Design",
+                               "source":  "Design share / SharePoint",
+                               "description":  "2D/3D part and assembly drawings; intellectual property per QA-SOP-GEN-0001",
+                               "stage_required":  "NPI 2, NPI 3, NPI 4, ECN 6, ECN 7, ECN 8, ECN 10, ECN 12",
+                               "keywords":  [
+                                                "dwg",
+                                                "drawing",
+                                                "cad",
+                                                "technical drawing",
+                                                "engineering drawing"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "CONTROL-PLAN",
+                               "name":  "Process \u0026 Product Control Plan",
+                               "form_code":  null,
+                               "owner_dept":  "QA",
+                               "source":  "10_quality_control",
+                               "description":  "Per-product control plan linked to PFMEA; inspection points and control methods",
+                               "stage_required":  "NPI 4, NPI 5",
+                               "keywords":  [
+                                                "control plan",
+                                                "process control",
+                                                "ppap control plan"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "INSP-STD",
+                               "name":  "Inspection Standard",
+                               "form_code":  null,
+                               "owner_dept":  "QA",
+                               "source":  "09_fg_inspection_standards_specs",
+                               "description":  "Finished-goods inspection criteria; includes dimensional, functional, and cosmetic checks",
+                               "stage_required":  "NPI 5",
+                               "keywords":  [
+                                                "inspection standard",
+                                                "insp std",
+                                                "qc standard",
+                                                "inspection spec"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "QA-F-GEN-0010",
+                               "name":  "Production Trial Request",
+                               "form_code":  "QA-F-GEN-0010",
+                               "owner_dept":  "QA / NPI",
+                               "source":  "00_forms",
+                               "description":  "Signed by all related departments before pilot batch runs; central Step 6 gating document",
+                               "stage_required":  "NPI 6, ECN 10, ECN 11",
+                               "keywords":  [
+                                                "trial request",
+                                                "production trial",
+                                                "gen 0010"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "PPAP",
+                               "name":  "Production Part Approval Process Package",
+                               "form_code":  null,
+                               "owner_dept":  "QA / Sourcing",
+                               "source":  "11_ppap",
+                               "description":  "Supplier PPAP submission including PSW, dimensional results, material certs, capability studies",
+                               "stage_required":  "NPI 5, NPI 6",
+                               "keywords":  [
+                                                "ppap",
+                                                "part approval",
+                                                "production part approval"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "SOP",
+                               "name":  "Standard Operating Procedure",
+                               "form_code":  "QA-SOP-*",
+                               "owner_dept":  "QA / Production",
+                               "source":  "08_sop_work_instructions",
+                               "description":  "Assembly, IQC, IPQC, OQC standard operating procedures per product/process",
+                               "stage_required":  "NPI 5, NPI 6, ECN 7, ECN 11, ECN 12",
+                               "keywords":  [
+                                                "sop",
+                                                "standard operating procedure",
+                                                "procedure"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "WI",
+                               "name":  "Work Instruction",
+                               "form_code":  "QA-WI-*",
+                               "owner_dept":  "IE / Production",
+                               "source":  "08_sop_work_instructions",
+                               "description":  "Station-level work instructions; prepared by IE from Step 2 onward",
+                               "stage_required":  "NPI 2, NPI 5, NPI 6, ECN 11, ECN 12",
+                               "keywords":  [
+                                                "work instruction",
+                                                "instruction sheet"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "TRIAL-RPT",
+                               "name":  "Trial Report Summary",
+                               "form_code":  null,
+                               "owner_dept":  "NPI / Production",
+                               "source":  "RACI row 4.3 deliverable",
+                               "description":  "Post-trial summary: yield, defect Pareto, cycle time, issues log, corrective actions",
+                               "stage_required":  "NPI 6, ECN 11, ECN 12",
+                               "keywords":  [
+                                                "trial report",
+                                                "trial summary",
+                                                "pilot run report"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "ECR",
+                               "name":  "Engineering Change Request",
+                               "form_code":  "QA-F-GEN-0011 / QA-F-GEN-0024",
+                               "owner_dept":  "QA",
+                               "source":  "00_forms",
+                               "description":  "Formal EC request from WCC/Customer/WVN; triggers ECN workflow",
+                               "stage_required":  "ECN 1, ECN 2, ECN 3, ECN 4, ECN 5, ECN 6, ECN 8, ECN 9, ECN 10, ECN 12",
+                               "keywords":  [
+                                                "ecr",
+                                                "engineering change request",
+                                                "change request",
+                                                "gen 0011",
+                                                "gen 0024"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "4M-CHG",
+                               "name":  "4M Change Evaluation",
+                               "form_code":  "QA-F-GEN-0017",
+                               "owner_dept":  "QA",
+                               "source":  "00_forms",
+                               "description":  "Evaluation of changes to Material, Method, Machine, or Manpower after EC implementation",
+                               "stage_required":  "ECN 3, ECN 10",
+                               "keywords":  [
+                                                "4m",
+                                                "4m change",
+                                                "man machine material method"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "DEVIATION",
+                               "name":  "Deviation Request",
+                               "form_code":  "QA-F-GEN-0012",
+                               "owner_dept":  "QA",
+                               "source":  "00_forms",
+                               "description":  "Temporary deviation from specification during NPI or EC transition",
+                               "stage_required":  "not gated",
+                               "keywords":  [
+                                                "deviation",
+                                                "deviation request",
+                                                "gen 0012",
+                                                "concession"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "8D-CAPA",
+                               "name":  "Corrective Action / 8D Report",
+                               "form_code":  "QA-F-GEN-0006",
+                               "owner_dept":  "QA",
+                               "source":  "00_forms",
+                               "description":  "Root-cause analysis and corrective action for trial or production nonconformities",
+                               "stage_required":  "NPI 6, NPI 7, ECN 11",
+                               "keywords":  [
+                                                "8d",
+                                                "capa",
+                                                "corrective action",
+                                                "root cause",
+                                                "gen 0006"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "RAMP-UP",
+                               "name":  "Ramp-Up Tracking Report",
+                               "form_code":  null,
+                               "owner_dept":  "Production",
+                               "source":  "Production dashboard",
+                               "description":  "Daily output vs. class-based ramp-up target; Class E target ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¤ 15 days to full capacity",
+                               "stage_required":  "NPI 7",
+                               "keywords":  [
+                                                "ramp up",
+                                                "rampup",
+                                                "ramp-up tracking",
+                                                "production ramp"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "LL-INFO",
+                               "name":  "Late Found Info / Lessons Learned",
+                               "form_code":  null,
+                               "owner_dept":  "NPI",
+                               "source":  "SharePoint list / Excel",
+                               "description":  "Issues discovered post-launch; feeds back into Step 1 planning for future projects",
+                               "stage_required":  "NPI 7",
+                               "keywords":  [
+                                                "lessons learned",
+                                                "late found",
+                                                "ll info"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "KAIZEN",
+                               "name":  "Kaizen / Suggestion Tracker",
+                               "form_code":  null,
+                               "owner_dept":  "CI",
+                               "source":  "17_kaizen_program_2025",
+                               "description":  "Continuous improvement suggestions applied during ramp-up and post-launch",
+                               "stage_required":  "NPI 7",
+                               "keywords":  [
+                                                "kaizen",
+                                                "suggestion",
+                                                "improvement tracker"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "NPI-CLOSURE",
+                               "name":  "NPI Closure Validation",
+                               "form_code":  null,
+                               "owner_dept":  "NPI",
+                               "source":  "RACI row 5.7 deliverable",
+                               "description":  "Final sign-off transferring project from NPI to Supply Chain for mass production",
+                               "stage_required":  "NPI 7, ECN 12",
+                               "keywords":  [
+                                                "npi closure",
+                                                "closure validation",
+                                                "project closure"
+                                            ]
+                           },
+                           {
+                               "doctype_id":  "QA-F-NPI-0004",
+                               "name":  "New Tool / Project Handover Form",
+                               "form_code":  "QA-F-NPI-0004",
+                               "owner_dept":  "NPI / QA",
+                               "source":  "00_forms",
+                               "description":  "Tool handover (QA-F-NPI-0004-03) and project handover (QA-F-NPI-0004-04) templates",
+                               "stage_required":  "not gated",
+                               "keywords":  [
+                                                "handover",
+                                                "tool handover",
+                                                "project handover",
+                                                "npi 0004"
+                                            ]
+                           }
+                       ],
+    "issue_tracker_headers":  {
+                                  "project_id":  "ProjectID",
+                                  "title":  "Title",
+                                  "description":  "Description",
+                                  "owner_dept":  "Dept",
+                                  "assigned_dept":  "AssignedDept",
+                                  "status":  "Status",
+                                  "priority":  "Priority",
+                                  "due_date":  "DueDate",
+                                  "action_taken":  "ActionTaken",
+                                  "raised_by":  "RequestedByName",
+                                  "raised_utc":  "Created"
+                              },
+    "npi_workflow":  {
+                         "total_steps":  7,
+                         "phase_labels":  {
+                                              "1":  "Plan",
+                                              "2-3":  "Design",
+                                              "4-5":  "Validate \u0026 Set Up",
+                                              "6-7":  "Produce"
+                                          },
+                         "steps":  [
+                                       {
+                                           "step_id":  1,
+                                           "step_name":  "Project Planning",
+                                           "phase":  "Plan",
+                                           "description":  "Build the master Gantt chart, quote the customer, and put the investment case together.",
+                                           "activities":  [
+                                                              "Build detail-level Gantt chart (BOM setup, certification, tooling, jig, trial, MP-plan dates)",
+                                                              "Issue quotation to customer",
+                                                              "Complete design checklist and confirm with Ningbo (NB) team",
+                                                              "Identify certification scope (CB, CE-EMC, etc.)",
+                                                              "Raise Investment Request (IR) for molds, tools, certification, machines",
+                                                              "Classify product complexity (AA/A/B/C or A/B/C/D/E)",
+                                                              "Confirm RACI assignment across all departments"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "PRF",
+                                                                              "QUOTE",
+                                                                              "GANTT",
+                                                                              "IR",
+                                                                              "CLASS"
+                                                                          ],
+                                           "mandatory_approver":  "NPI Manager",
+                                           "consulted_roles":  [
+                                                                   "Quality Assurance",
+                                                                   "IE",
+                                                                   "Production Manager",
+                                                                   "Finance Manager"
+                                                               ],
+                                           "trial_quantity":  null,
+                                           "gate_criteria":  "Gantt chart approved; IR submitted; design checklist signed off by NB team; product class assigned",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+                                                                                 "DESIGN-CHK"
+                                                                             ],
+                                           "source_note":  "DESIGN-CHK is not named in QA-SOP-NPI-0001-05 or the RACI matrix; it appears only in the 9649 case study, so it is tracked but does not block the gate."
+                                       },
+                                       {
+                                           "step_id":  2,
+                                           "step_name":  "Basic Design",
+                                           "phase":  "Design",
+                                           "description":  "Tear down an actual sample and confirm the design is manufacturable.",
+                                           "activities":  [
+                                                              "Design review on physical sample (tear-down analysis)",
+                                                              "Design-for-Manufacturing (DFM) pass on machines and tooling",
+                                                              "Routing and layout draft initiated by IE (2026 upgrade: now starts here)",
+                                                              "Work Instructions drafting begins from physical FG sample shared by Ningbo"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "DFM",
+                                                                              "DWG",
+                                                                              "WI"
+                                                                          ],
+                                           "mandatory_approver":  "NPI Manager",
+                                           "consulted_roles":  [
+                                                                   "Quality Assurance",
+                                                                   "IE",
+                                                                   "Production Manager",
+                                                                   "R\u0026D"
+                                                               ],
+                                           "trial_quantity":  null,
+                                           "gate_criteria":  "DFM signed off; tear-down findings documented; routing/layout draft started",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  3,
+                                           "step_name":  "Detail Design",
+                                           "phase":  "Design",
+                                           "description":  "Finalize DFM, draft the PFMEA, and start mold fabrication.",
+                                           "activities":  [
+                                                              "Finalize DFM for machines and tooling",
+                                                              "Draft Process PFMEA (2026 upgrade: Production, IE, QA involved from this step)",
+                                                              "Begin mold making and vacuum-metallization (VM) jig fabrication",
+                                                              "Prepare EP (Engineering Pilot) samples",
+                                                              "Draft trial-production plan for the new SKU"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "PFMEA",
+                                                                              "DWG",
+                                                                              "BOM"
+                                                                          ],
+                                           "mandatory_approver":  "NPI Manager",
+                                           "consulted_roles":  [
+                                                                   "Quality Assurance",
+                                                                   "Production Manager",
+                                                                   "IE"
+                                                               ],
+                                           "trial_quantity":  null,
+                                           "gate_criteria":  "PFMEA draft complete; mold fabrication started; EP sample plan defined",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  4,
+                                           "step_name":  "Prototype Validation",
+                                           "phase":  "Validate \u0026 Set Up",
+                                           "description":  "Fabricate the mold, then run T0/T1/T2 samples against spec.",
+                                           "activities":  [
+                                                              "Molding tool fabricated and tested at vendor site",
+                                                              "T0/T1/T2 sample rounds functionally tested against product specification",
+                                                              "Mold tested in-house at Wahl Vietnam",
+                                                              "Supplier process capability evaluated"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "PFMEA",
+                                                                              "DWG",
+                                                                              "BOM",
+                                                                              "CONTROL-PLAN"
+                                                                          ],
+                                           "mandatory_approver":  "Quality Assurance Manager",
+                                           "consulted_roles":  [
+                                                                   "Production Manager",
+                                                                   "IE",
+                                                                   "NPI Manager",
+                                                                   "Sourcing"
+                                                               ],
+                                           "trial_quantity":  null,
+                                           "gate_criteria":  "T0/T1/T2 samples pass functional test; mold approved for production; supplier capability confirmed",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  5,
+                                           "step_name":  "Process Set-up",
+                                           "phase":  "Validate \u0026 Set Up",
+                                           "description":  "Get the EP sample and jig output signed off by the customer.",
+                                           "activities":  [
+                                                              "VM-jig samples produced and submitted to customer for approval",
+                                                              "EP (Engineering Pilot) sample built",
+                                                              "Inspection Standard drafted and sent for customer approval",
+                                                              "Control Plan finalized",
+                                                              "IQC, IPQC, OQC SOPs prepared",
+                                                              "Assembly SOPs drafted"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "INSP-STD",
+                                                                              "CONTROL-PLAN",
+                                                                              "SOP",
+                                                                              "WI",
+                                                                              "PPAP"
+                                                                          ],
+                                           "mandatory_approver":  "Quality Assurance Manager",
+                                           "consulted_roles":  [
+                                                                   "NPI Manager",
+                                                                   "Production Manager",
+                                                                   "IE",
+                                                                   "Customer (WCC/NB)"
+                                                               ],
+                                           "trial_quantity":  null,
+                                           "gate_criteria":  "EP sample approved by customer; Inspection Standard signed off; Control Plan finalized; SOPs ready for training",
+                                           "warehouse_gate_required":  true,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  "Old-stock clearance is mandated by QA-SOP-NPI-0002-03 (ECN), not by the NPI SOP. Retained here as WVN practice, not as an SOP requirement."
+                                       },
+                                       {
+                                           "step_id":  6,
+                                           "step_name":  "Trial Production",
+                                           "phase":  "Produce",
+                                           "description":  "Run the line for real, under a signed Trial Request Form.",
+                                           "activities":  [
+                                                              "Confirm quality, safety, SOP, and BOM via Trial Request Form (QA-F-GEN-0010) signed by all related departments",
+                                                              "Set up line: tools, jigs, and machines in place",
+                                                              "Train Operators and Team Leads against SOP",
+                                                              "Log every trial issue with assigned action owner",
+                                                              "Prepare PPAP documentation on advice from Ningbo (2026 upgrade)",
+                                                              "Run pilot production: at least 3 batches (1000 / 2000 / 5000 units per QA-SOP-NPI-0001-05)",
+                                                              "PFMEA reviewed and updated post-trial"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "QA-F-GEN-0010",
+                                                                              "SOP",
+                                                                              "WI",
+                                                                              "TRIAL-RPT",
+                                                                              "PFMEA"
+                                                                          ],
+                                           "mandatory_approver":  "NPI Manager",
+                                           "consulted_roles":  [
+                                                                   "Quality Assurance Manager",
+                                                                   "Production Manager",
+                                                                   "Warehouse Manager",
+                                                                   "IE",
+                                                                   "Supply Chain Manager"
+                                                               ],
+                                           "trial_quantity":  {
+                                                                  "batch_1":  1000,
+                                                                  "batch_2":  2000,
+                                                                  "batch_3":  5000,
+                                                                  "note":  "Trial quantities per QA-SOP-NPI-0001-05 Rev 05; may change with departmental alignment"
+                                                              },
+                                           "gate_criteria":  "Trial Request signed by all departments; all trial issues logged and closed; PPAP package submitted; training records complete",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+                                                                                 "PPAP",
+                                                                                 "8D-CAPA"
+                                                                             ],
+                                           "source_note":  "PPAP is customer-driven, not required on every project; 8D-CAPA applies only when a trial produces a nonconformity. Both are tracked, not gating."
+                                       },
+                                       {
+                                           "step_id":  7,
+                                           "step_name":  "Production Ramp-Up",
+                                           "phase":  "Produce",
+                                           "description":  "Watch capacity climb to target, and bank what was learned.",
+                                           "activities":  [
+                                                              "Monitor new-SKU capacity against class-based ramp-up target",
+                                                              "Log issues as the line stabilizes",
+                                                              "Apply Kaizen suggestions to cut cost, reduce complexity, improve quality",
+                                                              "Capture lessons learned (LL INFO) for future projects",
+                                                              "Conduct NPI Closure Validation (RACI row 5.7)",
+                                                              "Transfer to Supply Chain for ongoing mass production"
+                                                          ],
+                                           "required_evidence_doctypes":  [
+                                                                              "RAMP-UP",
+                                                                              "KAIZEN",
+                                                                              "LL-INFO",
+                                                                              "NPI-CLOSURE",
+                                                                              "8D-CAPA"
+                                                                          ],
+                                           "mandatory_approver":  "NPI Manager",
+                                           "consulted_roles":  [
+                                                                   "Production Manager",
+                                                                   "Supply Chain Manager",
+                                                                   "Quality Assurance",
+                                                                   "Finance Manager"
+                                                               ],
+                                           "trial_quantity":  null,
+                                           "gate_criteria":  "Capacity target achieved within class-based timeline; NPI Closure Validation signed; project transferred to Supply Chain",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       }
+                                   ],
+                         "source_note":  "The 7-step model comes from the EPM pillar decks (Nov-2025 / Jul-2026), not from QA-SOP-NPI-0001-05, which does not enumerate 7 steps."
+                     },
+    "ecn_workflow":  {
+                         "total_steps":  12,
+                         "steps":  [
+                                       {
+                                           "step_id":  1,
+                                           "step_name":  "EC Request Initiation",
+                                           "description":  "Engineering Change request received from WCC/Customer/WVN or triggered by new product launch.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 1",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR"
+                                                                          ],
+                                           "responsible_dept":  "WCC / WVN / Customer",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "QA-F-GEN-0011/0024 Engineering Change Request form submitted",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  2,
+                                           "step_name":  "Department \u0026 5M Evaluation",
+                                           "description":  "Relevant departments evaluate the EC request. 5M analysis: Material, Method (Process), Machine (Tools), Manpower, Money (Cost).",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 2",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR"
+                                                                          ],
+                                           "responsible_dept":  "Production, QC, R\u0026D, Finance",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "5M impact analysis completed by all relevant departments",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  3,
+                                           "step_name":  "5M Impact Assessment \u0026 Documentation",
+                                           "description":  "Detailed 5M impact documentation: check and analyze Material, Process, Machine, Manpower, Cost changes.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 2 (5M detail)",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR",
+                                                                              "4M-CHG"
+                                                                          ],
+                                           "responsible_dept":  "Production, QC, R\u0026D, Finance",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "4M Change Evaluation (QA-F-GEN-0017) completed for each affected dimension",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  "Not a separate row in QA-SOP-NPI-0002-03 - the 5M evaluation sits inside row 2. Kept as its own step because the team works it that way, but it is a practice step, not an SOP step."
+                                       },
+                                       {
+                                           "step_id":  4,
+                                           "step_name":  "BOM / MWER \u0026 Customer Approval",
+                                           "description":  "If any 5M dimension is affected, Project Leader updates Board of Management (MWER) and Customer, and obtains formal approval.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 4",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR",
+                                                                              "BOM"
+                                                                          ],
+                                           "responsible_dept":  "Project Leader",
+                                           "gate_clearance_required":  true,
+                                           "gate_criteria":  "Approved QA-F-GEN-0011/0024 with MWER and Customer sign-off",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  5,
+                                           "step_name":  "Project Team Formation",
+                                           "description":  "Relevant departments (Production, QC, R\u0026D, Purchasing, Material Planning, Warehouse, etc.) form the EC project team. Minute meeting documented.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 5",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR"
+                                                                          ],
+                                           "responsible_dept":  "Project Leader",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "Kick-off meeting minutes documented; project team roster confirmed",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  6,
+                                           "step_name":  "EC Implementation Plan \u0026 Kick-off",
+                                           "description":  "EC implementation plan and instruction plan created. Kick-off meeting with all relevant personnel. Drawing and EC record distributed.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 6",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR",
+                                                                              "DWG",
+                                                                              "BOM"
+                                                                          ],
+                                           "responsible_dept":  "Project Leader",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "EC implementation plan approved; kick-off minutes signed; drawings and EC record distributed to all stakeholders",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  "QA-SOP-NPI-0002-03 row 6 says the implementation plan is created and a kick-off meeting held - there is no sign-off language. The signed gate here was invented by v2.0 and has been removed."
+                                       },
+                                       {
+                                           "step_id":  7,
+                                           "step_name":  "ERP System \u0026 BOM Updates",
+                                           "description":  "Update BOM in AX (quantity, specification), update Master Data, update Route if needed. Run Cost Roll Up and update Customer Quotation.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Rows 7.1",
+                                           "required_evidence_doctypes":  [
+                                                                              "BOM",
+                                                                              "DWG",
+                                                                              "SOP"
+                                                                          ],
+                                           "responsible_dept":  "Production, QC, Sourcing, Lean, Finance",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "BOM updated; Master Data updated; Route updated; Cost Roll Up executed; new quotation sent to Customer",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  8,
+                                           "step_name":  "Supplier EC Communication \u0026 Material Readiness",
+                                           "description":  "Sourcing issues EC to suppliers with updated BOM and drawings. Contact supplier for trial production materials. Send debit note to customer if required.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Rows 7.2",
+                                           "required_evidence_doctypes":  [
+                                                                              "BOM",
+                                                                              "DWG",
+                                                                              "ECR"
+                                                                          ],
+                                           "responsible_dept":  "Sourcing, Material Planning, Finance",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "EC issued to suppliers; trial material orders placed; debit note issued if applicable",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  9,
+                                           "step_name":  "Warehouse \u0026 Stock Management",
+                                           "description":  "Warehouse follows EC to manage stock: check quantities per item, determine running change vs. quarantine vs. scrap, follow FIFO procedure, manage quarantine/scrap if required.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Rows 7.3.1",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR",
+                                                                              "BOM"
+                                                                          ],
+                                           "responsible_dept":  "Warehouse, Logistics",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "Stock assessment complete; disposition (running change/quarantine/scrap) decided per item; departments notified",
+                                           "warehouse_gate_required":  true,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  10,
+                                           "step_name":  "Trial Production Planning",
+                                           "description":  "Material Planning schedules trial production with EC update. Production, QC, and R\u0026D plan 5M-related changes: tooling modify schedule, material testing, etc. Evaluate 4M after change in initial production.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Rows 7.3.2 + 7.4",
+                                           "required_evidence_doctypes":  [
+                                                                              "ECR",
+                                                                              "DWG",
+                                                                              "BOM",
+                                                                              "4M-CHG",
+                                                                              "QA-F-GEN-0010"
+                                                                          ],
+                                           "responsible_dept":  "Material Planning, Production, QC, R\u0026D",
+                                           "gate_clearance_required":  false,
+                                           "gate_criteria":  "Trial production scheduled; 4M evaluation completed post-change; 4M update (WI, process) documented",
+                                           "warehouse_gate_required":  false,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  ""
+                                       },
+                                       {
+                                           "step_id":  11,
+                                           "step_name":  "Trial Production Execution",
+                                           "description":  "Conduct trial production if needed. Minimum 3 trials at 2000, 5000, and 10000 products. Full-process evaluation required: e.g., molding change must be evaluated with assembly line. In case of failure, project team troubleshoots with action plan before re-trial.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Rows 8 + 10",
+                                           "required_evidence_doctypes":  [
+                                                                              "QA-F-GEN-0010",
+                                                                              "TRIAL-RPT",
+                                                                              "8D-CAPA",
+                                                                              "SOP",
+                                                                              "WI"
+                                                                          ],
+                                           "responsible_dept":  "Production, QC",
+                                           "gate_clearance_required":  true,
+                                           "gate_criteria":  "At least 3 trial batches complete (2000/5000/10000); trial report approved; all issues closed or action plan in place",
+                                           "warehouse_gate_required":  true,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  "QA-SOP-NPI-0002-03 row 8 says trial production is run \u0027if needed\u0027 - the trial is conditional, so this gate is an operational convention."
+                                       },
+                                       {
+                                           "step_id":  12,
+                                           "step_name":  "Mass Production Handover",
+                                           "description":  "EC fully implemented. Mass production procedure initiated. All documentation finalized and archived per QA-SOP-GEN-0002 Control of Records.",
+                                           "source_step_ref":  "ECN Procedure Table 3, Row 14",
+                                           "required_evidence_doctypes":  [
+                                                                              "SOP",
+                                                                              "WI",
+                                                                              "BOM",
+                                                                              "DWG",
+                                                                              "ECR",
+                                                                              "TRIAL-RPT",
+                                                                              "NPI-CLOSURE"
+                                                                          ],
+                                           "responsible_dept":  "Production, QC",
+                                           "gate_clearance_required":  true,
+                                           "gate_criteria":  "All EC documentation closed; SOP/WI updated; mass production running; project archived",
+                                           "warehouse_gate_required":  true,
+                                           "conditional_evidence_doctypes":  [
+
+                                                                             ],
+                                           "source_note":  "QA-SOP-NPI-0002-03 row 14 states only \u0027mass production procedure\u0027 with no sign-off language; this gate is an operational convention."
+                                       }
+                                   ],
+                         "source_note":  "12 operational steps mapped onto the QA-SOP-NPI-0002-03 row structure; step 3 is a practice split, not an SOP row."
+                     },
+    "trial_quantity_presets":  {
+                                   "Simple":  {
+                                                  "class":  "A / B",
+                                                  "phase1":  100,
+                                                  "phase2":  100,
+                                                  "phase3":  100,
+                                                  "description":  "Accessory-only changes: intro book, card, color box, PDQ, printing plastic box"
+                                              },
+                                   "Medium":  {
+                                                  "class":  "C / D",
+                                                  "phase1":  500,
+                                                  "phase2":  1000,
+                                                  "phase3":  2000,
+                                                  "description":  "Plastic shell color change, blister-card changes, shell color + packaging"
+                                              },
+                                   "Very Complex":  {
+                                                        "class":  "E",
+                                                        "phase1":  2000,
+                                                        "phase2":  5000,
+                                                        "phase3":  10000,
+                                                        "description":  "New production tooling/equipment required; full transfer project"
+                                                    },
+                                   "sop_reference":  "QA-SOP-NPI-0001-05 specifies 1000/2000/5000 baseline; ECN Procedure specifies 2000/5000/10000 for EC-driven trials. Actual quantities may change with Production-Quality-NPI-IE alignment.",
+                                   "sop_baselines":  {
+                                                         "npi":  {
+                                                                     "batch_1":  1000,
+                                                                     "batch_2":  2000,
+                                                                     "batch_3":  5000,
+                                                                     "source":  "QA-SOP-NPI-0001-05: \u0027at least 3 times in batches of 1000, 2000 and 5000 products\u0027"
+                                                                 },
+                                                         "ecn":  {
+                                                                     "batch_1":  2000,
+                                                                     "batch_2":  5000,
+                                                                     "batch_3":  10000,
+                                                                     "source":  "QA-SOP-NPI-0002-03: \u0027at least 3 trials (2000, 5000 and 10000 products)\u0027"
+                                                                 },
+                                                         "note":  "The Simple/Medium/Very Complex presets below are WVN practice conventions and sit BELOW both SOP baselines. Using them is a documented deviation from the SOP."
+                                                     }
+                               },
+    "departments":  {
+                        "NPI":  {
+                                    "full_name":  "New Product Introduction",
+                                    "raci_role":  "Accountable (A) for most deliverables"
+                                },
+                        "QA":  {
+                                   "full_name":  "Quality Assurance",
+                                   "raci_role":  "Responsible/Consulted for quality deliverables"
+                               },
+                        "Sourcing":  {
+                                         "full_name":  "Sourcing Department",
+                                         "raci_role":  "Responsible for supplier validation and EC issuance"
+                                     },
+                        "IE":  {
+                                   "full_name":  "Industrial Engineering",
+                                   "raci_role":  "Responsible for routes, time study, line balancing"
+                               },
+                        "Production_Assembly":  {
+                                                    "full_name":  "Production â€”Â Assembly",
+                                                    "raci_role":  "Consulted/Informed on most tasks"
+                                                },
+                        "Production_Blade":  {
+                                                 "full_name":  "Production â€”Â Blade",
+                                                 "raci_role":  "Consulted/Informed on blade-related tasks"
+                                             },
+                        "Production_Mold":  {
+                                                "full_name":  "Production â€”Â Mold",
+                                                "raci_role":  "Consulted/Informed on mold-related tasks"
+                                            },
+                        "Finance":  {
+                                        "full_name":  "Finance Department",
+                                        "raci_role":  "Responsible for cost roll-up, quotation, debit notes"
+                                    },
+                        "Supply_Chain":  {
+                                             "full_name":  "Supply Chain",
+                                             "raci_role":  "Responsible for coverage groups, buyer groups, FG planning"
+                                         },
+                        "Warehouse":  {
+                                          "full_name":  "Warehouse",
+                                          "raci_role":  "Responsible for stock management during EC, FIFO, quarantine/scrap"
+                                      },
+                        "R_D":  {
+                                    "full_name":  "Research \u0026 Development",
+                                    "raci_role":  "Consulted on design/EC evaluation"
+                                },
+                        "CI":  {
+                                   "full_name":  "Continuous Improvement",
+                                   "raci_role":  "Consulted on Kaizen/improvement"
+                               },
+                        "HR":  {
+                                   "full_name":  "Human Resources",
+                                   "raci_role":  "Informed; manages training records and skill matrix"
+                               },
+                        "HSE":  {
+                                    "full_name":  "Health, Safety \u0026 Environment",
+                                    "raci_role":  "Consulted on safety validation"
+                                },
+                        "Material_Planning":  {
+                                                  "full_name":  "Material Requirement Planning",
+                                                  "raci_role":  "Informed/Consulted; plans trial production materials"
+                                              },
+                        "Design":  {
+                                       "full_name":  "Design Department (WCC/NB)",
+                                       "raci_role":  "External: provides product design, drawings, specifications"
+                                   }
+                    },
+    "wos_pillar_context":  {
+                               "pillar_number":  "09",
+                               "pillar_name":  "Early Product Management (EPM) / Early Equipment Management (EEM)",
+                               "q4_2025_score":  1,
+                               "target_score":  3,
+                               "kpis":  {
+                                            "on_time_delivery":  {
+                                                                     "2025_actual":  "99%",
+                                                                     "jul_2026_actual":  "95%",
+                                                                     "2027_target":  "95%"
+                                                                 },
+                                            "problems_identified_solved":  {
+                                                                               "2025_actual":  "85%",
+                                                                               "jul_2026_actual":  "100%",
+                                                                               "2027_target":  "90%"
+                                                                           },
+                                            "late_found_issues_count":  {
+                                                                            "2025_actual":  10,
+                                                                            "jul_2026_actual":  0,
+                                                                            "2027_target":  5
+                                                                        },
+                                            "best_practices_kaizens":  {
+                                                                           "2025_actual":  7,
+                                                                           "jul_2026_actual":  20,
+                                                                           "2027_target":  12
+                                                                       }
+                                        },
+                               "npi_project_volume":  {
+                                                          "prf_received_2025":  201,
+                                                          "projects_run_2025":  101,
+                                                          "on_time_pct_2025":  "81%",
+                                                          "mold_tools_2024":  23,
+                                                          "mold_tools_2025":  81,
+                                                          "note":  "PRF intake nearly doubled 2024ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢2025 (105ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢201); mold volume tripled (23ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢81)"
+                                                      }
+                           },
+    "file_system_resilience":  {
+                                   "lock_retry_attempts":  3,
+                                   "lock_retry_delay_ms":  100,
+                                   "fallback_log_prefix":  "app_fallback_"
+                               },
+    "stage_gate_metadata":  {
+                                "classification_schemas":  {
+                                                               "aa_a_b_c":  {
+                                                                                "description":  "EXTERNAL BENCHMARK ONLY (Tarkett WCM EEM) - not a Wahl Vietnam classification and not referenced by any Wahl source document. Kept for comparison; do not classify projects with it. The live scheme is A-E, see change_types.",
+                                                                                "classes":  {
+                                                                                                "AA":  {
+                                                                                                           "complexity":  "Highest",
+                                                                                                           "lead_time":  "1 month",
+                                                                                                           "eem_investment":  "Usually required, \u003e$30K"
+                                                                                                       },
+                                                                                                "A":  {
+                                                                                                          "complexity":  "High",
+                                                                                                          "lead_time":  "2 weeks",
+                                                                                                          "eem_investment":  "Often required, $20K-$30K"
+                                                                                                      },
+                                                                                                "B":  {
+                                                                                                          "complexity":  "Moderate",
+                                                                                                          "lead_time":  "1 week",
+                                                                                                          "eem_investment":  "Case-by-case, $10K-$20K"
+                                                                                                      },
+                                                                                                "C":  {
+                                                                                                          "complexity":  "Lowest",
+                                                                                                          "lead_time":  "2 days",
+                                                                                                          "eem_investment":  "Rarely required, \u003c$10K"
+                                                                                                      }
+                                                                                            }
+                                                                            },
+                                                               "abcde":  {
+                                                                             "description":  "Expanded 5-tier scheme applied to new SKUs since 2025 (from thesis analysis)",
+                                                                             "classes":  {
+                                                                                             "A":  {
+                                                                                                       "driver":  "Packaging-Only Change - Box, card, colour box, PDQ and printing changes only - no product hardware change.",
+                                                                                                       "cycle_time_days":  null
+                                                                                                   },
+                                                                                             "B":  {
+                                                                                                       "driver":  "Blister Card Change Only - Blister and blister-card changes; product itself unchanged.",
+                                                                                                       "cycle_time_days":  178
+                                                                                                   },
+                                                                                             "C":  {
+                                                                                                       "driver":  "Housing Unit Change Only - Housing unit changed - new or modified plastic tooling required.",
+                                                                                                       "cycle_time_days":  103
+                                                                                                   },
+                                                                                             "D":  {
+                                                                                                       "driver":  "Housing Surface Change Only - Surface finish, texture or colour of the housing changes; geometry does not.",
+                                                                                                       "cycle_time_days":  108
+                                                                                                   },
+                                                                                             "E":  {
+                                                                                                       "driver":  "New Product Development (Seed Develop) - Brand-new product development. New production tooling and equipment required.",
+                                                                                                       "cycle_time_days":  210
+                                                                                                   }
+                                                                                         }
+                                                                         }
+                                                           },
+                                "gap_diagnosis_ref":  "01_Current_State_and_Gap_Analysis.md â€”Â five disconnected trackers, no shared project identity, 76-83% on-time for 6 years",
+                                "proposed_framework_ref":  "03_Proposed_Framework_1Month.md â€”Â thin coordination layer over existing trackers"
+                            }
+}

@@ -1,0 +1,33 @@
+wh_id,project_id,step_key,area,kind,status,cleared_by,cleared_date,reference,notes
+WH-00001,NPI-9649LP,NPI-5,Assembly,Material readiness,Cleared,Tran Minh Quan,2026-W30,WH-9649LP,
+WH-00002,NPI-9639,NPI-5,Blade,Material readiness,Pending,,,WH-9639,Awaiting gate clearance
+WH-00003,NPI-9655N,NPI-5,Molding (material),Material readiness,Pending,,,WH-9655N,Awaiting gate clearance
+WH-00004,NPI-2983LP,NPI-5,Mold storage,Material readiness,Pending,,,WH-2983LP,Awaiting gate clearance
+WH-00005,NPI-6245LP,NPI-5,Fixture storage,Material readiness,Pending,,,WH-6245LP,Awaiting gate clearance
+WH-00006,NPI-5612,NPI-5,Assembly,Material readiness,Cleared,Dang Quoc Bao,2026-W30,WH-5612,
+WH-00007,NPI-7067,NPI-5,Blade,Material readiness,Pending,,,WH-7067,Awaiting gate clearance
+WH-00008,NPI-09155-1701,NPI-5,Molding (material),Material readiness,Cleared,Hoang Kim Chi,2026-W30,WH-09155-1701,
+WH-00009,NPI-3026452,NPI-5,Mold storage,Material readiness,Pending,,,WH-3026452,Awaiting gate clearance
+WH-00010,NPI-6275,NPI-5,Fixture storage,Material readiness,Cleared,Nguyen Thi Lan,2026-W30,WH-6275,
+WH-00011,NPI-5537,NPI-5,Assembly,Material readiness,Pending,,,WH-5537,Awaiting gate clearance
+WH-00012,NPI-9855,NPI-5,Blade,Material readiness,Pending,,,WH-9855,Awaiting gate clearance
+WH-00013,NPI-9893LP,NPI-5,Molding (material),Material readiness,Pending,,,WH-9893LP,Awaiting gate clearance
+WH-00014,NPI-5619,NPI-5,Mold storage,Material readiness,Pending,,,WH-5619,Awaiting gate clearance
+WH-00015,NPI-7066,NPI-5,Fixture storage,Material readiness,Pending,,,WH-7066,Awaiting gate clearance
+WH-00016,NPI-5546S,NPI-5,Assembly,Material readiness,Cleared,Hoang Kim Chi,2026-W30,WH-5546S,
+WH-00017,NPI-5560N,NPI-5,Blade,Material readiness,Cleared,Tran Minh Quan,2026-W30,WH-5560N,
+WH-00018,NPI-2983L,NPI-5,Molding (material),Material readiness,Pending,,,WH-2983L,Awaiting gate clearance
+WH-00019,NPI-9865,NPI-5,Mold storage,Material readiness,Pending,,,WH-9865,Awaiting gate clearance
+WH-00020,ECN-5612C,ECN-9,Fixture storage,Material readiness,Pending,,,WH-5612C,Awaiting gate clearance
+WH-00021,ECN-5612C,ECN-11,Assembly,Material readiness,Cleared,Le Hoang Nam,2026-W30,WH-5612C,
+WH-00022,ECN-5612C,ECN-12,Blade,Material readiness,Cleared,Le Hoang Nam,2026-W30,WH-5612C,
+WH-00023,ECN-9649P,ECN-9,Molding (material),Material readiness,Pending,,,WH-9649P,Awaiting gate clearance
+WH-00024,ECN-4501,ECN-9,Mold storage,Material readiness,Pending,,,WH-4501,Awaiting gate clearance
+WH-00025,ECN-3282,ECN-9,Fixture storage,Material readiness,Pending,,,WH-3282,Awaiting gate clearance
+WH-00026,ECN-7065,ECN-9,Assembly,Material readiness,Pending,,,WH-7065,Awaiting gate clearance
+WH-00027,ECN-5640,ECN-9,Blade,Material readiness,Pending,,,WH-5640,Awaiting gate clearance
+WH-00028,ECN-5640,ECN-11,Molding (material),Material readiness,Cleared,Tran Minh Quan,2026-W30,WH-5640,
+WH-00029,ECN-5640,ECN-12,Mold storage,Material readiness,Cleared,Tran Minh Quan,2026-W30,WH-5640,
+WH-00030,ECN-3193,ECN-9,Fixture storage,Material readiness,Pending,,,WH-3193,Awaiting gate clearance
+WH-0031,NPI-9649LP,NPI-5,Blade,inventory,Cleared,intern,2026-W32,,
+WH-0032,NPI-9649LP,NPI-5,Molding (material),inventory,Cleared,intern,2026-W32,,

@@ -1,0 +1,181 @@
+[
+  {
+    "target": "QA-F-GEN-0010_Production_Trial_Request.xlsx",
+    "written_as": "QA-F-GEN-0010_Production_Trial_Request.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0010-02 Production Trial request.xlsx",
+    "size_bytes": 266733,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0010-02 Production Trial request.xlsx (chosen: highest rev -02, correct form code)",
+      "00_forms\\PRODUCTION TRIAL REQUEST.xlsx (no form code, ambiguous identity)",
+      "00_forms\\QA-F-GEN-0023-01 PRODUCTION TRIAL REQUEST 5640.xlsx (different form code GEN-0023, model-specific)"
+    ],
+    "note": ""
+  },
+  {
+    "target": "QA-F-GEN-0011_Engineering_Change_Request.xlsx",
+    "written_as": "QA-F-GEN-0011_Engineering_Change_Request.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0011-01 Engineering Change Request.xlsx",
+    "size_bytes": 126888,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0011-01 Engineering Change Request.xlsx (chosen: only current version, rev -01)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0011-01 Document Change Request Form.xlsx (obsoleted, different name)"
+    ],
+    "note": ""
+  },
+  {
+    "target": "QA-F-GEN-0012_Deviation_Request.docx",
+    "written_as": "QA-F-GEN-0012_Deviation_Request.docx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0012-01 Deviation Request.docx",
+    "size_bytes": 576755,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0012-01 Deviation Request.docx (chosen: only current version)"
+    ],
+    "note": ""
+  },
+  {
+    "target": "QA-F-GEN-0017_4M_Change_Evaluation.xlsx",
+    "written_as": "QA-F-GEN-0017_4M_Change_Evaluation.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M.xlsx",
+    "size_bytes": 189105,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M.xlsx (chosen: current non-obsoleted)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M Rev00.xlsx (obsoleted older rev)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M Rev000.xlsx (obsoleted older rev)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M.pdf (obsoleted PDF)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M (2).pdf (obsoleted PDF)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0017-01 Phiếu đánh giá thay đổi 4M (3).pdf (obsoleted PDF)"
+    ],
+    "note": ""
+  },
+  {
+    "target": "QA-F-GEN-0006_8D_CAPA_Report.xlsx",
+    "written_as": "QA-F-GEN-0006_8D_CAPA_Report.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0006-01 Phiếu hành động khắc phục -8D.xlsx",
+    "size_bytes": 69671,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0006-01 Phiếu hành động khắc phục -8D.xlsx (chosen: current version, 8D CAPA form)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0006-01 Phiếu theo dõi sản phẩm không phù hợp.xlsx (obsoleted, form code was reassigned - this was old NCR form)"
+    ],
+    "note": "Vietnamese title: Phiếu hành động khắc phục -8D (8D Corrective Action Form)"
+  },
+  {
+    "target": "Process_Control_Plan_Template.xls",
+    "written_as": "Process_Control_Plan_Template.xls",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\10_quality_control\\Process control plan_template.xls",
+    "size_bytes": 48640,
+    "candidates_considered": [
+      "10_quality_control\\Process control plan_template.xls (chosen: blank template, no project/model)",
+      "10_quality_control\\PROCESS and PRODUCT CONTROL PLAN EXAMPLE.xls (filled example, not blank)",
+      "10_quality_control\\PROCESS and PRODUCT CONTROL PLAN 9918,9916.xls (model-specific)",
+      "10_quality_control\\PROCESS and PRODUCT CONTROL PLAN 3025819 Brazil.xls (project-specific)",
+      "10_quality_control\\PROCESS and PRODUCT CONTROL PLAN HiViz Charge Stand.xls (project-specific)",
+      "10_quality_control\\PROCESS and PRODUCT CONTROL PLAN Multiport Charge Stand.xls (project-specific)",
+      "10_quality_control\\Molding Process control plan-9865 Bottom Housing.xlsx (project-specific)"
+    ],
+    "note": ""
+  },
+  {
+    "target": "WAHL_Supplier_PPAP_Form_PSW.xlsx",
+    "written_as": "WAHL_Supplier_PPAP_Form_PSW.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\11_ppap\\WAHL Supplier  PPAP Form PSW Blank Rev.9_9.13.2023__f60376633de3.xlsx",
+    "size_bytes": 16005,
+    "candidates_considered": [
+      "11_ppap\\WAHL Supplier  PPAP Form PSW Blank Rev.9_9.13.2023__f60376633de3.xlsx (chosen: blank master, Rev.9)",
+      "11_ppap\\WAHL Supplier  PPAP Form PSW  20250708 EN__91b8743c9e69.xlsx (dated/filled, not blank)",
+      "11_ppap\\WAHL Supplier  PPAP Form PSW Switch 2024.10.12__db74968dc7e9.xlsx (model-specific: Switch)"
+    ],
+    "note": "Blank Rev.9 from 9/13/2023, highest revision blank copy found"
+  },
+  {
+    "target": "QA-F-GEN-0018_First_Trial_Report.xlsx",
+    "written_as": "QA-F-GEN-0018_First_Trial_Report.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0018-01 Phiếu đánh giá kết quả chạy thử sản phẩm đầu tiên.xlsx",
+    "size_bytes": 60022,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0018-01 Phiếu đánh giá kết quả chạy thử sản phẩm đầu tiên.xlsx (chosen: canonical location in 00_forms root)",
+      "00_forms\\Reference\\QA-F-GEN-0018-01 Phiếu đánh giá kết quả chạy thử sản phẩm đầu tiên.xlsx (reference copy)"
+    ],
+    "note": "Vietnamese title: Phiếu đánh giá kết quả chạy thử sản phẩm đầu tiên (First Trial Product Evaluation Form)"
+  },
+  {
+    "target": "Meeting_Minute_Template.xlsx",
+    "written_as": "Meeting_Minute_Template.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\Meeting Minute Template.xlsx",
+    "size_bytes": 18876,
+    "candidates_considered": [
+      "00_forms\\Meeting Minute Template.xlsx (chosen: only match)"
+    ],
+    "note": ""
+  },
+  {
+    "target": "QA-F-GEN-0007_Non_Conforming_Product_Report.xlsx",
+    "written_as": "QA-F-GEN-0007_Non_Conforming_Product_Report.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0007-01 Phiếu báo cáo sản phẩm không phù hợp.xlsx",
+    "size_bytes": 9005780,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0007-01 Phiếu báo cáo sản phẩm không phù hợp.xlsx (chosen: Non-Conforming Product Report, current)",
+      "00_forms\\QA-F-GEN-0007-01 Nhãn mẫu chuẩn.xls (same form code but different form: Standard Sample Label, likely reassigned)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0007-01 Phiếu báo cáo sản phẩm không phù hợp.xlsx (obsoleted copy, similar size)"
+    ],
+    "note": "Vietnamese title: Phiếu báo cáo sản phẩm không phù hợp. Large file (8.6 MB) may contain embedded content. Same form code QA-F-GEN-0007-01 also used for Nhãn mẫu chuẩn (Standard Sample Label, .xls) — possible code duplication or reassignment."
+  },
+  {
+    "target": "QA-F-IQC-0001_IQC_Material_Inspection.xlsx",
+    "written_as": "QA-F-IQC-0001_IQC_Material_Inspection.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-IQC-0001-02 IQC Phiếu kiểm tra nguyên vật liệu đầu vào.xlsx",
+    "size_bytes": 49895,
+    "candidates_considered": [
+      "00_forms\\QA-F-IQC-0001-02 IQC Phiếu kiểm tra nguyên vật liệu đầu vào.xlsx (chosen: highest rev -02, has IQC in filename)",
+      "00_forms\\QA-F-IQC-0001-02 Phiếu kiểm tra nguyên vật liệu đầu vào.xlsx (same rev -02, no IQC prefix, 53494 bytes)",
+      "00_forms\\0. Obsoleted\\QA-F-IQC-0001-01 IQC Phiếu kiểm tra nguyên vật liệu đầu vào.xlsx (obsoleted rev -01)"
+    ],
+    "note": "Vietnamese title: Phiếu kiểm tra nguyên vật liệu đầu vào (Raw Material Incoming Inspection Form). Two -02 variants exist; chose the one with IQC prefix as more specific to IQC function."
+  },
+  {
+    "target": "QA-F-OQC-0002_OQC_First_Piece_Inspection.xlsx",
+    "written_as": "QA-F-OQC-0002_OQC_First_Piece_Inspection.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-OQC-0002-01 Phiếu kiểm tra sản phẩm đầu tiên.xlsx",
+    "size_bytes": 63225,
+    "candidates_considered": [
+      "00_forms\\QA-F-OQC-0002-01 Phiếu kiểm tra sản phẩm đầu tiên.xlsx (chosen: current non-obsoleted version)",
+      "00_forms\\0. Obsoleted\\QA-F-OQC-0002-01 Phiếu kiểm tra sản phẩm đầu tiên.xlsx (obsoleted copy, 56750 bytes)"
+    ],
+    "note": "Vietnamese title: Phiếu kiểm tra sản phẩm đầu tiên (First Piece Inspection Form)"
+  },
+  {
+    "target": "QA-F-GEN-0004_0005_Calibration_Records.xls",
+    "written_as": "QA-F-GEN-0004_0005_Calibration_Records.xls",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\QA-F-GEN-0004-01 Calibration Record.xls",
+    "size_bytes": 282112,
+    "candidates_considered": [
+      "00_forms\\QA-F-GEN-0004-01 Calibration Record.xls (chosen: Calibration Record, matches 'Records' in target name)",
+      "00_forms\\QA-F-GEN-0005-01 Calibration Report.xls (sibling form: Calibration Report, different purpose)",
+      "00_forms\\0. Obsoleted\\QA-F-GEN-0004-01 Calibration Record Old.xls (obsoleted older version)"
+    ],
+    "note": "Target name combines both GEN-0004 and GEN-0005 codes. Only GEN-0004 (Calibration Record) was copied. QA-F-GEN-0005-01 Calibration Report.xls also exists at 00_forms\\ and may be needed separately."
+  },
+  {
+    "target": "SC-F-WH-008_Unplanned_Material_Request.xlsx",
+    "written_as": "SC-F-WH-008_Unplanned_Material_Request.xlsx",
+    "found": true,
+    "source_path": "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\00_forms\\SC-F-WH-008-01 UPIR Phiếu đề nghị phát NVL ngoài kế hoạch.xlsx",
+    "size_bytes": 26636,
+    "candidates_considered": [
+      "00_forms\\SC-F-WH-008-01 UPIR Phiếu đề nghị phát NVL ngoài kế hoạch.xlsx (chosen: only match)"
+    ],
+    "note": "Vietnamese title: UPIR Phiếu đề nghị phát NVL ngoài kế hoạch (Unplanned Material Issue Request - UPIR)"
+  }
+]

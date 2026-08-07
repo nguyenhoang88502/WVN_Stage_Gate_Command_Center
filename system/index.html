@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- Light is the stable startup theme (v3.1). app.js re-applies the stored
+     choice on load; these attributes stop a dark-stored theme from flashing
+     light first, and stop an unset theme from ever resolving to the OS
+     preference, which used to open the tool dark on some laptops only. -->
+<html lang="en" data-theme="light" data-bs-theme="light">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WAHL Vietnam — NPI &amp; ECN Stage Gate Command Center</title>
+  <!-- Vendored locally: the tool runs air-gapped, so there is no CDN link and
+       no webfont request anywhere in this file. -->
+  <link rel="stylesheet" href="./vendor/tabler/css/tabler.min.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+
+<body>
+  <div class="app">
+    <header class="navbar navbar-expand-md navbar-dark d-print-none">
+      <div class="container-xl">
+        <div class="navbar-brand">
+          WAHL Vietnam
+          <span class="brand-sub">NPI &amp; ECN Stage Gate Command Center</span>
+        </div>
+        <div class="navbar-text" id="stamp">loading…</div>
+        <div class="cmdbar">
+          <span id="srvState" class="badge bg-secondary" role="status" aria-live="polite">connecting…</span>
+          <button id="stopBtn" class="btn btn-danger btn-sm"
+                  title="Stop the local server and release all port and file locks">🛑 Stop Server</button>
+          <button id="themeBtn" class="btn btn-icon btn-sm" type="button"
+                  aria-pressed="false" title="Switch to dark theme">◐</button>
+        </div>
+      </div>
+    </header>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Workspace"></nav>
+    <div id="views">
+      <div class="loader">Loading…</div>
+    </div>
+  </div>
+  <script src="./vendor/tabler/js/tabler.min.js" defer></script>
+  <script src="./app.js"></script>
+</body>
+
+</html>
