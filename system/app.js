@@ -166,53 +166,112 @@ function requireName() {
 }
 
 /* ---- claim button builder (Task 2a) ------------------------------------
-   Returns a button that claims or reassigns a task to the active user.
-   Updates the target store row in place via API.action, writes an audit
-   entry, and then calls onAfterClaim so the caller can refresh in-place
-   without closing the drawer or jumping the viewport. */
+   Returns a span container with a claim button plus Owner / Supporter
+   badges. Two-tier logic: if the row is unowned the clicker becomes
+   Owner; if owned by someone else they become Supporter instead. */
 function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
   const currentOwner = row.owner_pic || row.claimed_by || '';
+  const currentSupporter = row.supporter_pic || row.supporter_by || '';
+
+  const wrap = el('span');
+  wrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap';
+
   const btn = el('button', currentOwner ? 'claimed-btn' : 'primary',
     currentOwner ? 'Claimed by ' + currentOwner : 'Claim Task');
+  wrap.appendChild(btn);
+
+  var ownerBadge = null;
+  var supporterBadge = null;
+
+  function renderBadges() {
+    if (ownerBadge) { ownerBadge.remove(); ownerBadge = null; }
+    if (supporterBadge) { supporterBadge.remove(); supporterBadge = null; }
+    const own = row.owner_pic || row.claimed_by || '';
+    const sup = row.supporter_pic || row.supporter_by || '';
+    if (own) {
+      ownerBadge = el('span', 'claim-badge ' + badgeClass('FILED'), 'Owner: ' + own);
+      wrap.appendChild(ownerBadge);
+    }
+    if (sup) {
+      supporterBadge = el('span', 'claim-badge badge bg-teal-lt', 'Supporter: ' + sup);
+      wrap.appendChild(supporterBadge);
+    }
+  }
+  renderBadges();
 
   btn.onclick = async () => {
     const who = requireName(); if (!who) return;
-    const prev = row.owner_pic || row.claimed_by || '';
-    if (who === prev) {
-      // Reassign to self is a no-op — the button already shows their name
+    const owner = row.owner_pic || row.claimed_by || '';
+    const supporter = row.supporter_pic || row.supporter_by || '';
+
+    // No owner yet — claim as Owner
+    if (!owner) {
+      btn.disabled = true;
+      try {
+        var rowData = Object.assign({}, row);
+        rowData.owner_pic = who;
+        rowData.claimed_by = who;
+        rowData.claimed_utc = new Date().toISOString();
+        if (store === 'lb_gates') {
+          if (!rowData.process) rowData.process = '';
+          if (!rowData.step_num) rowData.step_num = '';
+          if (!rowData.step_name) rowData.step_name = '';
+          if (!rowData.status) rowData.status = 'NotStarted';
+          rowData.updated_utc = new Date().toISOString();
+        }
+        await API.action(store, rowData, {
+          upsertKeys: upsertKeys,
+          audit: { user: who, action: 'Claim_Task', projectId: row.project_id, objType: objType,
+            objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+            from: owner, to: who, detail: 'Owner claim' }
+        });
+        row.owner_pic = who;
+        row.claimed_by = who;
+        row.claimed_utc = rowData.claimed_utc;
+        btn.textContent = 'Claimed by ' + who;
+        btn.className = 'claimed-btn';
+        renderBadges();
+        if (onAfterClaim) onAfterClaim(who, 'Owner');
+      } catch (e) { alert('Claim failed: ' + e.message); }
+      btn.disabled = false;
       return;
     }
+
+    // Already the Owner — no-op
+    if (who === owner) return;
+
+    // Already the Supporter — no-op
+    if (who === supporter) return;
+
+    // Different user — claim as Supporter
     btn.disabled = true;
     try {
-      var rowData = Object.assign({}, row);
-      rowData.owner_pic = who;
-      rowData.claimed_by = who;
-      rowData.claimed_utc = new Date().toISOString();
-      // lb_gates rows may not exist yet; seed defaults so the upsert creates one
+      var rowData2 = Object.assign({}, row);
+      rowData2.supporter_pic = who;
+      rowData2.supporter_by = who;
+      rowData2.supporter_utc = new Date().toISOString();
       if (store === 'lb_gates') {
-        if (!rowData.process) rowData.process = '';
-        if (!rowData.step_num) rowData.step_num = '';
-        if (!rowData.step_name) rowData.step_name = '';
-        if (!rowData.status) rowData.status = 'NotStarted';
-        rowData.updated_utc = new Date().toISOString();
+        if (!rowData2.process) rowData2.process = '';
+        if (!rowData2.step_num) rowData2.step_num = '';
+        if (!rowData2.step_name) rowData2.step_name = '';
+        if (!rowData2.status) rowData2.status = 'NotStarted';
+        rowData2.updated_utc = new Date().toISOString();
       }
-      await API.action(store, rowData, {
+      await API.action(store, rowData2, {
         upsertKeys: upsertKeys,
-        audit: { user: who, action: 'Claim_Task', projectId: row.project_id, objType: objType,
-          objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
-          from: prev, to: who, detail: '' }
+        audit: { user: who, action: 'Claim_Task_Supporter', projectId: row.project_id, objType: objType,
+          objId: rowData2.step_key || rowData2.deliverable_id || rowData2.sp_id || rowData2.raised_utc || '',
+          from: supporter, to: who, detail: 'Supporter claim' }
       });
-      // Update button and in-memory row reference so a re-draw picks up the change
-      row.owner_pic = who;
-      row.claimed_by = who;
-      row.claimed_utc = rowData.claimed_utc;
-      btn.textContent = 'Claimed by ' + who;
-      btn.className = 'claimed-btn';
-      if (onAfterClaim) onAfterClaim(who);
+      row.supporter_pic = who;
+      row.supporter_by = who;
+      row.supporter_utc = rowData2.supporter_utc;
+      renderBadges();
+      if (onAfterClaim) onAfterClaim(who, 'Supporter');
     } catch (e) { alert('Claim failed: ' + e.message); }
     btn.disabled = false;
   };
-  return btn;
+  return wrap;
 }
 const projectsOf = proc => TRK.lb_projects.filter(p => p.process === proc);
 const projById = id => TRK.lb_projects.find(p => p.project_id === id);
@@ -1561,78 +1620,75 @@ function openDrawer(project, step, focusDocCode) {
   // Stage/gate claim — the gate row may not exist yet if nobody has touched this step
   var gateRow = gateRowOf(project.project_id, sk) || { project_id: project.project_id, step_key: sk };
   var stageClaimWrap = el('div', 'claim-row');
-  stageClaimWrap.appendChild(makeClaimButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(who) {
-    // Update gate owner badge in-place so the user sees the claim took effect
-    var badge = stageClaimWrap.querySelector('.claim-badge');
-    if (badge) { badge.textContent = 'Owner: ' + who; badge.className = badgeClass('FILED'); }
+  stageClaimWrap.appendChild(makeClaimButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function(who, role) {
+    // Badges are already rendered by makeClaimButton; no manual update needed
   }));
-  var ownerBadge = el('span', 'claim-badge ' + badgeClass(gateRow.owner_pic ? 'FILED' : 'NO_DATA'),
-    gateRow.owner_pic ? 'Owner: ' + gateRow.owner_pic : 'Unassigned');
-  stageClaimWrap.appendChild(ownerBadge);
   d.appendChild(stageClaimWrap);
   if (step.source_note) {
     const sn = el('p', 'note'); sn.innerHTML = '<b>Source note:</b> ' + esc(step.source_note); d.appendChild(sn);
   }
 
   /* ---- project search — real-time filtering inside the drawer ------------- */
-  d.appendChild(el('h3', null, 'Find a project'));
-  const fgSearch = el('input');
-  fgSearch.id = 'sidebarFgSearch';
-  fgSearch.placeholder = 'Type project ID, family, or PIC…';
-  fgSearch.style.cssText = 'width:100%;margin-bottom:8px;height:' + 'var(--ctl-h-sm);min-height:var(--ctl-h-sm);font-size:12px';
-  d.appendChild(fgSearch);
+  if (!project) {
+    d.appendChild(el('h3', null, 'Find a project'));
+    const fgSearch = el('input');
+    fgSearch.id = 'sidebarFgSearch';
+    fgSearch.placeholder = 'Type project ID, family, or PIC…';
+    fgSearch.style.cssText = 'width:100%;margin-bottom:8px;height:' + 'var(--ctl-h-sm);min-height:var(--ctl-h-sm);font-size:12px';
+    d.appendChild(fgSearch);
 
-  const projList = el('div');
-  projList.className = 'sidebar-project-list';
-  d.appendChild(projList);
+    const projList = el('div');
+    projList.className = 'sidebar-project-list';
+    d.appendChild(projList);
 
-  function renderSidebarProjectList(query) {
-    const q = (query || '').toLowerCase().trim();
-    const npiProjects = projectsOf('NPI');
-    const filtered = q
-      ? npiProjects.filter(p => {
-          const fam = familyById(p.prod_family);
-          const tw = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
-          return (p.project_id || '').toLowerCase().includes(q) ||
-            (p.family || '').toLowerCase().includes(q) ||
-            (fam ? fam.prod_family_name.toLowerCase() : '').includes(q) ||
-            (fam ? fam.prod_family_id.toLowerCase() : '').includes(q) ||
-            (p.market_manager || '').toLowerCase().includes(q) ||
-            tw.toLowerCase().includes(q);
-        }).slice(0, 15)
-      : npiProjects.slice(0, 5);
+    function renderSidebarProjectList(query) {
+      const q = (query || '').toLowerCase().trim();
+      const npiProjects = projectsOf('NPI');
+      const filtered = q
+        ? npiProjects.filter(p => {
+            const fam = familyById(p.prod_family);
+            const tw = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
+            return (p.project_id || '').toLowerCase().includes(q) ||
+              (p.family || '').toLowerCase().includes(q) ||
+              (fam ? fam.prod_family_name.toLowerCase() : '').includes(q) ||
+              (fam ? fam.prod_family_id.toLowerCase() : '').includes(q) ||
+              (p.market_manager || '').toLowerCase().includes(q) ||
+              tw.toLowerCase().includes(q);
+          }).slice(0, 15)
+        : npiProjects.slice(0, 5);
 
-    projList.innerHTML = '';
-    if (!filtered.length) {
-      projList.appendChild(el('p', 'note', 'No matching projects.'));
-      return;
+      projList.innerHTML = '';
+      if (!filtered.length) {
+        projList.appendChild(el('p', 'note', 'No matching projects.'));
+        return;
+      }
+      filtered.forEach(prj => {
+        const fam = familyById(prj.prod_family);
+        const tw = toWeek(prj.target_date) || targetDateFor(prj.class_abcde, prj.prf_date) || '';
+        const item = el('div', 'sidebar-project-item');
+        item.style.cssText = 'padding:6px 8px;border:1px solid var(--line);border-radius:4px;margin-bottom:4px;cursor:pointer';
+        item.innerHTML = '<b>' + esc(prj.project_id) + '</b>' +
+          '<div class="sidebar-project-meta">' +
+          esc(fam ? fam.prod_family_name + ' (' + fam.prod_family_id + ')' : 'No family') + ' · ' + esc(tw) +
+          (prj.market_manager ? ' · ' + esc(prj.market_manager) : '') +
+          '</div>';
+        item.onclick = () => {
+          const bestStep = bestStepForDoc(prj, focusDocCode);
+          const landing = bestStep ? bestStep.step : step;
+          openDrawer(prj, landing, focusDocCode);
+          const newSearch = $('#sidebarFgSearch');
+          if (newSearch) newSearch.value = fgSearch.value;
+        };
+        item.onmouseenter = function() { this.style.background = 'var(--soft)'; };
+        item.onmouseleave = function() { this.style.background = ''; };
+        projList.appendChild(item);
+      });
     }
-    filtered.forEach(prj => {
-      const fam = familyById(prj.prod_family);
-      const tw = toWeek(prj.target_date) || targetDateFor(prj.class_abcde, prj.prf_date) || '';
-      const item = el('div', 'sidebar-project-item');
-      item.style.cssText = 'padding:6px 8px;border:1px solid var(--line);border-radius:4px;margin-bottom:4px;cursor:pointer';
-      item.innerHTML = '<b>' + esc(prj.project_id) + '</b>' +
-        '<div class="sidebar-project-meta">' +
-        esc(fam ? fam.prod_family_name + ' (' + fam.prod_family_id + ')' : 'No family') + ' · ' + esc(tw) +
-        (prj.market_manager ? ' · ' + esc(prj.market_manager) : '') +
-        '</div>';
-      item.onclick = () => {
-        const bestStep = bestStepForDoc(prj, focusDocCode);
-        const landing = bestStep ? bestStep.step : step;
-        openDrawer(prj, landing, focusDocCode);
-        const newSearch = $('#sidebarFgSearch');
-        if (newSearch) newSearch.value = fgSearch.value;
-      };
-      item.onmouseenter = function() { this.style.background = 'var(--soft)'; };
-      item.onmouseleave = function() { this.style.background = ''; };
-      projList.appendChild(item);
-    });
+
+    fgSearch.oninput = () => renderSidebarProjectList(fgSearch.value);
+    renderSidebarProjectList('');
+
   }
-
-  fgSearch.oninput = () => renderSidebarProjectList(fgSearch.value);
-  renderSidebarProjectList('');
-
   /* ---- documents, with hashes ---- */
   d.appendChild(el('h3', null, 'Documents filed at this step'));
   // Show only rows that carry actual evidence (file, link, or path), not custom-doc markers
@@ -1727,6 +1783,9 @@ function openDrawer(project, step, focusDocCode) {
       const dz = el('div', 'dz');
       dz.style.cssText = 'margin-bottom:8px;padding:12px';
       dz.innerHTML = '<b>' + esc(docTypeById(code).name) + ' (' + esc(code) + ')</b>' + (c.customSet.has(code) ? ' <span class="note custom-mark">model custom</span>' : '') + '<br><span class="note">Drop a file or click to browse</span>';
+      var dzRow = TRK.lb_deliverables.find(function(d) { return d.project_id === project.project_id && d.step_key === sk && d.doc_code === code; }) || { project_id: project.project_id, step_key: sk, doc_code: code };
+      dz.appendChild(el('br'));
+      dz.appendChild(makeClaimButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function(who, role) {}));
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
       dz.ondrop = async e => {
