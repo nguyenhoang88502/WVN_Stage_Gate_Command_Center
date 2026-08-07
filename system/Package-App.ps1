@@ -10,6 +10,9 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+# PS 5.1 does not load the compression assembly by default; without this
+# [System.IO.Compression.ZipFile] is an unknown type at zip time.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $ProgressPreference = 'SilentlyContinue'
 
 $ScriptDir = $PSScriptRoot
@@ -59,7 +62,7 @@ Write-Host "Staging to $StageDir ..."
 ) | ForEach-Object {
   $src = Join-Path $ScriptDir $_
   if (Test-Path -LiteralPath $src) {
-    Copy-Item -LiteralPath $src -Destination (Join-Path $StageDir 'system' $_)
+    Copy-Item -LiteralPath $src -Destination ((Join-Path $StageDir 'system') + '\' + $_)
     Write-Host "  system\$_"
   }
   else { Write-Warning "  MISSING: system\$_" }
@@ -71,7 +74,7 @@ if (Test-Path -LiteralPath $TrackingSrc) {
   $trackFiles = Get-ChildItem -LiteralPath $TrackingSrc -File
   if ($trackFiles.Count -gt 0) {
     $trackFiles | ForEach-Object {
-      Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $StageDir 'system\tracking' $_.Name)
+      Copy-Item -LiteralPath $_.FullName -Destination ((Join-Path $StageDir 'system\tracking') + '\' + $_.Name)
       Write-Host "  system\tracking\$($_.Name)"
     }
   }
@@ -83,7 +86,7 @@ else { Write-Host "  (no tracking directory)" }
 $TemplatesSrc = Join-Path $ScriptDir 'templates'
 if (Test-Path -LiteralPath $TemplatesSrc) {
   Get-ChildItem -LiteralPath $TemplatesSrc -File | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $StageDir 'system\templates' $_.Name)
+    Copy-Item -LiteralPath $_.FullName -Destination ((Join-Path $StageDir 'system\templates') + '\' + $_.Name)
     Write-Host "  system\templates\$($_.Name)"
   }
 }
