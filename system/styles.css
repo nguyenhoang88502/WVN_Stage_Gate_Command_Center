@@ -451,6 +451,10 @@ input, select, textarea {
   max-width: 100%;
 }
 textarea { padding: 8px 10px; height: auto; min-height: 72px; line-height: 1.5 }
+/* The drawer's Executive note textarea has no class of its own, so with no
+   explicit width it falls back to the browser's ~20-column default and
+   renders crooked next to the full-width Record note button below it. */
+#exNote { width: 100%; box-sizing: border-box; }
 input:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--steel) }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--focus); box-shadow: var(--focus-ring);
@@ -798,6 +802,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
   height: auto; min-height: 0;
 }
 
+/* Settings > Document types — grid instead of a long wrapped pill list,
+   with rows past the first 8 hidden behind a "Show more" toggle. */
+.taglist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px }
+.taglist-hidden { display: none }
+
 /* == 15. UPLOAD AND EMPTY STATES ========================================= */
 .dz {
   border: 2px dashed var(--line-strong); border-radius: var(--r3);
@@ -1009,8 +1018,13 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   width: min(720px, 96vw); z-index: 91;
   background: var(--panel); border-left: 1px solid var(--line);
   box-shadow: var(--sh3); padding: var(--s5) var(--s5) 60px;
-  overflow: auto;
+  overflow: auto; overflow-x: hidden;
 }
+/* Nothing inside the drawer — long file paths, wide tables, etc. — is
+   allowed to force it wider than itself and trigger a horizontal scrollbar. */
+.drawer * { max-width: 100%; box-sizing: border-box; }
+.drawer table { width: 100%; table-layout: fixed; }
+.drawer table td, .drawer table th { word-break: break-word; }
 .drawer h2 { margin: 0 0 var(--s1); font-size: 16px }
 
 .modal-scrim {

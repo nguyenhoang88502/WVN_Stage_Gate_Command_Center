@@ -960,11 +960,14 @@ function matrixCell(project, step) {
     bits.push('<div class="matrix-pct matrix-pct-na">n/a</div>');
   }
   if (!c.started && !c.missing.length && !c.removed.length) { bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>'); td.innerHTML = bits.join('<br>'); return { td, c }; }
-  if (c.done.length) bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + c.done.map(esc).join(', ') + '</span>');
-  if (c.filed.length) bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + c.filed.map(esc).join(', ') + '</span>');
-  if (c.ongoing.length) bits.push('<span class="' + badgeClass('ON_GOING') + '" title="claimed or assigned, no file yet">On Going: ' + c.ongoing.map(esc).join(', ') + '</span>');
-  if (c.missing.length) bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + c.missing.map(esc).join(', ') + '</span>');
-  if (c.removed.length) bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + c.removed.map(esc).join(', ') + '</span>');
+  // One badge per document, each on its own line, rather than one badge per
+  // status with every doc code crammed into it — a status with 5 docs used
+  // to render as a single unreadable comma-joined line.
+  c.done.forEach(code => bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + esc(code) + '</span>'));
+  c.filed.forEach(code => bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + esc(code) + '</span>'));
+  c.ongoing.forEach(code => bits.push('<span class="' + badgeClass('ON_GOING') + '" title="claimed or assigned, no file yet">On Going: ' + esc(code) + '</span>'));
+  c.missing.forEach(code => bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + esc(code) + '</span>'));
+  c.removed.forEach(code => bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + esc(code) + '</span>'));
   // bits always holds the percentage line, so test the real content instead
   if (!c.done.length && !c.filed.length && !c.missing.length && !c.removed.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
   if (c.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
@@ -1632,7 +1635,19 @@ function viewDashboard(root) {
             const target = applicable.find(p => evidenceFor(p.project_id, sk, code).del) || applicable[0];
             if (target) openDrawerForDoc(target, step, code);
           };
-          dd.appendChild(chip);
+          // Wrap chip + its missing-model bullet so the flex row above still
+          // lines chips up, not their bullet lists.
+          const chipWrap = el('div');
+          chipWrap.style.cssText = 'display:flex;flex-direction:column;gap:2px';
+          chipWrap.appendChild(chip);
+          const missingProjects = applicable.filter(p => {
+            const lvl = evidenceFor(p.project_id, sk, code).level;
+            return lvl !== 'APPROVED' && lvl !== 'FILED';
+          });
+          if (missingProjects.length) {
+            chipWrap.appendChild(el('div', 'note doc-chip-missing', 'Missing: ' + missingProjects.map(p => p.project_id).join(', ')));
+          }
+          dd.appendChild(chipWrap);
         });
         card.appendChild(dd);
         container.appendChild(card);
@@ -1658,6 +1673,110 @@ function viewDashboard(root) {
 
     dashRenderAll = renderAll;
     renderAll();
+  })();
+
+  /* =====================================================================
+     Work Matrix — Admin/Moderator only. One row per claimed/assigned piece
+     of work (gate, deliverable, or issue) across every project, so a
+     privileged user can see who owns what and when it's due without
+     opening every project individually.
+     ================================================================== */
+  if (isPrivileged()) (function() {
+    execWrap.appendChild(el('h3', null, 'Work Matrix'));
+    const wmWrap = el('div', 'card');
+    const wmBody = el('div', 'card-body');
+
+    function targetWeekOf(project) {
+      return toWeek(project.target_date) || targetDateFor(project.class_abcde, project.prf_date) || '';
+    }
+
+    function buildRows() {
+      const rows = [];
+      (TRK.lb_gates || []).forEach(g => {
+        const owner = g.owner_pic || g.claimed_by || '';
+        if (!owner) return; // unclaimed gates are not "someone's work" yet
+        const project = projById(g.project_id);
+        if (!project) return;
+        rows.push({
+          project_id: g.project_id, kind: 'Stage', item: g.step_name || g.step_key,
+          owner, supporter: g.supporter_pic || g.supporter_by || '',
+          week: targetWeekOf(project), status: g.status || 'NotStarted'
+        });
+      });
+      (TRK.lb_deliverables || []).forEach(d => {
+        const owner = d.owner_pic || d.claimed_by || '';
+        if (!owner || d.status === 'Removed') return;
+        const project = projById(d.project_id);
+        if (!project) return;
+        const status = d.approved === 'YES' ? 'Approved' : (d.file_name || d.link_url) ? 'Filed' : 'Claimed';
+        rows.push({
+          project_id: d.project_id, kind: 'Deliverable', item: d.doc_code,
+          owner, supporter: d.supporter_pic || d.supporter_by || '',
+          week: targetWeekOf(project), status
+        });
+      });
+      (TRK.lb_issues || []).forEach(i => {
+        const owner = i.owner || '';
+        if (!owner || i.status === 'Closed') return;
+        const project = projById(i.project_id);
+        if (!project) return;
+        rows.push({
+          project_id: i.project_id, kind: 'Issue', item: i.description || i.category || 'Issue',
+          owner, supporter: '',
+          week: toWeek(i.due_date) || targetWeekOf(project), status: i.status || 'Open'
+        });
+      });
+      return rows;
+    }
+
+    const allRows = buildRows();
+    const owners = Array.from(new Set(allRows.map(r => r.owner))).sort();
+
+    const filterBar = el('div', 'filters');
+    filterBar.innerHTML = '<label>Owner</label>';
+    const ownerSel = el('select');
+    ownerSel.innerHTML = '<option value="">— all users (' + allRows.length + ' item(s)) —</option>' +
+      owners.map(o => '<option value="' + esc(o) + '">' + esc(o) + ' (' + allRows.filter(r => r.owner === o).length + ')</option>').join('');
+    filterBar.appendChild(ownerSel);
+    wmBody.appendChild(filterBar);
+
+    const tblHost = el('div', 'scroll');
+    wmBody.appendChild(tblHost);
+
+    function renderTable() {
+      tblHost.innerHTML = '';
+      const rows = ownerSel.value ? allRows.filter(r => r.owner === ownerSel.value) : allRows;
+      if (!rows.length) { tblHost.appendChild(el('p', 'note', 'Nothing claimed or assigned yet.')); return; }
+      const t = el('table');
+      t.innerHTML = '<thead><tr><th>Project</th><th>Type</th><th>Item</th><th>Owner</th><th>Supporter</th><th>Target week</th><th>Status</th></tr></thead>';
+      const tb = el('tbody');
+      rows.forEach(r => {
+        const tr = el('tr');
+        tr.innerHTML = '<td>' + esc(r.project_id) + '</td>' +
+          '<td>' + esc(r.kind) + '</td>' +
+          '<td>' + esc(r.item) + '</td>' +
+          '<td>' + esc(r.owner) + '</td>' +
+          '<td>' + (r.supporter ? esc(r.supporter) : '<span class="note">—</span>') + '</td>' +
+          '<td>' + (r.week ? esc(r.week) : '<span class="note">—</span>') + '</td>' +
+          '<td><span class="' + badgeClass(r.status.toUpperCase().replace(/ /g, '_')) + '">' + esc(r.status.replace(/_/g, ' ')) + '</span></td>';
+        tr.style.cursor = 'pointer';
+        tr.onclick = () => {
+          const project = projById(r.project_id);
+          if (!project) return;
+          const steps = stepsOf(project.process, project);
+          const step = (r.kind === 'Stage' ? steps.find(s => s.step_name === r.item) : null) || steps[0];
+          if (step) openDrawer(project, step, r.kind === 'Deliverable' ? r.item : null);
+        };
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      tblHost.appendChild(t);
+    }
+
+    ownerSel.onchange = renderTable;
+    renderTable();
+    wmWrap.appendChild(wmBody);
+    execWrap.appendChild(wmWrap);
   })();
 }
 
@@ -2093,6 +2212,22 @@ function openDrawer(project, step, focusDocCode) {
     }));
   }
   d.appendChild(stageClaimWrap);
+
+  // Gate sign-off — the same Approve/Bypass/Raise-issue controls the NPI/ECN
+  // step accordion offers, so Admin/Moderator can sign a gate straight from
+  // the Dashboard sidebar drawer without navigating to the tab and expanding
+  // that step's card.
+  d.appendChild(gateActions(project, proc, step, g, function() {
+    const pageY = window.scrollY;
+    const drawerEl = $('#drawer');
+    const drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+    return refreshSilently().then(function() {
+      openDrawer(project, step, focusDocCode);
+      window.scrollTo(0, pageY);
+      const newDrawer = $('#drawer');
+      if (newDrawer) newDrawer.scrollTop = drawerScroll;
+    });
+  }));
 
   // LFI button — visible on every step in the drawer
   var lfiBtn = el('button', 'lfi-drawer-btn', '+ Late Found Issue (LFI)');
@@ -4464,7 +4599,7 @@ function viewSettings(root) {
   const dp = el('div', 'card');
   const dpHdr = el('div', 'card-header'); dpHdr.appendChild(el('h3', 'card-title', 'Document types')); dp.appendChild(dpHdr);
   const dpBody = el('div', 'card-body');
-  const dlist = el('div', 'taglist');
+  const dlist = el('div', 'taglist taglist-grid');
   CFG.document_types.forEach(d => {
     const t = el('div', 'tagrow');
     t.innerHTML = '<span><b>' + esc(d.doctype_id) + '</b> — ' + esc(d.name) +
@@ -4512,6 +4647,21 @@ function viewSettings(root) {
     t.appendChild(del); dlist.appendChild(t);
   });
   dpBody.appendChild(dlist);
+  // Collapse everything past the first 8 doctypes behind a toggle — with the
+  // full 27-doctype set this card used to be a very long scroll on its own.
+  const dtRows = dlist.querySelectorAll('.tagrow');
+  dtRows.forEach((row, i) => { if (i >= 8) row.classList.add('taglist-hidden'); });
+  if (CFG.document_types.length > 8) {
+    const dtMoreBtn = el('button', '', 'Show more (' + (CFG.document_types.length - 8) + ')');
+    dtMoreBtn.style.marginTop = '6px';
+    let dtExpanded = false;
+    dtMoreBtn.onclick = () => {
+      dtExpanded = !dtExpanded;
+      dtRows.forEach((row, i) => { if (i >= 8) row.classList.toggle('taglist-hidden', !dtExpanded); });
+      dtMoreBtn.textContent = dtExpanded ? 'Show less' : 'Show more (' + (CFG.document_types.length - 8) + ')';
+    };
+    dpBody.appendChild(dtMoreBtn);
+  }
   const dg = el('div', 'grid2');
   dg.innerHTML = '<div class="fld"><span>Doctype ID *</span><input id="sdId" list="sdIdList" placeholder="e.g. CAP-STUDY">' +
     '<datalist id="sdIdList">' + CFG.document_types.map(d => '<option value="' + esc(d.doctype_id) + '">').join('') + '</datalist></div>' +
@@ -4814,6 +4964,38 @@ function openLfiModal(project, step) {
 
   box.innerHTML = h;
   scrim.appendChild(box);
+
+  // Drag the modal by its title bar. It stays centered (via the scrim's flex
+  // layout) until the user grabs it, at which point it detaches into a fixed
+  // left/top position clamped to the viewport, so it behaves like a real
+  // floating window instead of a dialog stuck to the middle of the screen.
+  var lfiTitleEl = box.querySelector('#lfiModalTitle');
+  if (lfiTitleEl) {
+    lfiTitleEl.style.cursor = 'move';
+    lfiTitleEl.style.userSelect = 'none';
+    lfiTitleEl.addEventListener('mousedown', function(e) {
+      var rect = box.getBoundingClientRect();
+      box.style.position = 'fixed';
+      box.style.margin = '0';
+      box.style.left = rect.left + 'px';
+      box.style.top = rect.top + 'px';
+      var dragOffsetX = e.clientX - rect.left;
+      var dragOffsetY = e.clientY - rect.top;
+      e.preventDefault();
+      var onMove = function(ev) {
+        var maxLeft = Math.max(0, window.innerWidth - box.offsetWidth);
+        var maxTop = Math.max(0, window.innerHeight - box.offsetHeight);
+        box.style.left = Math.min(Math.max(0, ev.clientX - dragOffsetX), maxLeft) + 'px';
+        box.style.top = Math.min(Math.max(0, ev.clientY - dragOffsetY), maxTop) + 'px';
+      };
+      var onUp = function() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
 
   var imageFiles = [];
 
