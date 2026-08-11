@@ -2183,6 +2183,39 @@ async function uploadEvidence(project, stepKey, docCode, file) {
   }, { audit: { user: who, action: 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: 'MISSING', to: 'Filed', detail: docCode } });
 }
 
+/* Renders a filed document's location two ways: a link that streams it from
+   the vault endpoint, and the literal on-disk path. The path is what people
+   paste into Explorer or an email, so it is shown in full rather than
+   abbreviated. Returns null when there is no path to show. */
+function vaultPathLine(filePath, label) {
+  if (!filePath) return null;
+  var wrap = el('div', 'vault-path');
+  var viewUrl = evidenceViewerUrl(filePath);
+  var head = el('div');
+  head.innerHTML = '<b>' + esc(label || 'Saved to vault') + '</b>';
+  wrap.appendChild(head);
+  if (viewUrl) {
+    var a = el('a', 'vault-path-link');
+    a.href = viewUrl;
+    a.target = '_blank';
+    a.textContent = 'Open ' + filePath.split(/[\\/]/).pop();
+    wrap.appendChild(a);
+  }
+  var p = el('div', 'vault-path-text');
+  p.textContent = filePath;
+  p.title = 'Full path — click to select, then copy';
+  wrap.appendChild(p);
+  var copy = el('button', '', 'Copy path');
+  copy.onclick = async function(e) {
+    e.preventDefault();
+    var ok = await copyText(filePath);
+    copy.textContent = ok ? 'Copied' : 'Copy failed';
+    setTimeout(function() { copy.textContent = 'Copy path'; }, 1500);
+  };
+  wrap.appendChild(copy);
+  return wrap;
+}
+
 /* ---- evidence viewer URL builder ---------------------------------------- */
 function evidenceViewerUrl(filePath) {
   if (!filePath || !PATHS.vault) return null;
@@ -2483,20 +2516,41 @@ function openDrawer(project, step, focusDocCode) {
     d.appendChild(el('h3', null, 'Drop evidence here'));
     const needsDropzone = c.missing.concat(c.ongoing);
     needsDropzone.forEach(code => {
-      const dz = el('div', 'dz');
+      var dzRow = TRK.lb_deliverables.find(function(d) { return d.project_id === project.project_id && d.step_key === sk && d.doc_code === code; }) || { project_id: project.project_id, step_key: sk, doc_code: code };
+      // Claiming or being assigned a document hands the job of filing it to
+      // that person. Everyone else — including whoever assigned it — sees the
+      // ownership, not an upload box, so two people cannot quietly file the
+      // same deliverable and overwrite each other.
+      var dzOwner = dzRow.owner_pic || dzRow.claimed_by || '';
+      var dzAssignedBy = dzRow.assigned_by || '';
+      var lockedToOther = !!dzOwner && dzOwner !== getUser();
+
+      const dz = el('div', lockedToOther ? 'dz dz-locked' : 'dz');
       dz.setAttribute('data-doc-code', code);
       dz.style.cssText = 'margin-bottom:8px;padding:12px';
-      dz.innerHTML = '<b>' + esc(docTypeById(code).name) + ' (' + esc(code) + ')</b>' + (c.customSet.has(code) ? ' <span class="note custom-mark">model custom</span>' : '') + '<br><span class="note">Drop a file or click to browse</span>';
-      var dzRow = TRK.lb_deliverables.find(function(d) { return d.project_id === project.project_id && d.step_key === sk && d.doc_code === code; }) || { project_id: project.project_id, step_key: sk, doc_code: code };
+      dz.innerHTML = '<b>' + esc(docTypeById(code).name) + ' (' + esc(code) + ')</b>' +
+        (c.customSet.has(code) ? ' <span class="note custom-mark">model custom</span>' : '') +
+        '<br><span class="note">' + (lockedToOther ? 'Assigned — only the owner can file this' : 'Drop a file or click to browse') + '</span>';
       dz.appendChild(el('br'));
-      dz.appendChild(makeClaimButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function(who, role) {}));
+      if (lockedToOther) {
+        // Ownership badge in place of the claim button: a third party taking
+        // this on would contradict the assignment that was just made.
+        var ownLabel = 'Owner: ' + dzOwner + (dzAssignedBy ? ' (Assigned by ' + dzAssignedBy + ')' : '');
+        dz.appendChild(el('span', 'claim-badge ' + badgeClass('FILED'), ownLabel));
+        var dzSupporter = dzRow.supporter_pic || dzRow.supporter_by || '';
+        if (dzSupporter) dz.appendChild(el('span', 'claim-badge badge bg-teal-lt', 'Supporter: ' + dzSupporter));
+      } else {
+        dz.appendChild(makeClaimButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function(who, role) {}));
+      }
       if (isPrivileged()) {
+        // Admins keep re-assignment even on a locked row — that is oversight,
+        // not filing.
         dz.appendChild(makeAssignButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() {
           openDrawer(project, step, code);
         }));
       }
       var dt = docTypeById(code);
-      if (dt.template_file) {
+      if (dt.template_file && !lockedToOther) {
         var dlBtn = el('a');
         dlBtn.textContent = 'Download Blank Template';
         dlBtn.href = '/api/templates/' + encodeURIComponent(dt.template_file);
@@ -2532,6 +2586,10 @@ function openDrawer(project, step, focusDocCode) {
       dz.appendChild(naBtn);
       }
 
+      // Upload affordances only exist for the person who owns the task. The
+      // handlers are not merely hidden — they are never attached, so a drag
+      // onto a locked box does nothing rather than silently uploading.
+      if (!lockedToOther) {
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
       dz.ondrop = async e => {
@@ -2565,6 +2623,7 @@ function openDrawer(project, step, focusDocCode) {
         };
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
+      }
       if (focusDocCode && code === focusDocCode) {
         dz.style.outline = '2px solid var(--blue)';
         dz.style.outlineOffset = '-1px';
@@ -2694,6 +2753,9 @@ function openDrawer(project, step, focusDocCode) {
           }
         }));
       }
+      // An LFI carries a generated LL_info workbook; surface where it landed.
+      var lfiPath = vaultPathLine(i.evidence_path, 'LFI report');
+      if (lfiPath) div.appendChild(lfiPath);
       ul.appendChild(div);
     });
     tks.forEach(k => ul.insertAdjacentHTML('beforeend', '<div class="note">• <b>Ticket ' + esc(k.ticket_id) + '</b> ' + esc(k.title) + ' — ' + esc(k.assigned_dept || 'unassigned') + ' (' + esc(k.status) + ')</div>'));
@@ -5284,7 +5346,7 @@ function lfiSection(project, step) {
     errDiv.style.display = 'none';
 
     try {
-      await API.lfi(body);
+      var lfiResult = await API.lfi(body);
       collapse();
       // Refresh drawer in-place — no page scroll, no viewport jump
       var pageY = window.scrollY;
@@ -5302,6 +5364,9 @@ function lfiSection(project, step) {
         if (okDiv) {
           okDiv.textContent = 'LFI recorded — ' + titleVal;
           okDiv.style.display = 'block';
+          var savedPath = lfiResult && lfiResult.path;
+          var pathLine = vaultPathLine(savedPath, 'Workbook saved to');
+          if (pathLine) okDiv.appendChild(pathLine);
         }
       }
     } catch (e) {

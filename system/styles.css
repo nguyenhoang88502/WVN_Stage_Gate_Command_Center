@@ -820,6 +820,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
 }
 .dz:hover { border-color: var(--blue); background: var(--blue2); color: var(--ink2) }
 .dz.on { border-color: var(--blue); background: var(--blue2); color: var(--blue) }
+/* Assigned to someone else — solid border and default cursor so it does not
+   invite a drop that would be ignored. Its own buttons stay clickable. */
+.dz-locked { cursor: default; border-style: solid; opacity: 0.85 }
+.dz-locked:hover { border-color: var(--line-strong); background: var(--soft); color: var(--muted) }
+.dz-locked button, .dz-locked a { cursor: pointer }
 .dz:focus-visible { border-color: var(--focus); box-shadow: var(--focus-ring); outline: none }
 .dz-icon { color: var(--steel); line-height: 0 }
 .dz:hover .dz-icon, .dz.on .dz-icon { color: var(--blue) }
@@ -1127,6 +1132,19 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   background: var(--good2); color: var(--good); border: 1px solid var(--good);
   border-radius: var(--r1); padding: var(--s2) var(--s3); margin-top: var(--s2);
   font-size: 12.5px; font-weight: 600;
+}
+
+/* Vault path block — the full path must stay readable and wrap rather than
+   push a horizontal scrollbar into the drawer. */
+.vault-path {
+  margin-top: var(--s2); font-weight: 400; font-size: 11.5px;
+  width: 100%; box-sizing: border-box;
+}
+.vault-path-link { display: block; color: var(--blue); margin: 2px 0 }
+.vault-path-text {
+  font-family: ui-monospace, Consolas, monospace; font-size: 10.5px;
+  color: var(--muted); word-break: break-all; margin-bottom: 4px;
+  user-select: all;
 }
 .claim-badge {
   font-size: 11.5px;

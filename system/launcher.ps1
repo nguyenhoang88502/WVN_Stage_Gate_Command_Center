@@ -292,7 +292,7 @@ $Stores = [ordered]@{
   lb_sp_issues    = @('sp_id','project_id','title','description','raised_by','raised_utc','owner_dept','owner_pic','due_date','status','action_taken','remarks','attachment_name','attachment_path','last_message_by','last_message_utc','last_message','priority','assigned_dept','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
   lb_approvals    = @('approval_id','project_id','step_key','deliverable_id','approved_by','approved_utc','approval_type','evidence_count','comments')
   lb_bypasses     = @('bypass_id','project_id','step_key','authorised_by','authorised_utc','reason','mitigation','supersede_by','closed_utc','closed_note')
-  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','severity')
+  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','severity','evidence_path')
   lb_ppap         = @('ppap_id','project_id','part_number','customer','doc_code','required','submitted_utc','customer_approved','customer_approved_utc','notes')
   # v3.6 removed lb_d365 entirely: it was genuinely dead, left behind when the
   # D365 entry log tab was cut from Input — nothing ever read TRK.lb_d365.
@@ -933,10 +933,10 @@ function Add-ReportStyles { param([string]$StylesXml)
   if (-not $r) { return $null }
   $StylesXml = $r.xml; $borderId = $r.index
 
-  # numFmtId 9 is the built-in "0%" — no numFmts entry needed for it.
+  # numFmtId 10 is the built-in "0.00%" — no numFmts entry needed for it.
   $headerXf  = '<' + $p + 'xf numFmtId="0" fontId="' + $fontId + '" fillId="' + $fillId + '" borderId="' + $borderId + '" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><' + $p + 'alignment horizontal="center" vertical="center" wrapText="1" /></' + $p + 'xf>'
   $bodyXf    = '<' + $p + 'xf numFmtId="0" fontId="0" fillId="0" borderId="' + $borderId + '" xfId="0" applyBorder="1" />'
-  $percentXf = '<' + $p + 'xf numFmtId="9" fontId="0" fillId="0" borderId="' + $borderId + '" xfId="0" applyNumberFormat="1" applyBorder="1" />'
+  $percentXf = '<' + $p + 'xf numFmtId="10" fontId="0" fillId="0" borderId="' + $borderId + '" xfId="0" applyNumberFormat="1" applyBorder="1" />'
 
   $r = Add-Before -Xml $StylesXml -Tag 'cellXfs' -Fragment $headerXf -Pfx $p
   if (-not $r) { return $null }
@@ -1115,7 +1115,9 @@ function Set-ZipEntryBytes { param($Archive, [string]$Path, [byte[]]$Bytes)
 
 # Embeds LFI photos into a worksheet as real drawing objects anchored between
 # two cells, so they scale with the sheet and print with the form instead of
-# living outside the workbook as loose files. LL_info.xlsx ships with NO
+# living outside the workbook as loose files. $Slots gives one {fromCol,
+# fromRow, toCol, toRow} per image position (0-based, as OpenXML counts them);
+# images past the last slot stack underneath it. LL_info.xlsx ships with NO
 # drawing infrastructure at all - no drawing part, no sheet rels, no image
 # content types - so the whole chain is created here:
 #   xl/media/*                       the image bytes
@@ -1125,14 +1127,17 @@ function Set-ZipEntryBytes { param($Archive, [string]$Path, [byte[]]$Bytes)
 #   <drawing r:id> on the sheet      binds it in
 #   [Content_Types].xml              declares png/jpeg and the drawing part
 function Add-XlsxImageAnchors {
-  param($Archive, [string]$SheetPath, [object[]]$Images,
-        [int]$FromRow = 19, [int]$ToRow = 35, [int]$FromCol = 0, [int]$ToCol = 12)
+  param($Archive, [string]$SheetPath, [object[]]$Images, [object[]]$Slots)
   if (-not $Images -or $Images.Count -eq 0) { return }
+  if (-not $Slots -or $Slots.Count -eq 0) { return }
 
   $anchors = New-Object System.Collections.Generic.List[string]
   $relsList = New-Object System.Collections.Generic.List[string]
   $exts = @{}
-  $bandHeight = $ToRow - $FromRow
+  # Height of the last slot, reused to stack any overflow images beneath the
+  # defined slots rather than dropping them or piling them on one another.
+  $lastSlot = $Slots[$Slots.Count - 1]
+  $slotHeight = [int]$lastSlot.toRow - [int]$lastSlot.fromRow
 
   for ($i = 0; $i -lt $Images.Count; $i++) {
     $img = $Images[$i]
@@ -1142,15 +1147,23 @@ function Add-XlsxImageAnchors {
     $mediaName = 'lfi_image' + ($i + 1) + '.' + $ext
     Set-ZipEntryBytes -Archive $Archive -Path ('xl/media/' + $mediaName) -Bytes $img.bytes
 
-    # Each additional photo drops one band lower so several attachments stack
-    # down the sheet instead of piling on top of each other in one cell range.
-    $top = $FromRow + ($i * ($bandHeight + 1))
-    $bottom = $top + $bandHeight
+    if ($i -lt $Slots.Count) {
+      $slot = $Slots[$i]
+      $fromColI = [int]$slot.fromCol; $toColI = [int]$slot.toCol
+      $top = [int]$slot.fromRow; $bottom = [int]$slot.toRow
+    } else {
+      # Overflow: reuse the first slot's columns, one band lower each time.
+      $slot = $Slots[0]
+      $fromColI = [int]$slot.fromCol; $toColI = [int]$slot.toCol
+      $overflowIdx = $i - $Slots.Count
+      $top = [int]$lastSlot.toRow + 1 + ($overflowIdx * ($slotHeight + 1))
+      $bottom = $top + $slotHeight
+    }
     $rid = 'rIdImg' + ($i + 1)
     $anchors.Add(
       '<xdr:twoCellAnchor editAs="oneCell">' +
-        '<xdr:from><xdr:col>' + $FromCol + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $top + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>' +
-        '<xdr:to><xdr:col>' + $ToCol + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $bottom + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>' +
+        '<xdr:from><xdr:col>' + $fromColI + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $top + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>' +
+        '<xdr:to><xdr:col>' + $toColI + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $bottom + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>' +
         '<xdr:pic>' +
           '<xdr:nvPicPr>' +
             '<xdr:cNvPr id="' + ($i + 2) + '" name="LFI Photo ' + ($i + 1) + '" descr="' + (ConvertTo-XmlSafe $img.name) + '" />' +
@@ -2576,11 +2589,17 @@ try {
             $w2.Write($s2xml); $w2.Close()
 
             # ---- attached photos, anchored into the LL INFO form -----------------
-            # Rows 20-35 / columns A-L sit under the two written text panels, so
-            # the photos land in empty space rather than over the description.
+            # The first photo lands in the PROBLEM panel (A16:L47) and the
+            # second in the SOLUTION panel (M16:AA47) - the same two blocks the
+            # description and remediation text are written into above, so a
+            # photo illustrates the wording it sits beside.
             if ($decodedImages.Count -gt 0) {
+              $lfiSlots = @(
+                @{ fromCol = 0;  fromRow = 15; toCol = 11; toRow = 46 },
+                @{ fromCol = 12; fromRow = 15; toCol = 26; toRow = 46 }
+              )
               Add-XlsxImageAnchors -Archive $archive -SheetPath 'xl/worksheets/sheet1.xml' `
-                -Images $decodedImages -FromRow 19 -ToRow 35 -FromCol 0 -ToCol 12
+                -Images $decodedImages -Slots $lfiSlots
             }
 
           } finally {
@@ -2601,16 +2620,20 @@ try {
             $savedImages += @{ fileName = $imgSaved.fileName; path = $imgSaved.path }
           }
 
+          # evidence_path lets the drawer link straight to the generated
+          # workbook later, instead of the path being visible only in the
+          # one-off submit response.
           Add-StoreRow -Store 'lb_issues' -IdField 'issue_id' -Row @{
-            project_id  = $projectId
-            step_key    = $stepKey
-            raised_utc  = (Get-Date).ToUniversalTime().ToString('o')
-            raised_by   = $raisedBy
-            category    = 'LFI'
-            description = $title
-            owner       = ''
-            status      = 'Open'
-            severity    = $severity
+            project_id    = $projectId
+            step_key      = $stepKey
+            raised_utc    = (Get-Date).ToUniversalTime().ToString('o')
+            raised_by     = $raisedBy
+            category      = 'LFI'
+            description   = $title
+            owner         = ''
+            status        = 'Open'
+            severity      = $severity
+            evidence_path = $savedXlsx.path
           } | Out-Null
 
           $result = @{
