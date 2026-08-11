@@ -23,6 +23,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# PS 5.1 does not load the compression assemblies by default. Several
+# endpoints (transfer-package zip, XLSX report generation, the LFI ->
+# LL_info.xlsx writer) use [System.IO.Compression.ZipFile]/[ZipArchive]
+# without loading these themselves, so they only worked when some other
+# endpoint happened to Add-Type them first in the same process. Load both
+# once at startup so every endpoint can rely on the types being present
+# regardless of request order.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
+
 # ============================================================ paths & log ==
 $SystemDir  = $PSScriptRoot
 if (-not $SystemDir) { $SystemDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -282,7 +292,7 @@ $Stores = [ordered]@{
   lb_sp_issues    = @('sp_id','project_id','title','description','raised_by','raised_utc','owner_dept','owner_pic','due_date','status','action_taken','remarks','attachment_name','attachment_path','last_message_by','last_message_utc','last_message','priority','assigned_dept','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
   lb_approvals    = @('approval_id','project_id','step_key','deliverable_id','approved_by','approved_utc','approval_type','evidence_count','comments')
   lb_bypasses     = @('bypass_id','project_id','step_key','authorised_by','authorised_utc','reason','mitigation','supersede_by','closed_utc','closed_note')
-  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc')
+  lb_issues       = @('issue_id','project_id','step_key','raised_utc','raised_by','category','description','owner','due_date','status','resolution','closed_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','severity')
   lb_ppap         = @('ppap_id','project_id','part_number','customer','doc_code','required','submitted_utc','customer_approved','customer_approved_utc','notes')
   # v3.6 removed lb_d365 entirely: it was genuinely dead, left behind when the
   # D365 entry log tab was cut from Input — nothing ever read TRK.lb_d365.
@@ -875,9 +885,25 @@ function ConvertTo-XmlSafe { param($Value)
   return ([string]$Value).Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;').Replace("'",'&apos;')
 }
 
+# Whole-number percent (e.g. 75) -> the decimal fraction string Excel expects
+# under a "0%" number format (e.g. "0.75"). Always invariant-culture: the host
+# OS locale may use a comma decimal separator, which would corrupt the numeric
+# regex check in New-ReportCellXml below.
+function ConvertTo-PctFraction { param([double]$Pct)
+  return ($Pct / 100.0).ToString('0.####', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function New-ReportCellXml { param([string]$Col, $Value, [int]$Row, [string]$Ns)
   $ref = "${Col}${Row}"
   $s = [string]$Value
+  # Legacy safety net: a "75%" string (old callers, or any future report type
+  # that still appends the sign) fails the numeric regex below and would land
+  # as inlineStr text, breaking SUM()/AVERAGE()/Pivot Charts on the Dashboard
+  # sheet. Strip the sign and store the underlying fraction instead.
+  if ($s -match '^-?\d+(\.\d+)?%$') {
+    $frac = [double]::Parse($s.TrimEnd('%'), [System.Globalization.CultureInfo]::InvariantCulture) / 100.0
+    $s = $frac.ToString('0.####', [System.Globalization.CultureInfo]::InvariantCulture)
+  }
   # Numeric: a plain integer or decimal (e.g. "5", "3.14"). Reject values that
   # start with a zero followed by a digit (e.g. "01") — those are identifiers,
   # not numbers, and Excel would strip the leading zero if stored as numeric.
@@ -919,6 +945,44 @@ function Get-NowWeek {
   $yearStart = Get-Date -Year $d.Year -Month 1 -Day 1
   $weekNum = [Math]::Ceiling((($d - $yearStart).TotalDays + 1) / 7)
   return "$($d.Year)-W$($weekNum.ToString('00'))"
+}
+
+# "YYYY-Www" -> a linearly-comparable integer (year*53+week). Not calendar-
+# exact around year boundaries (ISO years can have 52 or 53 weeks), but that's
+# fine here — this only feeds an "is the target week near/behind now" check,
+# not date arithmetic that needs to be exact.
+function Get-WeekIndex { param([string]$IsoWeek)
+  if ($IsoWeek -notmatch '^(\d{4})-W(\d{2})$') { return $null }
+  return ([int]$Matches[1]) * 53 + [int]$Matches[2]
+}
+
+# Reports need a single at-a-glance status per project. Mirrors the
+# COMPLETE/LATE/IN_PROGRESS states classifyProject() computes client-side in
+# app.js, split into the 4 labels the XLSX report templates were built
+# around (On Track / At Risk / Late / Complete). "At Risk" = due within 2
+# ISO weeks and not yet complete.
+function Get-TransferStatus { param([bool]$Complete, [string]$TargetWeek, [string]$NowWeek)
+  if ($Complete) { return 'Complete' }
+  $ti = Get-WeekIndex $TargetWeek
+  $ni = Get-WeekIndex $NowWeek
+  if ($null -eq $ti -or $null -eq $ni) { return 'On Track' }
+  if ($ti -lt $ni) { return 'Late' }
+  if ($ti - $ni -le 2) { return 'At Risk' }
+  return 'On Track'
+}
+
+# "NPI-4" / "ECN-11" -> the human step_name from config, e.g. "Prototype
+# Validation". Falls back to the raw step_key if the process or step_id
+# can't be resolved (e.g. the step was renumbered after the issue was
+# raised) so a report row never goes blank.
+function Get-StepName { param([string]$StepKey, $Config)
+  if ($StepKey -notmatch '^(NPI|ECN)-(\d+)$') { return $StepKey }
+  $proc = $Matches[1]
+  $stepId = [int]$Matches[2]
+  $steps = if ($proc -eq 'NPI') { $Config.npi_workflow.steps } else { $Config.ecn_workflow.steps }
+  $step = @($steps) | Where-Object { [int]$_.step_id -eq $stepId } | Select-Object -First 1
+  if ($step) { return [string]$step.step_name }
+  return $StepKey
 }
 
 function New-ReportSheetXml { param([string]$Existing, [string[]]$RowsXml, [string]$Ns, [switch]$Append)
@@ -983,46 +1047,74 @@ function Get-ReportData {
   if ($endSet)   { $projects = @($projects | Where-Object { $endSet.ContainsKey([string](ConvertTo-IsoWeek $_.target_date)) }) }
 
   # Pre-read stores for per-project computation
-  $allApprovals = @(Read-Store 'lb_approvals')
-  $allBypasses  = @(Read-Store 'lb_bypasses')
-  $allIssues    = @(Read-Store 'lb_issues')
-  $allSpIssues  = @(Read-Store 'lb_sp_issues')
+  $allApprovals   = @(Read-Store 'lb_approvals')
+  $allBypasses    = @(Read-Store 'lb_bypasses')
+  $allIssues      = @(Read-Store 'lb_issues')
+  $allSpIssues    = @(Read-Store 'lb_sp_issues')
+  $allDeliverables = @(Read-Store 'lb_deliverables')
 
-  # Build progress cache: project_id -> { pct, done, total, complete }
+  # Build progress cache: project_id -> { pct, done, total, complete, missingDocs }
   $progressCache = @{}
   foreach ($p in $projects) {
     $proc = $p.process
-    $steps = if ($proc -eq 'NPI') { $config.step_models.npi } else { $config.step_models.ecn }
+    # $config has no "step_models" key — the real step lists live under
+    # npi_workflow.steps / ecn_workflow.steps (see lines ~1332-1334 below for
+    # the same lookup). The old path silently resolved to $null, so $total
+    # was always 0 and every report's Completion % was always 0.
+    $steps = if ($proc -eq 'NPI') { $config.npi_workflow.steps } else { $config.ecn_workflow.steps }
     if (-not $steps) { $steps = @() }
     $gated = @($steps | Where-Object {
       if ($proc -eq 'NPI') { $true } else { [bool]$_.gate_clearance_required }
     })
     $total = $gated.Count
     $done = 0
+    $missingDocs = 0
     foreach ($step in $gated) {
       $sk = "$proc-$($step.step_id)"
       $appr = @($allApprovals | Where-Object { $_.project_id -eq $p.project_id -and $_.step_key -eq $sk })
       $byp  = @($allBypasses  | Where-Object { $_.project_id -eq $p.project_id -and $_.step_key -eq $sk -and -not $_.closed_utc })
       if ($appr.Count -gt 0 -or $byp.Count -gt 0) { $done++ }
+      # Required-doc count comes from required_evidence_doctypes only —
+      # conditional_evidence_doctypes don't block the gate, so they don't
+      # count as "missing" here either.
+      foreach ($code in @($step.required_evidence_doctypes)) {
+        $filed = @($allDeliverables | Where-Object {
+          $_.project_id -eq $p.project_id -and $_.step_key -eq $sk -and $_.doc_code -eq $code -and
+          $_.status -ne 'Removed' -and ($_.file_name -or $_.link_url -or $_.approved -eq 'YES')
+        })
+        if ($filed.Count -eq 0) { $missingDocs++ }
+      }
     }
     $pct = if ($total -gt 0) { [Math]::Round(100 * $done / $total) } else { 0 }
     $complete = ($done -eq $total -and $total -gt 0)
-    $progressCache[$p.project_id] = @{ pct = $pct; done = $done; total = $total; complete = $complete }
+    $progressCache[$p.project_id] = @{ pct = $pct; done = $done; total = $total; complete = $complete; missingDocs = $missingDocs }
   }
 
   if ($Type -eq 'lfi') {
-    $projIds = @{}
-    foreach ($p in $projects) { $projIds[$p.project_id] = $true }
-    $issues = @($allIssues | Where-Object { $projIds.ContainsKey($_.project_id) })
-    $headers = @('Issue ID','Project ID','Step Key','Raised By','Raised UTC','Category','Description','Owner','Due Date','Status','Resolution','Closed UTC')
+    # Column order (A-L) is fixed by Template_EPM_Issue_Analytics_RANKED_
+    # COLORS.xlsx's Dashboard formulas: COUNTA(E) total, COUNTIF(D,"<step
+    # name>") gate ranking + the "late-stage issues" cards, COUNTIF(C,<model>)
+    # model ranking, COUNTIF(H,"Critical") severity card, COUNTIF(K,<"YYYY-
+    # MM">) peak-month ranking, COUNTIF(L,"Open") open-issue card. Everything
+    # past L is free.
+    $projLookup = @{}
+    foreach ($p in $projects) { $projLookup[$p.project_id] = $p }
+    $issues = @($allIssues | Where-Object { $projLookup.ContainsKey($_.project_id) })
+    $headers = @('Issue ID','Project ID','Model','Gate','Raised UTC','Raised By','Category','Severity',
+      'Description','Owner','Month','Status','Due Date','Resolution','Closed UTC')
     # @($headers) SPLATS the header array into N separate scalar elements,
     # so each column name renders as its own one-cell row and the real data
     # gets pushed down past it. The unary comma keeps it as ONE row.
     $rows = @(,$headers)
     foreach ($row in $issues) {
+      $proj = $projLookup[$row.project_id]
+      $gate = Get-StepName -StepKey $row.step_key -Config $config
+      $month = ''
+      try { $month = ([datetime]::Parse($row.raised_utc)).ToString('yyyy-MM') } catch { }
+      $severity = if ($row.severity) { $row.severity } else { 'Major' }
       $rows += ,@(
-        $row.issue_id, $row.project_id, $row.step_key, $row.raised_by, $row.raised_utc,
-        $row.category, $row.description, $row.owner, $row.due_date, $row.status,
+        $row.issue_id, $row.project_id, $proj.family, $gate, $row.raised_utc, $row.raised_by,
+        $row.category, $severity, $row.description, $row.owner, $month, $row.status, $row.due_date,
         $row.resolution, $row.closed_utc
       )
     }
@@ -1032,17 +1124,29 @@ function Get-ReportData {
     return ,$rows
   }
   elseif ($Type -eq 'transfer') {
-    $headers = @('Project ID','Process','Model','Product Family','Change Class','PRF Date','Target Date','Market Manager','Country','Customer Number','Status','Notes','Completion %')
+    # Column order (A-L) is NOT cosmetic — Template_ProjectTransfer_Report_
+    # RANKED_COLORS.xlsx's Dashboard sheet has hardcoded formulas reading
+    # specific letters (AVERAGE(Data!G2:G1000) for progress, SUM(Data!H/I) for
+    # gates done/total, SUM(Data!J/K) for missing docs/open issues, COUNTIF on
+    # Data!L against "On Track"/"At Risk"/"Late"/"Complete"). Everything past
+    # L is free — the template never references it.
+    $headers = @('Project ID','Process','Model','Product Family','Change Class','PRF Date',
+      'Progress','Gates Completed','Total Gates','Missing Docs','Open Issues','Status',
+      'Target Date','Market Manager','Country','Customer Number','Project Status','Notes')
     # @($headers) SPLATS the header array into N separate scalar elements,
     # so each column name renders as its own one-cell row and the real data
     # gets pushed down past it. The unary comma keeps it as ONE row.
     $rows = @(,$headers)
     foreach ($p in $projects) {
       $pr = $progressCache[$p.project_id]
+      $targetWeek = ConvertTo-IsoWeek $p.target_date
+      $openCount = @($allIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
+      $openCount += @($allSpIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
+      $status = Get-TransferStatus -Complete $pr.complete -TargetWeek $targetWeek -NowWeek $nowWeek
       $rows += ,@(
-        $p.project_id, $p.process, $p.family, $p.prod_family, $p.class_abcde,
-        $p.prf_date, $p.target_date, $p.market_manager, $p.country, $p.customer_number,
-        $p.status, $p.notes, "$($pr.pct)%"
+        $p.project_id, $p.process, $p.family, $p.prod_family, $p.class_abcde, $p.prf_date,
+        (ConvertTo-PctFraction $pr.pct), [string]$pr.done, [string]$pr.total, [string]$pr.missingDocs, [string]$openCount, $status,
+        $p.target_date, $p.market_manager, $p.country, $p.customer_number, $p.status, $p.notes
       )
     }
     # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
@@ -1051,21 +1155,42 @@ function Get-ReportData {
     return ,$rows
   }
   elseif ($Type -eq 'kpi') {
-    $headers = @('Project ID','Process','Model','Product Family','Target Week','Completion %','Open Issues','On-Time')
+    # Column order (A-E) is fixed by Template_KPI_Report_RANKED_COLORS.xlsx's
+    # Dashboard formulas: COUNTA(A), AVERAGE(B) "Average Target", AVERAGE(C)
+    # "Average Actual", AVERAGE(D) "Average Variance", COUNTIF(E,"On
+    # Target"/"Watch"/"Off Target"). The KPI here is "finish every gate by
+    # its target week" — Target is always 100% complete, Actual is the real
+    # completion fraction, Variance is Actual-Target (<=0 until Complete),
+    # Status reuses the same On Track/At Risk/Late/Complete classification as
+    # the Transfer report, collapsed to the 3 labels this template expects.
+    $headers = @('Project ID','Process','Model','Product Family','Target Week',
+      'Target','Actual','Variance','Status','Open Issues')
     # @($headers) SPLATS the header array into N separate scalar elements,
     # so each column name renders as its own one-cell row and the real data
     # gets pushed down past it. The unary comma keeps it as ONE row.
     $rows = @(,$headers)
+    $target = 1.0
     foreach ($p in $projects) {
       $pr = $progressCache[$p.project_id]
       $targetWeek = ConvertTo-IsoWeek $p.target_date
       if (-not $targetWeek) { $targetWeek = '' }
       $openCount = @($allIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
       $openCount += @($allSpIssues | Where-Object { $_.project_id -eq $p.project_id -and $_.status -ne 'Closed' }).Count
-      $onTime = if ($pr.complete) { 'Yes' } elseif ($targetWeek -and $targetWeek -ge $nowWeek) { 'Yes' } else { 'No' }
+      $actual = [double]$pr.pct / 100.0
+      $variance = $actual - $target
+      $transferStatus = Get-TransferStatus -Complete $pr.complete -TargetWeek $targetWeek -NowWeek $nowWeek
+      $kpiStatus = switch ($transferStatus) {
+        'Complete' { 'On Target' }
+        'On Track' { 'On Target' }
+        'At Risk'  { 'Watch' }
+        'Late'     { 'Off Target' }
+        default    { 'Watch' }
+      }
       $rows += ,@(
         $p.project_id, $p.process, $p.family, $p.prod_family, $targetWeek,
-        "$($pr.pct)%", [string]$openCount, $onTime
+        (ConvertTo-PctFraction ($target * 100)), (ConvertTo-PctFraction $pr.pct),
+        $variance.ToString('0.####', [System.Globalization.CultureInfo]::InvariantCulture),
+        $kpiStatus, [string]$openCount
       )
     }
     # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
@@ -1111,7 +1236,7 @@ function Get-ReportData {
       $rows += ,@(
         $p.project_id, $p.process, $p.family, $p.prod_family, $p.class_abcde,
         $p.prf_date, $p.target_date, $targetWeek,
-        [string]$pr.done, [string]$pr.total, "$($pr.pct)%", [string]$openCount, $p.status
+        [string]$pr.done, [string]$pr.total, (ConvertTo-PctFraction $pr.pct), [string]$openCount, $p.status
       )
     }
     return ,$rows
@@ -2068,6 +2193,8 @@ try {
         $rootCause  = [string]$body.root_cause
         $remediation = [string]$body.remediation
         $raisedBy   = [string]$body.raised_by
+        $severity   = [string]$body.severity
+        if ($severity -notin @('Critical', 'Major', 'Minor')) { $severity = 'Major' }
         $images     = $body.images
 
         $lfiNumber   = 'LFI-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
@@ -2202,6 +2329,7 @@ try {
             description = $title
             owner       = ''
             status      = 'Open'
+            severity    = $severity
           } | Out-Null
 
           $result = @{
@@ -2310,26 +2438,40 @@ try {
                       $writer.Write($newSheetXml)
                       $writer.Close()
 
-                      # LL_info ships its "List Issue" sheet hidden - it is a
-                      # feeder for the form, not something you normally open.
-                      # A report whose only content lands on a hidden sheet
-                      # opens looking empty, so unhide it on the way out.
-                      if ($spec.unhideSheet) {
-                        $wbEntry = $zip.GetEntry('xl/workbook.xml')
-                        if ($wbEntry) {
-                          $wbReader = New-Object System.IO.StreamReader($wbEntry.Open(), [System.Text.Encoding]::UTF8)
-                          $wbXml = $wbReader.ReadToEnd()
-                          $wbReader.Close()
+                      # workbook.xml touch-up: always force a full recalc on
+                      # open, and unhide LL_info's feeder sheet when asked.
+                      # The Dashboard sheets carry formulas whose cached <v>
+                      # was computed against the template's placeholder data
+                      # at authoring time - without fullCalcOnLoad, Excel can
+                      # show those stale cached zeros instead of recalculating
+                      # against the real Data rows just written above.
+                      $wbEntry = $zip.GetEntry('xl/workbook.xml')
+                      if ($wbEntry) {
+                        $wbReader = New-Object System.IO.StreamReader($wbEntry.Open(), [System.Text.Encoding]::UTF8)
+                        $wbXml = $wbReader.ReadToEnd()
+                        $wbReader.Close()
+                        if ($spec.unhideSheet) {
                           $pattern = '(<sheet\b[^>]*\bname="' + [regex]::Escape([string]$spec.unhideSheet) + '"[^>]*?)\s+state="(?:hidden|veryHidden)"'
-                          $wbNew = [regex]::Replace($wbXml, $pattern, '$1')
-                          if ($wbNew -ne $wbXml) {
-                            $wbEntry.Delete()
-                            $wbNewEntry = $zip.CreateEntry('xl/workbook.xml')
-                            $wbWriter = New-Object System.IO.StreamWriter($wbNewEntry.Open(), [System.Text.Encoding]::UTF8)
-                            $wbWriter.Write($wbNew)
-                            $wbWriter.Close()
-                          }
+                          $wbXml = [regex]::Replace($wbXml, $pattern, '$1')
                         }
+                        # Some templates use a bare <workbook>/<calcPr>, others
+                        # (the RANKED_COLORS suite) prefix every element with
+                        # x: (<x:workbook>, would be <x:calcPr>). Detect which
+                        # convention this file uses so both the match and the
+                        # inserted element agree with it.
+                        $wbPfx = if ($wbXml -match '<(\w+:)?workbook\b') { $Matches[1] } else { '' }
+                        if ($wbXml -match ('<' + $wbPfx + 'calcPr\b[^/]*/>')) {
+                          if ($wbXml -notmatch ('<' + $wbPfx + 'calcPr\b[^/]*\bfullCalcOnLoad=')) {
+                            $wbXml = [regex]::Replace($wbXml, '<' + $wbPfx + 'calcPr\b([^/]*)/>', '<' + $wbPfx + 'calcPr$1 fullCalcOnLoad="1"/>')
+                          }
+                        } else {
+                          $wbXml = $wbXml.Replace('</' + $wbPfx + 'workbook>', '<' + $wbPfx + 'calcPr fullCalcOnLoad="1"/></' + $wbPfx + 'workbook>')
+                        }
+                        $wbEntry.Delete()
+                        $wbNewEntry = $zip.CreateEntry('xl/workbook.xml')
+                        $wbWriter = New-Object System.IO.StreamWriter($wbNewEntry.Open(), [System.Text.Encoding]::UTF8)
+                        $wbWriter.Write($wbXml)
+                        $wbWriter.Close()
                       }
                       $zip.Dispose()
                       $fs.Close()

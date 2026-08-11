@@ -2325,7 +2325,7 @@ function openDrawer(project, step, focusDocCode) {
   if (!dels.length) d.appendChild(el('p', 'note', 'Nothing filed here yet.'));
   else {
     const t = el('table');
-    t.innerHTML = '<thead><tr><th>Type</th><th>File</th><th>Filed by</th><th>SHA-256</th><th></th></tr></thead>';
+    t.innerHTML = '<thead><tr><th>Type</th><th>File</th><th>Filed by</th><th></th></tr></thead>';
     const tb = el('tbody');
     dels.forEach(x => {
       const tr = el('tr');
@@ -2343,8 +2343,7 @@ function openDrawer(project, step, focusDocCode) {
       var removedMark = isDelRemoved ? ' <span class="badge bg-secondary" style="text-decoration:line-through;opacity:0.7">Removed</span>' : '';
       tr.innerHTML = '<td>' + dcEl + removedMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
         '<td><code>' + esc(x.file_name) + '</code><div class="note">' + pathHtml + '</div></td>' +
-        '<td>' + esc(x.uploaded_by) + '<div class="note">' + esc((x.uploaded_utc || '').slice(0, 10)) + '</div></td>' +
-        '<td class="note" style="word-break:break-all;max-width:180px">' + (x.sha256 ? esc(x.sha256) : '<i>no hash — cited in place</i>') + '</td><td></td>';
+        '<td>' + esc(x.uploaded_by) + '<div class="note">' + esc((x.uploaded_utc || '').slice(0, 10)) + '</div></td><td></td>';
       if (isDelRemoved) tr.style.opacity = '0.65';
       // doc_code click → re-open drawer focused on this doc
       const dcLink = tr.querySelector('.doc-link');
@@ -2356,18 +2355,9 @@ function openDrawer(project, step, focusDocCode) {
         setTimeout(() => { cp.textContent = 'Copy path'; }, 1500);
       };
       tr.lastChild.appendChild(cp);
-      // Claim button per deliverable — writes owner_pic/claimed_by on the existing row
-      var delClaimBtn = makeClaimButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(who) {});
-      tr.lastChild.appendChild(delClaimBtn);
-      if (isPrivileged()) {
-        var delAssignBtn = makeAssignButton('Deliverable', 'lb_deliverables', x, ['deliverable_id'], function(target, isPrimary, admin) {
-          if (isPrimary) {
-            delClaimBtn.textContent = 'Owner: ' + target + ' (Assigned by ' + admin + ')';
-            delClaimBtn.className = 'claimed-btn';
-          }
-        });
-        tr.lastChild.appendChild(delAssignBtn);
-      }
+      // No Claim/Assign button here — every row in this table already has a
+      // file or an approval (see the filter above), so there is nothing left
+      // to claim. "Filed by" already names who did the work.
       // Remove / Restore control
       var rmBtn = el('button', '', isDelRemoved ? 'Restore' : 'Remove');
       rmBtn.style.cssText = 'margin-left:4px;color:' + (isDelRemoved ? 'var(--good)' : 'var(--bad)');
@@ -4096,9 +4086,11 @@ function gateActions(project, proc, step, g, redraw) {
     const d = prompt('Describe the issue found at ' + sk + ':', ''); if (!d) return;
     const owner = prompt('Owner:', '') || '';
     const due = prompt('Due date (yyyy-mm-dd), optional:', '') || '';
+    let severity = (prompt('Severity — Critical / Major / Minor:', 'Major') || '').trim();
+    if (!['Critical', 'Major', 'Minor'].includes(severity)) severity = 'Major';
     await API.action('lb_issues', {
       project_id: project.project_id, step_key: sk, raised_utc: new Date().toISOString(), raised_by: who, category: 'LFI',
-      description: d, owner, due_date: due, status: 'Open', resolution: '', closed_utc: ''
+      description: d, owner, due_date: due, status: 'Open', resolution: '', closed_utc: '', severity
     }, { audit: { user: who, action: 'Raise_Issue', projectId: project.project_id, objType: 'Issue', objId: sk, from: '', to: 'Open', detail: d } });
     await redraw();
   };
@@ -4954,6 +4946,7 @@ function openLfiModal(project, step) {
     ['Date', 'date', 'lfiDate', todayStr, false],
     ['Plant', 'text', 'lfiPlant', 'WVN', false],
     ['Impact', 'text', 'lfiImpact', '', false],
+    ['Severity', 'select', 'lfiSeverity', 'Major', false, ['Critical', 'Major', 'Minor']],
     ['Description', 'textarea', 'lfiDesc', '', false],
     ['Root Cause', 'textarea', 'lfiRootCause', '', false],
     ['Remediation', 'textarea', 'lfiRemediation', '', false]
@@ -4961,9 +4954,14 @@ function openLfiModal(project, step) {
 
   fields.forEach(function(f) {
     var isTextarea = f[1] === 'textarea';
+    var isSelect = f[1] === 'select';
     h += '<div class="lfi-field"><label for="' + f[2] + '">' + esc(f[0]) + (f[4] ? ' <span class="lfi-required">*</span>' : '') + '</label>';
     if (isTextarea) {
       h += '<textarea id="' + f[2] + '" class="lfi-input" rows="3">' + esc(f[3]) + '</textarea>';
+    } else if (isSelect) {
+      h += '<select id="' + f[2] + '" class="lfi-input">' + f[5].map(function(opt) {
+        return '<option value="' + esc(opt) + '"' + (opt === f[3] ? ' selected' : '') + '>' + esc(opt) + '</option>';
+      }).join('') + '</select>';
     } else {
       h += '<input id="' + f[2] + '" class="lfi-input" type="' + f[1] + '" value="' + esc(f[3]) + '">';
     }
@@ -5110,6 +5108,7 @@ function openLfiModal(project, step) {
       date: (box.querySelector('#lfiDate').value || '').trim(),
       plant: (box.querySelector('#lfiPlant').value || '').trim(),
       impact: (box.querySelector('#lfiImpact').value || '').trim(),
+      severity: (box.querySelector('#lfiSeverity').value || '').trim(),
       description: (box.querySelector('#lfiDesc').value || '').trim(),
       root_cause: (box.querySelector('#lfiRootCause').value || '').trim(),
       remediation: (box.querySelector('#lfiRemediation').value || '').trim(),
