@@ -965,8 +965,8 @@ function matrixCell(project, step) {
   // to render as a single unreadable comma-joined line.
   c.done.forEach(code => bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + esc(code) + '</span>'));
   c.filed.forEach(code => bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + esc(code) + '</span>'));
-  c.ongoing.forEach(code => bits.push('<span class="' + badgeClass('ON_GOING') + '" title="claimed or assigned, no file yet">On Going: ' + esc(code) + '</span>'));
-  c.missing.forEach(code => bits.push('<span class="' + badgeClass('MISSING') + '" title="required, nothing filed">Missing: ' + esc(code) + '</span>'));
+  c.ongoing.forEach(code => bits.push('<span class="' + badgeClass('ON_GOING') + ' mcell-doc-badge" data-doc-code="' + esc(code) + '" title="claimed or assigned, no file yet — click to open">On Going: ' + esc(code) + '</span>'));
+  c.missing.forEach(code => bits.push('<span class="' + badgeClass('MISSING') + ' mcell-doc-badge" data-doc-code="' + esc(code) + '" title="required, nothing filed — click to open">Missing: ' + esc(code) + '</span>'));
   c.removed.forEach(code => bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + esc(code) + '</span>'));
   // bits always holds the percentage line, so test the real content instead
   if (!c.done.length && !c.filed.length && !c.missing.length && !c.removed.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
@@ -974,6 +974,13 @@ function matrixCell(project, step) {
   const nc = cellNoteCount(project, stepKeyOf(project.process, step));
   if (nc) bits.push('<span class="matrix-note-indicator" title="' + nc + ' note(s)">💬 ' + nc + '</span>');
   td.innerHTML = bits.join('<br>');
+  td.querySelectorAll('.mcell-doc-badge').forEach(function(badge) {
+    badge.style.cursor = 'pointer';
+    badge.onclick = function(e) {
+      e.stopPropagation();
+      openDrawer(project, step, badge.getAttribute('data-doc-code'));
+    };
+  });
   return { td, c };
 }
 
@@ -2442,15 +2449,17 @@ function openDrawer(project, step, focusDocCode) {
   }
 
   /* ---- what is still missing ---- */
-  if (c.missing.length) {
+  if (c.missing.length || c.ongoing.length) {
+    if (c.missing.length) {
     const mb = el('div', 'banner bad');
     mb.innerHTML = '<b>Required but not filed:</b> ' + c.missing.map(function(x) { return esc(docTypeById(x).name) + (c.customSet.has(x) ? ' <span class="note">(model custom)</span>' : ''); }).join(', ');
     d.appendChild(mb);
-
-    // Inline drag-drop zone for each missing document type
+    }
     d.appendChild(el('h3', null, 'Drop evidence here'));
-    c.missing.forEach(code => {
+    const needsDropzone = c.missing.concat(c.ongoing);
+    needsDropzone.forEach(code => {
       const dz = el('div', 'dz');
+      dz.setAttribute('data-doc-code', code);
       dz.style.cssText = 'margin-bottom:8px;padding:12px';
       dz.innerHTML = '<b>' + esc(docTypeById(code).name) + ' (' + esc(code) + ')</b>' + (c.customSet.has(code) ? ' <span class="note custom-mark">model custom</span>' : '') + '<br><span class="note">Drop a file or click to browse</span>';
       var dzRow = TRK.lb_deliverables.find(function(d) { return d.project_id === project.project_id && d.step_key === sk && d.doc_code === code; }) || { project_id: project.project_id, step_key: sk, doc_code: code };
@@ -2470,6 +2479,7 @@ function openDrawer(project, step, focusDocCode) {
         dlBtn.className = 'btn btn-sm dz-template-btn';
         dz.appendChild(dlBtn);
       }
+      if (c.missing.indexOf(code) >= 0) {
       // "Mark as not applicable" button for missing docs
       dz.appendChild(el('br'));
       var naBtn = el('button', '', 'Mark as not applicable');
@@ -2495,6 +2505,7 @@ function openDrawer(project, step, focusDocCode) {
           });
       };
       dz.appendChild(naBtn);
+      }
 
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
@@ -2529,6 +2540,10 @@ function openDrawer(project, step, focusDocCode) {
         };
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
+      if (focusDocCode && code === focusDocCode) {
+        dz.style.outline = '2px solid var(--blue)';
+        dz.style.outlineOffset = '-1px';
+      }
       d.appendChild(dz);
     });
   }
@@ -2695,6 +2710,10 @@ function openDrawer(project, step, focusDocCode) {
   }
 
   document.body.appendChild(d);
+  if (focusDocCode) {
+    var focusedDz = d.querySelector('.dz[data-doc-code="' + CSS.escape(focusDocCode) + '"]');
+    if (focusedDz) focusedDz.scrollIntoView({ block: 'center' });
+  }
 }
 
 /* ===================================================================== */
@@ -2767,7 +2786,8 @@ function viewClaimed(root) {
       status: d.approved === 'YES' ? 'APPROVED' : 'FILED',
       step: step || { step_id: 0, step_name: '' },
       project: prj,
-      assignedBy: d.assigned_by || ''
+      assignedBy: d.assigned_by || '',
+      docCode: d.doc_code
     });
   });
 
@@ -2860,11 +2880,11 @@ function viewClaimed(root) {
 
     tr.onclick = function() {
       if (item.project && item.step) {
-        openDrawer(item.project, item.step, null);
+        openDrawer(item.project, item.step, item.docCode || null);
       } else if (item.project && item.project.process) {
         // For items without a specific step, open at step 1
         var steps = stepsOf(item.project.process, item.project);
-        if (steps.length) openDrawer(item.project, steps[0], null);
+        if (steps.length) openDrawer(item.project, steps[0], item.docCode || null);
       }
     };
     tr.onmouseenter = function() { this.style.background = 'var(--row-hover)'; };
