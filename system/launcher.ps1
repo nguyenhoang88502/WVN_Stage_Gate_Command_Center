@@ -893,9 +893,69 @@ function ConvertTo-PctFraction { param([double]$Pct)
   return ($Pct / 100.0).ToString('0.####', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
-function New-ReportCellXml { param([string]$Col, $Value, [int]$Row, [string]$Ns)
+# Appends the report's own header/body/percent formats to a template's
+# styles.xml and hands back the cellXfs indexes they landed at. Indexes CANNOT
+# be hardcoded: each template ships a different number of fonts/fills/borders
+# /cellXfs (104 vs 282 in the two shipped suites), and half of them namespace
+# every element as x: while the rest use none. Both are detected here.
+function Add-ReportStyles { param([string]$StylesXml)
+  $p = ''
+  if ($StylesXml -match '<(\w+):styleSheet') { $p = $Matches[1] + ':' }
+
+  function Add-Before { param([string]$Xml, [string]$Tag, [string]$Fragment, [string]$Pfx)
+    # Bump the container's count= and insert the new child just before its
+    # closing tag. Excel treats a count that disagrees with the child total as
+    # a corrupt file, so the two must move together.
+    $close = '</' + $Pfx + $Tag + '>'
+    $idx = $Xml.LastIndexOf($close)
+    if ($idx -lt 0) { return $null }
+    $countMatch = [regex]::Match($Xml, '<' + $Pfx + $Tag + '[^>]*\bcount="(\d+)"')
+    if (-not $countMatch.Success) { return $null }
+    $oldCount = [int]$countMatch.Groups[1].Value
+    $Xml = $Xml.Substring(0, $idx) + $Fragment + $Xml.Substring($idx)
+    $Xml = $Xml.Remove($countMatch.Index, $countMatch.Length).Insert($countMatch.Index,
+      ('<' + $Pfx + $Tag + ' count="' + ($oldCount + 1) + '"'))
+    return @{ xml = $Xml; index = $oldCount }
+  }
+
+  $fontXml   = '<' + $p + 'font><' + $p + 'b /><' + $p + 'color rgb="FFFFFFFF" /><' + $p + 'sz val="11" /><' + $p + 'name val="Calibri" /></' + $p + 'font>'
+  $fillXml   = '<' + $p + 'fill><' + $p + 'patternFill patternType="solid"><' + $p + 'fgColor rgb="FF0F2438" /><' + $p + 'bgColor indexed="64" /></' + $p + 'patternFill></' + $p + 'fill>'
+  $edge      = '<' + $p + 'left style="thin"><' + $p + 'color rgb="FFD7E0E9" /></' + $p + 'left><' + $p + 'right style="thin"><' + $p + 'color rgb="FFD7E0E9" /></' + $p + 'right><' + $p + 'top style="thin"><' + $p + 'color rgb="FFD7E0E9" /></' + $p + 'top><' + $p + 'bottom style="thin"><' + $p + 'color rgb="FFD7E0E9" /></' + $p + 'bottom>'
+  $borderXml = '<' + $p + 'border>' + $edge + '</' + $p + 'border>'
+
+  $r = Add-Before -Xml $StylesXml -Tag 'fonts' -Fragment $fontXml -Pfx $p
+  if (-not $r) { return $null }
+  $StylesXml = $r.xml; $fontId = $r.index
+  $r = Add-Before -Xml $StylesXml -Tag 'fills' -Fragment $fillXml -Pfx $p
+  if (-not $r) { return $null }
+  $StylesXml = $r.xml; $fillId = $r.index
+  $r = Add-Before -Xml $StylesXml -Tag 'borders' -Fragment $borderXml -Pfx $p
+  if (-not $r) { return $null }
+  $StylesXml = $r.xml; $borderId = $r.index
+
+  # numFmtId 9 is the built-in "0%" — no numFmts entry needed for it.
+  $headerXf  = '<' + $p + 'xf numFmtId="0" fontId="' + $fontId + '" fillId="' + $fillId + '" borderId="' + $borderId + '" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><' + $p + 'alignment horizontal="center" vertical="center" wrapText="1" /></' + $p + 'xf>'
+  $bodyXf    = '<' + $p + 'xf numFmtId="0" fontId="0" fillId="0" borderId="' + $borderId + '" xfId="0" applyBorder="1" />'
+  $percentXf = '<' + $p + 'xf numFmtId="9" fontId="0" fillId="0" borderId="' + $borderId + '" xfId="0" applyNumberFormat="1" applyBorder="1" />'
+
+  $r = Add-Before -Xml $StylesXml -Tag 'cellXfs' -Fragment $headerXf -Pfx $p
+  if (-not $r) { return $null }
+  $StylesXml = $r.xml; $headerIdx = $r.index
+  $r = Add-Before -Xml $StylesXml -Tag 'cellXfs' -Fragment $bodyXf -Pfx $p
+  if (-not $r) { return $null }
+  $StylesXml = $r.xml; $bodyIdx = $r.index
+  $r = Add-Before -Xml $StylesXml -Tag 'cellXfs' -Fragment $percentXf -Pfx $p
+  if (-not $r) { return $null }
+  $StylesXml = $r.xml; $percentIdx = $r.index
+
+  return @{ xml = $StylesXml; header = $headerIdx; body = $bodyIdx; percent = $percentIdx }
+}
+
+function New-ReportCellXml { param([string]$Col, $Value, [int]$Row, [string]$Ns, [string]$StyleIdx)
   $ref = "${Col}${Row}"
   $s = [string]$Value
+  $sAttr = ''
+  if ($StyleIdx -ne '') { $sAttr = ' s="' + $StyleIdx + '"' }
   # Legacy safety net: a "75%" string (old callers, or any future report type
   # that still appends the sign) fails the numeric regex below and would land
   # as inlineStr text, breaking SUM()/AVERAGE()/Pivot Charts on the Dashboard
@@ -908,17 +968,49 @@ function New-ReportCellXml { param([string]$Col, $Value, [int]$Row, [string]$Ns)
   # start with a zero followed by a digit (e.g. "01") — those are identifiers,
   # not numbers, and Excel would strip the leading zero if stored as numeric.
   if ($s -match '^-?\d+(\.\d+)?$' -and $s -notmatch '^-?0\d') {
-    return "<${Ns}c r=`"${ref}`"><${Ns}v>$s</${Ns}v></${Ns}c>"
+    return "<${Ns}c r=`"${ref}`"${sAttr}><${Ns}v>$s</${Ns}v></${Ns}c>"
   }
   $safe = ConvertTo-XmlSafe $s
-  return "<${Ns}c r=`"${ref}`" t=`"inlineStr`"><${Ns}is><${Ns}t>$safe</${Ns}t></${Ns}is></${Ns}c>"
+  return "<${Ns}c r=`"${ref}`"${sAttr} t=`"inlineStr`"><${Ns}is><${Ns}t>$safe</${Ns}t></${Ns}is></${Ns}c>"
 }
 
-function New-ReportRowXml { param([string[]]$Values, [int]$RowNum, [string]$Ns)
+function New-ReportRowXml {
+  param(
+    [string[]]$Values, [int]$RowNum, [string]$Ns,
+    [string]$BodyStyle = '', [string]$PercentStyle = '', [string]$HeaderStyle = '',
+    [switch]$IsHeader, [int[]]$PctCols = @()
+  )
   $cells = for ($ci = 0; $ci -lt $Values.Count; $ci++) {
-    New-ReportCellXml -Col (ConvertTo-ExcelCol $ci) -Value $Values[$ci] -Row $RowNum -Ns $Ns
+    $style = $BodyStyle
+    if ($IsHeader) { $style = $HeaderStyle }
+    elseif ($PercentStyle -ne '' -and $PctCols -contains $ci) { $style = $PercentStyle }
+    New-ReportCellXml -Col (ConvertTo-ExcelCol $ci) -Value $Values[$ci] -Row $RowNum -Ns $Ns -StyleIdx $style
   }
-  return "<${Ns}row r=`"${RowNum}`">$($cells -join '')</${Ns}row>"
+  # Header rows get an explicit height so the navy band reads as a banner
+  # rather than a slightly-darker data row.
+  $rowAttrs = ''
+  if ($IsHeader) { $rowAttrs = ' ht="28" customHeight="1"' }
+  return "<${Ns}row r=`"${RowNum}`"${rowAttrs}>$($cells -join '')</${Ns}row>"
+}
+
+# Forces gridlines on and gives every generated column a workable width. The
+# templates ship <cols> sized for their original column schema, which no longer
+# matches what Get-ReportData emits, so the old block is replaced outright.
+function Set-ReportSheetChrome { param([string]$SheetXml, [string]$Ns, [int]$ColCount)
+  if ($ColCount -lt 1) { $ColCount = 1 }
+  $colsXml = '<' + $Ns + 'cols><' + $Ns + 'col min="1" max="' + $ColCount + '" width="22" customWidth="1" /></' + $Ns + 'cols>'
+  if ($SheetXml -match ('<' + $Ns + 'cols>.*?</' + $Ns + 'cols>')) {
+    $SheetXml = [regex]::Replace($SheetXml, '<' + $Ns + 'cols>.*?</' + $Ns + 'cols>', $colsXml, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  } else {
+    $SheetXml = [regex]::Replace($SheetXml, '(<' + $Ns + 'sheetData)', $colsXml + '$1', [System.Text.RegularExpressions.RegexOptions]::None)
+  }
+  $viewsXml = '<' + $Ns + 'sheetViews><' + $Ns + 'sheetView showGridLines="1" workbookViewId="0" /></' + $Ns + 'sheetViews>'
+  if ($SheetXml -match ('<' + $Ns + 'sheetViews>.*?</' + $Ns + 'sheetViews>')) {
+    $SheetXml = [regex]::Replace($SheetXml, '<' + $Ns + 'sheetViews>.*?</' + $Ns + 'sheetViews>', $viewsXml, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  } elseif ($SheetXml -match ('<' + $Ns + 'sheetFormatPr')) {
+    $SheetXml = [regex]::Replace($SheetXml, '(<' + $Ns + 'sheetFormatPr)', $viewsXml + '$1', [System.Text.RegularExpressions.RegexOptions]::None)
+  }
+  return $SheetXml
 }
 
 function ConvertTo-IsoWeek { param($Value)
@@ -1003,6 +1095,143 @@ function New-ReportSheetXml { param([string]$Existing, [string[]]$RowsXml, [stri
     },
     [System.Text.RegularExpressions.RegexOptions]::Singleline)
   return $result
+}
+
+# Replaces (or creates) one entry in an open ZipArchive.
+function Set-ZipEntryText { param($Archive, [string]$Path, [string]$Text)
+  $existing = $Archive.GetEntry($Path)
+  if ($existing) { $existing.Delete() }
+  $e = $Archive.CreateEntry($Path)
+  $w = New-Object System.IO.StreamWriter($e.Open(), (New-Object System.Text.UTF8Encoding($false)))
+  $w.Write($Text); $w.Close()
+}
+function Set-ZipEntryBytes { param($Archive, [string]$Path, [byte[]]$Bytes)
+  $existing = $Archive.GetEntry($Path)
+  if ($existing) { $existing.Delete() }
+  $e = $Archive.CreateEntry($Path)
+  $s = $e.Open()
+  $s.Write($Bytes, 0, $Bytes.Length); $s.Close()
+}
+
+# Embeds LFI photos into a worksheet as real drawing objects anchored between
+# two cells, so they scale with the sheet and print with the form instead of
+# living outside the workbook as loose files. LL_info.xlsx ships with NO
+# drawing infrastructure at all - no drawing part, no sheet rels, no image
+# content types - so the whole chain is created here:
+#   xl/media/*                       the image bytes
+#   xl/drawings/drawing1.xml         the anchors
+#   xl/drawings/_rels/...rels        anchor -> media
+#   xl/worksheets/_rels/...rels      sheet  -> drawing
+#   <drawing r:id> on the sheet      binds it in
+#   [Content_Types].xml              declares png/jpeg and the drawing part
+function Add-XlsxImageAnchors {
+  param($Archive, [string]$SheetPath, [object[]]$Images,
+        [int]$FromRow = 19, [int]$ToRow = 35, [int]$FromCol = 0, [int]$ToCol = 12)
+  if (-not $Images -or $Images.Count -eq 0) { return }
+
+  $anchors = New-Object System.Collections.Generic.List[string]
+  $relsList = New-Object System.Collections.Generic.List[string]
+  $exts = @{}
+  $bandHeight = $ToRow - $FromRow
+
+  for ($i = 0; $i -lt $Images.Count; $i++) {
+    $img = $Images[$i]
+    $ext = ([string]$img.ext).ToLowerInvariant()
+    if (-not $ext) { $ext = 'png' }
+    $exts[$ext] = $true
+    $mediaName = 'lfi_image' + ($i + 1) + '.' + $ext
+    Set-ZipEntryBytes -Archive $Archive -Path ('xl/media/' + $mediaName) -Bytes $img.bytes
+
+    # Each additional photo drops one band lower so several attachments stack
+    # down the sheet instead of piling on top of each other in one cell range.
+    $top = $FromRow + ($i * ($bandHeight + 1))
+    $bottom = $top + $bandHeight
+    $rid = 'rIdImg' + ($i + 1)
+    $anchors.Add(
+      '<xdr:twoCellAnchor editAs="oneCell">' +
+        '<xdr:from><xdr:col>' + $FromCol + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $top + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>' +
+        '<xdr:to><xdr:col>' + $ToCol + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $bottom + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>' +
+        '<xdr:pic>' +
+          '<xdr:nvPicPr>' +
+            '<xdr:cNvPr id="' + ($i + 2) + '" name="LFI Photo ' + ($i + 1) + '" descr="' + (ConvertTo-XmlSafe $img.name) + '" />' +
+            '<xdr:cNvPicPr><a:picLocks noChangeAspect="1" /></xdr:cNvPicPr>' +
+          '</xdr:nvPicPr>' +
+          '<xdr:blipFill><a:blip r:embed="' + $rid + '" /><a:stretch><a:fillRect /></a:stretch></xdr:blipFill>' +
+          '<xdr:spPr><a:xfrm><a:off x="0" y="0" /><a:ext cx="0" cy="0" /></a:xfrm><a:prstGeom prst="rect"><a:avLst /></a:prstGeom></xdr:spPr>' +
+        '</xdr:pic>' +
+        '<xdr:clientData />' +
+      '</xdr:twoCellAnchor>')
+    $relsList.Add('<Relationship Id="' + $rid + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/' + $mediaName + '" />')
+  }
+
+  $drawingXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    ($anchors -join '') + '</xdr:wsDr>'
+  Set-ZipEntryText -Archive $Archive -Path 'xl/drawings/drawing1.xml' -Text $drawingXml
+
+  $drawingRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + ($relsList -join '') + '</Relationships>'
+  Set-ZipEntryText -Archive $Archive -Path 'xl/drawings/_rels/drawing1.xml.rels' -Text $drawingRels
+
+  # Sheet -> drawing relationship. Preserve any rels the sheet already has.
+  $sheetName = $SheetPath.Substring($SheetPath.LastIndexOf('/') + 1)
+  $sheetRelsPath = 'xl/worksheets/_rels/' + $sheetName + '.rels'
+  $sheetRelsEntry = $Archive.GetEntry($sheetRelsPath)
+  $drawingRelId = 'rIdDrawing1'
+  if ($sheetRelsEntry) {
+    $rd = New-Object System.IO.StreamReader($sheetRelsEntry.Open())
+    $sheetRelsXml = $rd.ReadToEnd(); $rd.Close()
+    if ($sheetRelsXml -notmatch [regex]::Escape($drawingRelId)) {
+      $sheetRelsXml = $sheetRelsXml -replace '</Relationships>',
+        ('<Relationship Id="' + $drawingRelId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml" /></Relationships>')
+    }
+  } else {
+    $sheetRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="' + $drawingRelId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml" />' +
+      '</Relationships>'
+  }
+  Set-ZipEntryText -Archive $Archive -Path $sheetRelsPath -Text $sheetRelsXml
+
+  # Bind the drawing into the sheet itself.
+  $sheetEntry = $Archive.GetEntry($SheetPath)
+  if ($sheetEntry) {
+    $sr = New-Object System.IO.StreamReader($sheetEntry.Open())
+    $sheetXml = $sr.ReadToEnd(); $sr.Close()
+    if ($sheetXml -notmatch '<drawing\s') {
+      # r: is not declared on this template's <worksheet> root, and r:id
+      # without its namespace makes Excel reject the file outright.
+      if ($sheetXml -notmatch 'xmlns:r=') {
+        $sheetXml = [regex]::Replace($sheetXml, '(<worksheet\b[^>]*?)(>)',
+          '$1 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"$2', 1)
+      }
+      # <drawing> is last in the CT_Worksheet sequence, so it goes immediately
+      # before the closing tag - after pageSetup, which this template has.
+      $sheetXml = $sheetXml -replace '</worksheet>', ('<drawing r:id="' + $drawingRelId + '" /></worksheet>')
+      Set-ZipEntryText -Archive $Archive -Path $SheetPath -Text $sheetXml
+    }
+  }
+
+  # Content types: image extensions + the drawing part.
+  $ctEntry = $Archive.GetEntry('[Content_Types].xml')
+  if ($ctEntry) {
+    $cr = New-Object System.IO.StreamReader($ctEntry.Open())
+    $ctXml = $cr.ReadToEnd(); $cr.Close()
+    $add = ''
+    foreach ($ext in $exts.Keys) {
+      if ($ctXml -notmatch ('Extension="' + $ext + '"')) {
+        $mime = if ($ext -eq 'png') { 'image/png' } else { 'image/jpeg' }
+        $add += '<Default Extension="' + $ext + '" ContentType="' + $mime + '" />'
+      }
+    }
+    if ($ctXml -notmatch '/xl/drawings/drawing1\.xml') {
+      $add += '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml" />'
+    }
+    if ($add) {
+      $ctXml = $ctXml -replace '</Types>', ($add + '</Types>')
+      Set-ZipEntryText -Archive $Archive -Path '[Content_Types].xml' -Text $ctXml
+    }
+  }
 }
 
 function Get-SheetMaxRow { param([string]$SheetXml)
@@ -2233,6 +2462,25 @@ try {
         $timestamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
         $stem        = "LFI_${family}_${stepKey}_${timestamp}"
 
+        # Decode attachments up front: they are embedded INTO the workbook
+        # while its archive is still open, so they cannot wait until after
+        # the vault copy is written.
+        $decodedImages = @()
+        if ($images) {
+          for ($imgIdx = 0; $imgIdx -lt $images.Count; $imgIdx++) {
+            $img = $images[$imgIdx]
+            $imgName = [string]$img.name
+            $imgData = [string]$img.data
+            $base64 = ''
+            if ($imgData -match ';base64,(.+)$') { $base64 = $Matches[1] } else { $base64 = $imgData }
+            if (-not $base64) { continue }
+            try { $imgBytes = [System.Convert]::FromBase64String($base64) } catch { continue }
+            $ext = ([System.IO.Path]::GetExtension($imgName)).TrimStart('.').ToLowerInvariant()
+            if ($ext -notin @('png', 'jpg', 'jpeg')) { $ext = 'png' }
+            $decodedImages += @{ name = $imgName; bytes = $imgBytes; ext = $ext }
+          }
+        }
+
         $tempPath    = Join-Path $env:TEMP ('lfi_' + [guid]::NewGuid().ToString('N') + '.xlsx')
         $templatePath = Join-Path $TemplatesDir 'LL_info.xlsx'
         Copy-Item -LiteralPath $templatePath -Destination $tempPath
@@ -2327,6 +2575,14 @@ try {
             $w2 = New-Object System.IO.StreamWriter($newS2.Open())
             $w2.Write($s2xml); $w2.Close()
 
+            # ---- attached photos, anchored into the LL INFO form -----------------
+            # Rows 20-35 / columns A-L sit under the two written text panels, so
+            # the photos land in empty space rather than over the description.
+            if ($decodedImages.Count -gt 0) {
+              Add-XlsxImageAnchors -Archive $archive -SheetPath 'xl/worksheets/sheet1.xml' `
+                -Images $decodedImages -FromRow 19 -ToRow 35 -FromCol 0 -ToCol 12
+            }
+
           } finally {
             $archive.Dispose()
           }
@@ -2334,21 +2590,15 @@ try {
           $xlsxBytes = [System.IO.File]::ReadAllBytes($tempPath)
           $savedXlsx = Save-Evidence -DocType 'LFI' -Family $family -PartId '' -FileName "${stem}.xlsx" -Bytes $xlsxBytes
 
+          # The photos are already inside the workbook; these vault copies keep
+          # the originals at full resolution for anyone who needs them apart
+          # from the report.
           $savedImages = @()
-          if ($images) {
-            for ($imgIdx = 0; $imgIdx -lt $images.Count; $imgIdx++) {
-              $img = $images[$imgIdx]
-              $imgName = [string]$img.name
-              $imgData = [string]$img.data
-              $base64 = ''
-              if ($imgData -match ';base64,(.+)$') { $base64 = $Matches[1] } else { $base64 = $imgData }
-              $imgBytes = [System.Convert]::FromBase64String($base64)
-              $ext = [System.IO.Path]::GetExtension($imgName)
-              if (-not $ext) { $ext = '.png' }
-              $imgFileName = "${stem}_$($imgIdx+1)$ext"
-              $imgSaved = Save-Evidence -DocType 'LFI' -Family $family -PartId '' -FileName $imgFileName -Bytes $imgBytes
-              $savedImages += @{ fileName = $imgSaved.fileName; path = $imgSaved.path }
-            }
+          for ($imgIdx = 0; $imgIdx -lt $decodedImages.Count; $imgIdx++) {
+            $dImg = $decodedImages[$imgIdx]
+            $imgFileName = "${stem}_$($imgIdx+1)." + $dImg.ext
+            $imgSaved = Save-Evidence -DocType 'LFI' -Family $family -PartId '' -FileName $imgFileName -Bytes $dImg.bytes
+            $savedImages += @{ fileName = $imgSaved.fileName; path = $imgSaved.path }
           }
 
           Add-StoreRow -Store 'lb_issues' -IdField 'issue_id' -Row @{
@@ -2402,12 +2652,18 @@ try {
                 # sheet2 with a formatted Dashboard on sheet1; the trial report
                 # template has ONE sheet and it is the printed form, so that
                 # one appends under the form instead of replacing it.
+                # pctCols are 0-based column indexes Get-ReportData emits as
+                # decimal fractions; they get Excel's built-in "0%" format so
+                # 0.75 reads as 75% while staying a real number for AVERAGE()
+                # and the Dashboard charts. headerIdx is which generated row
+                # carries the column names — 'trial' leads with a caption row,
+                # so its header is the second one.
                 $templateMap = @{
-                  'lfi'      = @{ file = 'Template_EPM_Issue_Analytics_RANKED_COLORS.xlsx';  sheet = 'xl/worksheets/sheet2.xml'; append = $false }
-                  'transfer' = @{ file = 'Template_ProjectTransfer_Report_RANKED_COLORS.xlsx'; sheet = 'xl/worksheets/sheet2.xml'; append = $false }
-                  'kpi'      = @{ file = 'Template_KPI_Report_RANKED_COLORS.xlsx';           sheet = 'xl/worksheets/sheet2.xml'; append = $false }
-                  'll'       = @{ file = 'LL_info.xlsx';                                     sheet = 'xl/worksheets/sheet2.xml'; append = $false; unhideSheet = 'List Issue' }
-                  'trial'    = @{ file = 'NPI_Trial_Report_Template.xlsx';                   sheet = 'xl/worksheets/sheet1.xml'; append = $true }
+                  'lfi'      = @{ file = 'Template_EPM_Issue_Analytics_RANKED_COLORS.xlsx';  sheet = 'xl/worksheets/sheet2.xml'; append = $false; pctCols = @();        headerIdx = 0 }
+                  'transfer' = @{ file = 'Template_ProjectTransfer_Report_RANKED_COLORS.xlsx'; sheet = 'xl/worksheets/sheet2.xml'; append = $false; pctCols = @(6);       headerIdx = 0 }
+                  'kpi'      = @{ file = 'Template_KPI_Report_RANKED_COLORS.xlsx';           sheet = 'xl/worksheets/sheet2.xml'; append = $false; pctCols = @(5, 6, 7); headerIdx = 0 }
+                  'll'       = @{ file = 'LL_info.xlsx';                                     sheet = 'xl/worksheets/sheet2.xml'; append = $false; unhideSheet = 'List Issue'; pctCols = @(); headerIdx = 0 }
+                  'trial'    = @{ file = 'NPI_Trial_Report_Template.xlsx';                   sheet = 'xl/worksheets/sheet1.xml'; append = $true;  pctCols = @(10);      headerIdx = 1 }
                 }
                 $spec = $templateMap[$typeKey]
                 $templateName = if ($spec) { [string]$spec.file } else { '' }
@@ -2446,6 +2702,33 @@ try {
                       # Detect namespace prefix convention
                       $ns = if ($existingSheetXml -match '<x:sheetData') { 'x:' } else { '' }
 
+                      # Register this report's header/body/percent formats in
+                      # the template's own styles.xml and keep the indexes they
+                      # were assigned. If anything about that file is shaped
+                      # unexpectedly the helper returns $null and generation
+                      # falls back to unstyled output rather than risking a
+                      # workbook Excel refuses to open.
+                      $styleHeader = ''; $styleBody = ''; $stylePercent = ''
+                      $stylesEntry = $zip.GetEntry('xl/styles.xml')
+                      if ($stylesEntry) {
+                        $stReader = New-Object System.IO.StreamReader($stylesEntry.Open(), [System.Text.Encoding]::UTF8)
+                        $stylesXml = $stReader.ReadToEnd()
+                        $stReader.Close()
+                        $styleInfo = Add-ReportStyles -StylesXml $stylesXml
+                        if ($styleInfo) {
+                          $stylesEntry.Delete()
+                          $stNew = $zip.CreateEntry('xl/styles.xml')
+                          $stWriter = New-Object System.IO.StreamWriter($stNew.Open(), [System.Text.Encoding]::UTF8)
+                          $stWriter.Write([string]$styleInfo.xml)
+                          $stWriter.Close()
+                          $styleHeader  = [string]$styleInfo.header
+                          $styleBody    = [string]$styleInfo.body
+                          $stylePercent = [string]$styleInfo.percent
+                        } else {
+                          Write-Log ("Report styling skipped for " + $templateName + " - unexpected styles.xml shape") 'WARN'
+                        }
+                      }
+
                       # Appended rows start past the template's own last row;
                       # reusing an existing r= makes Excel repair the file. The
                       # +1 leaves one blank row between the form and the
@@ -2454,13 +2737,26 @@ try {
                       if ($appendMode) { $rowOffset = (Get-SheetMaxRow -SheetXml $existingSheetXml) + 1 }
 
                       # Build row XML
+                      $pctCols   = @($spec.pctCols)
+                      $headerIdx = [int]$spec.headerIdx
                       $rowsXml = New-Object System.Collections.Generic.List[string]
                       for ($ri = 0; $ri -lt $data.Count; $ri++) {
-                        $rowsXml.Add((New-ReportRowXml -Values $data[$ri] -RowNum ($rowOffset + $ri + 1) -Ns $ns))
+                        $rowsXml.Add((New-ReportRowXml -Values $data[$ri] -RowNum ($rowOffset + $ri + 1) -Ns $ns `
+                          -BodyStyle $styleBody -PercentStyle $stylePercent -HeaderStyle $styleHeader `
+                          -IsHeader:($ri -eq $headerIdx) -PctCols $pctCols))
                       }
 
                       # Replace (or extend) sheetData content
                       $newSheetXml = New-ReportSheetXml -Existing $existingSheetXml -RowsXml $rowsXml.ToArray() -Ns $ns -Append:$appendMode
+                      # Widths and gridlines are only meaningful on the sheet
+                      # this report actually writes its table to. The trial
+                      # template's single sheet IS a printed form, so leave its
+                      # column widths alone or the form collapses.
+                      if (-not $appendMode) {
+                        $maxCols = 0
+                        foreach ($rowVals in $data) { if ($rowVals.Count -gt $maxCols) { $maxCols = $rowVals.Count } }
+                        $newSheetXml = Set-ReportSheetChrome -SheetXml $newSheetXml -Ns $ns -ColCount $maxCols
+                      }
 
                       # Delete old entry and write new one
                       $sheetEntry.Delete()

@@ -897,25 +897,58 @@ function classifyProject(prj) {
 /* TAB — EXECUTIVE DASHBOARD                                             */
 /* ===================================================================== */
 
-/* Who actually touched a step, and with which documents. Cross-references
+/* Who is on the hook for a step, and for which documents. Cross-references
    deliverables and approvals so the PIC column reads
-   "Hoang (PFMEA, BOM) · QA Nga (CONTROL-PLAN)" instead of a bare name. */
+   "Hoang (PFMEA, BOM) · QA Nga (CONTROL-PLAN)" instead of a bare name.
+   Claimed and assigned work counts too, not just filed work — somebody who
+   has taken PRF but not uploaded it yet is still the person to ask, so the
+   column must name them rather than reading "nobody yet". */
 function picsFor(pid, stepKey) {
   const by = {};
+  function entry(who) {
+    return (by[who] = by[who] || { docs: [], role: '', gateRoles: [] });
+  }
   TRK.lb_deliverables.filter(d => d.project_id === pid && d.step_key === stepKey).forEach(d => {
-    const who = d.uploaded_by || '(unnamed)';
-    (by[who] = by[who] || { docs: [], role: 'filed' }).docs.push(d.doc_code);
+    if (d.status === 'Removed') return;
+    // A row can carry both a filer and a claimant, and they need not be the
+    // same person — credit each separately against the same doc code.
+    if (d.uploaded_by) { entry(d.uploaded_by).docs.push(d.doc_code); entry(d.uploaded_by).role = 'filed'; }
+    const owner = d.owner_pic || d.claimed_by || '';
+    if (owner) entry(owner).docs.push(d.doc_code);
+    const supporter = d.supporter_pic || d.supporter_by || '';
+    if (supporter) entry(supporter).docs.push(d.doc_code);
   });
   TRK.lb_approvals.filter(a => a.project_id === pid && a.step_key === stepKey).forEach(a => {
     const who = a.approved_by || '(unnamed)';
-    const e = (by[who] = by[who] || { docs: [], role: '' });
-    e.role = 'signed';
+    entry(who).role = 'signed';
+  });
+  // Gate-level claims have no doc code of their own — the person owns the
+  // whole step — so they get a role label instead of a document list.
+  (TRK.lb_gates || []).filter(g => g.project_id === pid && g.step_key === stepKey).forEach(g => {
+    const owner = g.owner_pic || g.claimed_by || '';
+    if (owner) entry(owner).gateRoles.push('Owner');
+    const supporter = g.supporter_pic || g.supporter_by || '';
+    if (supporter) entry(supporter).gateRoles.push('Supporter');
   });
   return Object.keys(by).map(n => ({
     name: n,
-    docs: by[n].docs.filter((v, i, s) => s.indexOf(v) === i),
+    docs: by[n].docs.filter((v, i, s) => v && s.indexOf(v) === i),
+    gateRoles: by[n].gateRoles.filter((v, i, s) => s.indexOf(v) === i),
     role: by[n].role
   }));
+}
+
+/* Folds one step's PICs into a project-row accumulator shared by the NPI and
+   ECN matrices: name -> the labels shown in its parentheses. Gate roles and a
+   bare signature land in the same list as document codes so a person reads as
+   "Hoang (PFMEA, BOM)" or "M. Weber (Owner)" either way. */
+function mergePicsInto(allPics, pid, stepKey) {
+  picsFor(pid, stepKey).forEach(function(p) {
+    const e = (allPics[p.name] = allPics[p.name] || []);
+    p.docs.forEach(function(d) { if (e.indexOf(d) < 0) e.push(d); });
+    p.gateRoles.forEach(function(r) { if (e.indexOf(r) < 0) e.push(r); });
+    if (!e.length && p.role === 'signed' && e.indexOf('signed') < 0) e.push('signed');
+  });
 }
 
 function cellStateFor(project, step) {
@@ -1355,17 +1388,14 @@ function viewDashboard(root) {
             }
             tr.appendChild(td);
 
-            picsFor(project.project_id, sk).forEach(p => {
-              const e = (allPics[p.name] = allPics[p.name] || []);
-              p.docs.forEach(d => { if (e.indexOf(d) < 0) e.push(d); });
-            });
+            mergePicsInto(allPics, project.project_id, sk);
           }
         });
 
         const ptd = el('td');
         const names = Object.keys(allPics);
         ptd.innerHTML = names.length
-          ? names.map(n => esc(n) + ' <span class="note">(' + allPics[n].map(esc).join(', ') + ')</span>').join('<br>')
+          ? names.map(n => esc(n) + (allPics[n].length ? ' <span class="note">(' + allPics[n].map(esc).join(', ') + ')</span>' : '')).join('<br>')
           : '<span class="note">nobody yet</span>';
         tr.appendChild(ptd);
         tb.appendChild(tr);
@@ -1515,10 +1545,7 @@ function viewDashboard(root) {
           // Gather PICs from every step in the group
           group.steps.forEach(function(step) {
             if (on.indexOf(step) < 0) return;
-            picsFor(project.project_id, stepKeyOf(proc, step)).forEach(function(p) {
-              const e = (allPics[p.name] = allPics[p.name] || []);
-              p.docs.forEach(function(d) { if (e.indexOf(d) < 0) e.push(d); });
-            });
+            mergePicsInto(allPics, project.project_id, stepKeyOf(proc, step));
           });
         });
 
@@ -1542,7 +1569,7 @@ function viewDashboard(root) {
         const ptd = el('td');
         const names = Object.keys(allPics);
         ptd.innerHTML = names.length
-          ? names.map(function(n) { return esc(n) + ' <span class="note">(' + allPics[n].map(esc).join(', ') + ')</span>'; }).join('<br>')
+          ? names.map(function(n) { return esc(n) + (allPics[n].length ? ' <span class="note">(' + allPics[n].map(esc).join(', ') + ')</span>' : ''); }).join('<br>')
           : '<span class="note">nobody yet</span>';
         tr.appendChild(ptd);
         tb.appendChild(tr);
@@ -2251,10 +2278,8 @@ function openDrawer(project, step, focusDocCode) {
   }
   if (proc === 'ECN' && /mwer/i.test(step.step_name)) d.appendChild(mwerSection(project, step, reopenDrawer));
 
-  // LFI button — visible on every step in the drawer
-  var lfiBtn = el('button', 'lfi-drawer-btn', '+ Late Found Issue (LFI)');
-  lfiBtn.onclick = function() { openLfiModal(project, step); };
-  d.appendChild(lfiBtn);
+  // LFI accordion — available on every step, expands in place in the drawer
+  d.appendChild(lfiSection(project, step));
 
   if (step.source_note) {
     const sn = el('p', 'note'); sn.innerHTML = '<b>Source note:</b> ' + esc(step.source_note); d.appendChild(sn);
@@ -2720,6 +2745,9 @@ function openDrawer(project, step, focusDocCode) {
 /* TAB — CLAIMED WORK (Task 2b)                                          */
 /* ===================================================================== */
 var PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+// Survives the 15s auto-reload so an admin mid-review of one person's queue
+// does not get thrown back to "All Personnel" every refresh.
+var claimedUserSel = '';
 
 function viewClaimed(root) {
   var who = getUser();
@@ -2729,16 +2757,38 @@ function viewClaimed(root) {
     root.appendChild(b);
     return;
   }
-  b.innerHTML = '<b>Tasks claimed by or assigned to ' + esc(who) + '.</b> Only open items appear here — approved or closed items drop off the list.';
+  // Admins and moderators supervise the whole floor, so they see everybody's
+  // queue and filter down to a person; everyone else sees only their own.
+  var privileged = isPrivileged();
+  b.innerHTML = privileged
+    ? '<b>All claimed and assigned work across every user.</b> Only open items appear here — approved or closed items drop off the list. Filter by person below.'
+    : '<b>Tasks claimed by or assigned to ' + esc(who) + '.</b> Only open items appear here — approved or closed items drop off the list.';
   root.appendChild(b);
 
   var nw = nowWeek();
   var items = [];
 
+  // Owner/supporter/assignee of one tracking row, in the two-tier claim shape
+  // every store shares.
+  function partiesOf(row) {
+    return {
+      owner: row.owner_pic || row.claimed_by || '',
+      supporter: row.supporter_pic || row.supporter_by || '',
+      assignedBy: row.assigned_by || ''
+    };
+  }
+  // Privileged view keeps any row somebody is on the hook for; the personal
+  // view keeps only rows naming the logged-in user.
+  function keeps(p) {
+    if (privileged) return !!(p.owner || p.supporter);
+    return p.owner === who || p.supporter === who;
+  }
+
   // Open gates claimed by the user (status not Approved)
   (TRK.lb_gates || []).forEach(function(g) {
     if (g.status === 'Approved') return;
-    if (g.owner_pic !== who && g.claimed_by !== who) return;
+    var p = partiesOf(g);
+    if (!keeps(p)) return;
     var prj = projById(g.project_id);
     if (!prj) return;
     var step = null;
@@ -2758,14 +2808,17 @@ function viewClaimed(root) {
       status: g.status || 'NotStarted',
       step: step || { step_id: 0, step_name: '' },
       project: prj,
-      assignedBy: g.assigned_by || ''
+      owner: p.owner,
+      supporter: p.supporter,
+      assignedBy: p.assignedBy
     });
   });
 
   // Open deliverables (not approved) claimed by the user
   (TRK.lb_deliverables || []).forEach(function(d) {
     if (d.approved === 'YES') return;
-    if (d.owner_pic !== who && d.claimed_by !== who) return;
+    var p = partiesOf(d);
+    if (!keeps(p)) return;
     if (!d.doc_code) return;
     var prj = projById(d.project_id);
     if (!prj) return;
@@ -2786,7 +2839,9 @@ function viewClaimed(root) {
       status: d.approved === 'YES' ? 'APPROVED' : 'FILED',
       step: step || { step_id: 0, step_name: '' },
       project: prj,
-      assignedBy: d.assigned_by || '',
+      owner: p.owner,
+      supporter: p.supporter,
+      assignedBy: p.assignedBy,
       docCode: d.doc_code
     });
   });
@@ -2794,7 +2849,8 @@ function viewClaimed(root) {
   // Open SP issues claimed by the user
   (TRK.lb_sp_issues || []).forEach(function(i) {
     if (i.status === 'Closed') return;
-    if (i.owner_pic !== who && i.claimed_by !== who) return;
+    var p = partiesOf(i);
+    if (!keeps(p)) return;
     var prj = projById(i.project_id);
     var tw = i.due_date ? toWeek(i.due_date) : (prj ? (toWeek(prj.target_date) || targetDateFor(prj.class_abcde, prj.prf_date) || '') : '');
     var prio = i.priority || 'Medium';
@@ -2808,14 +2864,17 @@ function viewClaimed(root) {
       status: i.status || 'Open',
       step: null,
       project: prj || null,
-      assignedBy: i.assigned_by || ''
+      owner: p.owner,
+      supporter: p.supporter,
+      assignedBy: p.assignedBy
     });
   });
 
   // Open lb_issues claimed by the user
   (TRK.lb_issues || []).forEach(function(i) {
     if (i.status === 'Closed') return;
-    if (i.owner_pic !== who && i.claimed_by !== who) return;
+    var p = partiesOf(i);
+    if (!keeps(p)) return;
     var prj = projById(i.project_id);
     var tw = i.due_date ? toWeek(i.due_date) : (prj ? (toWeek(prj.target_date) || targetDateFor(prj.class_abcde, prj.prf_date) || '') : '');
     var prio = i.priority || 'Medium';
@@ -2836,12 +2895,16 @@ function viewClaimed(root) {
       status: i.status || 'Open',
       step: step || null,
       project: prj || null,
-      assignedBy: i.assigned_by || ''
+      owner: p.owner,
+      supporter: p.supporter,
+      assignedBy: p.assignedBy
     });
   });
 
   if (!items.length) {
-    root.appendChild(el('p', 'note', 'You have nothing claimed or assigned right now. Use the inspection drawer in the NPI or ECN tab to claim tasks.'));
+    root.appendChild(el('p', 'note', privileged
+      ? 'Nobody has claimed or been assigned anything yet. Claims are made from the inspection drawer in the NPI or ECN tab.'
+      : 'You have nothing claimed or assigned right now. Use the inspection drawer in the NPI or ECN tab to claim tasks.'));
     return;
   }
 
@@ -2858,22 +2921,68 @@ function viewClaimed(root) {
     return a.priorityOrder - b.priorityOrder;
   });
 
-  // Build table
   var card = el('div', 'card');
   var body = el('div', 'card-body');
+
+  // Personnel filter — privileged only, since an ordinary user's list is
+  // already just their own work and a one-entry dropdown would be noise.
+  if (privileged) {
+    var everyone = [];
+    items.forEach(function(it) {
+      [it.owner, it.supporter].forEach(function(n) {
+        if (n && everyone.indexOf(n) < 0) everyone.push(n);
+      });
+    });
+    everyone.sort();
+    if (everyone.indexOf(claimedUserSel) < 0) claimedUserSel = '';
+    var filterBar = el('div', 'filters');
+    filterBar.appendChild(el('label', null, 'Filter by personnel'));
+    var userSel = el('select');
+    userSel.id = 'claimedUserFilter';
+    function countFor(name) {
+      return items.filter(function(it) { return it.owner === name || it.supporter === name; }).length;
+    }
+    userSel.innerHTML = '<option value="">All Personnel (' + items.length + ' task' + (items.length === 1 ? '' : 's') + ')</option>' +
+      everyone.map(function(n) {
+        return '<option value="' + esc(n) + '"' + (n === claimedUserSel ? ' selected' : '') + '>' + esc(n) + ' (' + countFor(n) + ')</option>';
+      }).join('');
+    userSel.onchange = function() { claimedUserSel = userSel.value; show('claimed'); };
+    filterBar.appendChild(userSel);
+    body.appendChild(filterBar);
+  }
+
+  var shown = (privileged && claimedUserSel)
+    ? items.filter(function(it) { return it.owner === claimedUserSel || it.supporter === claimedUserSel; })
+    : items;
+
+  // Build table
   var t = el('table');
-  t.innerHTML = '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>';
+  t.innerHTML = privileged
+    ? '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Primary owner</th><th>Supporter</th><th>Assigned by</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>'
+    : '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>';
   var tb = el('tbody');
-  items.forEach(function(item) {
+  if (!shown.length) {
+    var emptyTr = el('tr');
+    emptyTr.innerHTML = '<td colspan="' + (privileged ? 9 : 6) + '" class="note">Nothing claimed or assigned for ' + esc(claimedUserSel) + '.</td>';
+    tb.appendChild(emptyTr);
+  }
+  shown.forEach(function(item) {
     var tr = el('tr', 'claimed-row');
     tr.style.cursor = 'pointer';
     var overdue = item.targetWeek && item.targetWeek < nw;
     var twDisplay = item.targetWeek || '—';
     if (overdue) twDisplay = '⚠ Overdue: ' + twDisplay;
 
+    var partyCells = privileged
+      ? '<td>' + (item.owner ? esc(item.owner) : '<span class="note">—</span>') + '</td>' +
+        '<td>' + (item.supporter ? esc(item.supporter) : '<span class="note">—</span>') + '</td>' +
+        '<td>' + (item.assignedBy ? esc(item.assignedBy) : '<span class="note">self-claimed</span>') + '</td>'
+      : '';
+
     tr.innerHTML = '<td><b>' + esc(item.projectId) + '</b></td>' +
       '<td><span class="note">' + esc(item.type) + '</span></td>' +
       '<td>' + esc(item.label) + (item.assignedBy ? ' <span class="badge bg-primary" style="font-size:10px">Assigned by Admin</span>' : '') + '</td>' +
+      partyCells +
       '<td class="' + (overdue ? 'claimed-overdue' : '') + '">' + esc(twDisplay) + '</td>' +
       '<td>' + esc(item.priority) + '</td>' +
       '<td><span class="' + badgeClass(item.status) + '">' + esc(item.status.replace(/_/g, ' ')) + '</span></td>';
@@ -4985,21 +5094,44 @@ function confirmModal(title, body, confirmLabel, onConfirm) {
   yes.focus();
 }
 
-/* ---- LFI (Late Found Issue) modal ---------------------------------------- */
-function openLfiModal(project, step) {
+/* ---- LFI (Late Found Issue) in-drawer accordion --------------------------
+   Returns a collapsed trigger button plus an inline form panel that expands
+   inside the sidebar drawer. This replaced a floating draggable modal: a
+   popup that overlays the drawer hides the very step context the person is
+   describing, and on a laptop screen the two fought for the same space. */
+function lfiSection(project, step) {
   var proc = project.process;
   var sk = stepKeyOf(proc, step);
   var who = getUser();
   var todayStr = today();
 
-  var scrim = el('div', 'modal-scrim');
-  var box = el('div', 'modal lfi-modal');
-  box.setAttribute('role', 'dialog');
-  box.setAttribute('aria-modal', 'true');
-  box.setAttribute('aria-labelledby', 'lfiModalTitle');
+  var wrap = el('div', 'lfi-wrap');
+  var toggle = el('button', 'lfi-expand-btn');
+  toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">&#9660;</span>';
+  wrap.appendChild(toggle);
 
-  var h = '<h2 id="lfiModalTitle">+ Late Found Issue</h2>';
-  h += '<p class="note">' + esc(project.project_id) + ' · step ' + esc(step.step_id) + ' — ' + esc(step.step_name) + '</p>';
+  var box = el('div', 'lfi-sidebar-container');
+  box.style.display = 'none';
+  wrap.appendChild(box);
+
+  var okDiv = el('div', 'lfi-ok');
+  okDiv.id = 'lfiOk';
+  okDiv.style.display = 'none';
+  wrap.appendChild(okDiv);
+
+  var expanded = false;
+  toggle.onclick = function() {
+    expanded = !expanded;
+    box.style.display = expanded ? 'block' : 'none';
+    toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">' + (expanded ? '&#9650;' : '&#9660;') + '</span>';
+    toggle.classList.toggle('on', expanded);
+    if (expanded) {
+      var t = box.querySelector('#lfiTitle');
+      if (t) t.focus();
+    }
+  };
+
+  var h = '<p class="note">' + esc(project.project_id) + ' · step ' + esc(step.step_id) + ' — ' + esc(step.step_name) + '</p>';
 
   // Field rows
   var fields = [
@@ -5038,103 +5170,72 @@ function openLfiModal(project, step) {
   h += '</div>';
   h += '</div>';
 
-  // Error area
+  // Error area. The success notice deliberately lives OUTSIDE this panel
+  // (appended to wrap below) — the panel collapses on success, so a notice
+  // inside it would be hidden at the exact moment it matters.
   h += '<div id="lfiError" class="lfi-error" style="display:none"></div>';
 
   // Actions
   h += '<div class="acts"><button id="lfiCancel">Cancel</button><button id="lfiSubmit" class="primary">Submit LFI</button></div>';
 
   box.innerHTML = h;
-  scrim.appendChild(box);
-
-  // Drag the modal by its title bar. It stays centered (via the scrim's flex
-  // layout) until the user grabs it, at which point it detaches into a fixed
-  // left/top position clamped to the viewport, so it behaves like a real
-  // floating window instead of a dialog stuck to the middle of the screen.
-  var lfiTitleEl = box.querySelector('#lfiModalTitle');
-  if (lfiTitleEl) {
-    lfiTitleEl.style.cursor = 'move';
-    lfiTitleEl.style.userSelect = 'none';
-    lfiTitleEl.addEventListener('mousedown', function(e) {
-      var rect = box.getBoundingClientRect();
-      box.style.position = 'fixed';
-      box.style.margin = '0';
-      box.style.left = rect.left + 'px';
-      box.style.top = rect.top + 'px';
-      var dragOffsetX = e.clientX - rect.left;
-      var dragOffsetY = e.clientY - rect.top;
-      e.preventDefault();
-      var onMove = function(ev) {
-        var maxLeft = Math.max(0, window.innerWidth - box.offsetWidth);
-        var maxTop = Math.max(0, window.innerHeight - box.offsetHeight);
-        box.style.left = Math.min(Math.max(0, ev.clientX - dragOffsetX), maxLeft) + 'px';
-        box.style.top = Math.min(Math.max(0, ev.clientY - dragOffsetY), maxTop) + 'px';
-      };
-      var onUp = function() {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-  }
 
   var imageFiles = [];
 
-  var close = function() {
-    scrim.remove();
-    document.removeEventListener('keydown', onEsc);
+  var collapse = function() {
+    expanded = false;
+    box.style.display = 'none';
+    toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">&#9660;</span>';
+    toggle.classList.remove('on');
   };
 
-  var onEsc = function(e) { if (e.key === 'Escape') close(); };
-
-  scrim.onclick = function(e) { if (e.target === scrim) close(); };
-  document.addEventListener('keydown', onEsc);
-  document.body.appendChild(scrim);
-
-  // Wire up buttons and file input
   var cancelBtn = box.querySelector('#lfiCancel');
-  cancelBtn.onclick = close;
+  cancelBtn.onclick = collapse;
+
+  var previews = box.querySelector('#lfiPreviews');
+  // Thumbnails are removed by identity, not by a captured index — splicing on
+  // a stale index deletes whichever file happens to sit there after an earlier
+  // removal, which silently attached the wrong photo to the report.
+  function addImage(f) {
+    if (!/\.(png|jpe?g)$/i.test(f.name)) return;
+    imageFiles.push(f);
+    var thumb = el('div', 'lfi-thumb');
+    var img = el('img');
+    img.alt = f.name;
+    thumb.appendChild(img);
+    thumb.appendChild(el('span', '', f.name));
+    var rmBtn = el('button', 'lfi-rm-thumb', '×');
+    rmBtn.title = 'Remove ' + f.name;
+    rmBtn.onclick = function(e) {
+      e.preventDefault();
+      var at = imageFiles.indexOf(f);
+      if (at >= 0) imageFiles.splice(at, 1);
+      thumb.remove();
+    };
+    thumb.appendChild(rmBtn);
+    previews.appendChild(thumb);
+    var reader = new FileReader();
+    reader.onload = function(e) { img.src = e.target.result; };
+    reader.readAsDataURL(f);
+  }
 
   var fileInput = box.querySelector('#lfiFileInput');
   fileInput.onchange = function() {
-    var previews = box.querySelector('#lfiPreviews');
-    for (var i = 0; i < fileInput.files.length; i++) {
-      var f = fileInput.files[i];
-      imageFiles.push(f);
-      var thumb = el('div', 'lfi-thumb');
-      var img = el('img');
-      img.alt = f.name;
-      thumb.appendChild(img);
-      var nameSpan = el('span', '', f.name);
-      thumb.appendChild(nameSpan);
-      var rmBtn = el('button', 'lfi-rm-thumb', 'x');
-      (function(idx) {
-        rmBtn.onclick = function() {
-          imageFiles.splice(idx, 1);
-          thumb.remove();
-          // re-index remaining thumbs
-          var allThumbs = box.querySelectorAll('.lfi-thumb');
-          allThumbs.forEach(function(t, j) {
-            var b = t.querySelector('.lfi-rm-thumb');
-            if (b) {
-              b.onclick = function() {
-                imageFiles.splice(j, 1);
-                t.remove();
-              };
-            }
-          });
-        };
-      })(imageFiles.length - 1);
-      thumb.appendChild(rmBtn);
-      previews.appendChild(thumb);
-      // Read as data URL for preview
-      var reader = new FileReader();
-      reader.onload = function(e) { img.src = e.target.result; };
-      reader.readAsDataURL(f);
-    }
+    for (var i = 0; i < fileInput.files.length; i++) addImage(fileInput.files[i]);
     fileInput.value = '';
   };
+
+  var attachArea = box.querySelector('.lfi-attach-area');
+  if (attachArea) {
+    attachArea.ondragover = function(e) { e.preventDefault(); attachArea.classList.add('dragover'); };
+    attachArea.ondragleave = function() { attachArea.classList.remove('dragover'); };
+    attachArea.ondrop = function(e) {
+      e.preventDefault();
+      attachArea.classList.remove('dragover');
+      var fl = e.dataTransfer.files;
+      for (var i = 0; i < fl.length; i++) addImage(fl[i]);
+    };
+  }
 
   var submitBtn = box.querySelector('#lfiSubmit');
   submitBtn.onclick = async function() {
@@ -5183,8 +5284,8 @@ function openLfiModal(project, step) {
     errDiv.style.display = 'none';
 
     try {
-      var result = await API.lfi(body);
-      close();
+      await API.lfi(body);
+      collapse();
       // Refresh drawer in-place — no page scroll, no viewport jump
       var pageY = window.scrollY;
       var drawerEl = $('#drawer');
@@ -5193,7 +5294,16 @@ function openLfiModal(project, step) {
       openDrawer(project, step);
       window.scrollTo(0, pageY);
       var newDrawer = $('#drawer');
-      if (newDrawer) newDrawer.scrollTop = drawerScroll;
+      if (newDrawer) {
+        newDrawer.scrollTop = drawerScroll;
+        // The drawer was rebuilt, so the success notice has to be planted on
+        // the NEW node — the one this closure captured is already detached.
+        var okDiv = newDrawer.querySelector('#lfiOk');
+        if (okDiv) {
+          okDiv.textContent = 'LFI recorded — ' + titleVal;
+          okDiv.style.display = 'block';
+        }
+      }
     } catch (e) {
       errDiv.textContent = 'Submit failed: ' + e.message;
       errDiv.style.display = 'block';
@@ -5202,9 +5312,7 @@ function openLfiModal(project, step) {
     }
   };
 
-  // Focus the title field
-  var titleInput = box.querySelector('#lfiTitle');
-  if (titleInput) titleInput.focus();
+  return wrap;
 }
 
 /* -------------------------------------------------------------- theme -- */
