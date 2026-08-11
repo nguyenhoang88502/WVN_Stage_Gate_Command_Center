@@ -1413,6 +1413,37 @@ try {
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; moderators = @($clean.ToArray()) }
         }
       }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/vault') {
+        # Only changes the CONFIGURED folder name/location for FUTURE server
+        # starts — does not move existing evidence and does not take effect
+        # until the app is restarted (see the "document vault (v2.1)" block
+        # near the top of this file, which resolves the vault once at launch).
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if ($actor.ToLowerInvariant() -ne 'admin') {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the evidence vault location.' }
+        } else {
+          $folderName = ([string]$body.evidence_vault_folder_name).Trim()
+          $relative   = ([string]$body.evidence_vault_relative_to_root).Trim()
+          if (-not $folderName) { $folderName = 'NPI_EPM_Documents_Control' }
+          if (-not $relative)   { $relative = '..' }
+          $cfg = Get-Config
+          $beforeFolder = [string]$cfg.deployment_defaults.evidence_vault_folder_name
+          $beforeRelative = [string]$cfg.deployment_defaults.evidence_vault_relative_to_root
+          $cfg.deployment_defaults.evidence_vault_folder_name = $folderName
+          $cfg.deployment_defaults.evidence_vault_relative_to_root = $relative
+          # Clear the resolved path/root so the startup block in this file
+          # recomputes a fresh default from the new folder name/relative path
+          # next time the server launches, instead of reusing the old resolved
+          # location (which the self-healing check would otherwise keep, since
+          # its parent folder still exists).
+          $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_vault_path -NotePropertyValue '' -Force
+          $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_vault_root -NotePropertyValue '' -Force
+          Save-Config $cfg
+          Add-Audit -User $actor -Action 'Config_Vault_Update' -ProjectId '' -ObjType 'Config' -ObjId 'evidence_vault' -From ($beforeFolder + ' @ ' + $beforeRelative) -To ($folderName + ' @ ' + $relative) -Detail 'Takes effect on next server restart'
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; evidence_vault_folder_name = $folderName; evidence_vault_relative_to_root = $relative }
+        }
+      }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/issue-headers') {
         $body = Read-JsonBody -Request $req
         $cfg = Get-Config

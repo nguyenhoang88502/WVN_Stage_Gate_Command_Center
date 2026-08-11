@@ -4771,6 +4771,48 @@ function viewSettings(root) {
   }
   mp.appendChild(mpBody); root.appendChild(mp);
 
+  /* ---- evidence vault location ---- */
+  const vp = el('div', 'card');
+  const vpHdr = el('div', 'card-header'); vpHdr.appendChild(el('h3', 'card-title', 'Evidence vault location')); vp.appendChild(vpHdr);
+  const vpBody = el('div', 'card-body');
+  vpBody.appendChild(el('p', 'note', 'Where uploaded evidence files are stored, as a folder name and a path relative to the app\'s install folder (default: one level up, named "NPI_EPM_Documents_Control"). Changing this does NOT move files already uploaded, and does not take effect until the server is restarted.'));
+  const dd = (CFG.deployment_defaults || {});
+  const vpRow = el('div');
+  vpRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end';
+  const folderWrap = el('div');
+  folderWrap.appendChild(el('label', null, 'Folder name'));
+  const folderInput = el('input');
+  folderInput.value = dd.evidence_vault_folder_name || 'NPI_EPM_Documents_Control';
+  folderInput.style.cssText = 'display:block;width:260px';
+  folderWrap.appendChild(folderInput);
+  vpRow.appendChild(folderWrap);
+  const relWrap = el('div');
+  relWrap.appendChild(el('label', null, 'Relative path from app root'));
+  const relInput = el('input');
+  relInput.value = dd.evidence_vault_relative_to_root || '..';
+  relInput.style.cssText = 'display:block;width:160px';
+  relWrap.appendChild(relInput);
+  vpRow.appendChild(relWrap);
+  vpBody.appendChild(vpRow);
+  if (isAdmin()) {
+    const vpSaveBtn = el('button', 'primary', 'Save (restart required)');
+    vpSaveBtn.style.marginTop = '8px';
+    vpSaveBtn.onclick = async function() {
+      try {
+        await API.post('/api/config/vault', {
+          user: getUser(),
+          evidence_vault_folder_name: folderInput.value.trim(),
+          evidence_vault_relative_to_root: relInput.value.trim()
+        });
+        await redrawAfterWrite();
+      } catch (e) { alert('Could not save: ' + e.message); }
+    };
+    vpBody.appendChild(vpSaveBtn);
+  } else {
+    vpBody.appendChild(el('p', 'note', 'Only the admin user can change this.'));
+  }
+  vp.appendChild(vpBody); root.appendChild(vp);
+
   /* ---- change / project types (editable) ---- */
   const cp = el('div', 'card');
   const cpHdr = el('div', 'card-header'); cpHdr.appendChild(el('h3', 'card-title', 'Change / project types')); cp.appendChild(cpHdr);
