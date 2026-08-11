@@ -2213,11 +2213,9 @@ function openDrawer(project, step, focusDocCode) {
   }
   d.appendChild(stageClaimWrap);
 
-  // Gate sign-off — the same Approve/Bypass/Raise-issue controls the NPI/ECN
-  // step accordion offers, so Admin/Moderator can sign a gate straight from
-  // the Dashboard sidebar drawer without navigating to the tab and expanding
-  // that step's card.
-  d.appendChild(gateActions(project, proc, step, g, function() {
+  // Shared reopen-in-place callback for anything below that needs to redraw
+  // the drawer after a write (gate sign-off, trial quantities, MWER record).
+  function reopenDrawer() {
     const pageY = window.scrollY;
     const drawerEl = $('#drawer');
     const drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
@@ -2227,7 +2225,24 @@ function openDrawer(project, step, focusDocCode) {
       const newDrawer = $('#drawer');
       if (newDrawer) newDrawer.scrollTop = drawerScroll;
     });
-  }));
+  }
+
+  // Gate sign-off — the same Approve/Bypass/Raise-issue controls the NPI/ECN
+  // step accordion used to offer, so Admin/Moderator can sign a gate straight
+  // from the Dashboard sidebar drawer without navigating to the tab and
+  // expanding that step's card.
+  d.appendChild(gateActions(project, proc, step, g, reopenDrawer));
+
+  // Trial quantities and MWER records used to live only inside the NPI/ECN
+  // step accordion; now that the accordion is gone (flat project list
+  // instead), the drawer is the only place left to reach them.
+  // NPI keys trial quantities off the step's own config flag; ECN never sets
+  // that flag and instead keys off the step name, matching what the old ECN
+  // step accordion checked.
+  if (step.trial_quantity || (proc === 'ECN' && /trial production execution/i.test(step.step_name))) {
+    d.appendChild(trialConfig(project, proc, step, reopenDrawer));
+  }
+  if (proc === 'ECN' && /mwer/i.test(step.step_name)) d.appendChild(mwerSection(project, step, reopenDrawer));
 
   // LFI button — visible on every step in the drawer
   var lfiBtn = el('button', 'lfi-drawer-btn', '+ Late Found Issue (LFI)');
@@ -4207,49 +4222,68 @@ function trialConfig(project, proc, step, redraw) {
 /* ===================================================================== */
 /* TAB — NPI (7 steps, strict gates)                                     */
 /* ===================================================================== */
-function viewNpi(root) {
-  npiTreeState.active = npiSel;
-  const project = familyFgTree(root, 'NPI', npiTreeState, (id, isMulti) => {
-    npiSel = id;
-    justPickedTree = true;
-    show('npi');
-  });
-  if (!project) return;
-  npiSel = project.project_id;
+/* Finds the earliest step that isn't done yet, for "click a project row to
+   jump straight to what's next" — falls back to the last step once every
+   step is done, so a completed project still opens on something. */
+function firstIncompleteStepOf(project, proc) {
+  const steps = stepsOf(proc, project);
+  for (let i = 0; i < steps.length; i++) {
+    if (!gateState(project, proc, steps[i]).done) return steps[i];
+  }
+  return steps[steps.length - 1] || null;
+}
 
-  const p = el('div', 'card');
-  const pBody = el('div', 'card-body');
+/* One row in the flat NPI/ECN project list: identity + progress on the
+   left, the transfer-package actions on the right. Clicking the row (but
+   not its buttons) opens the Dashboard-style drawer at the project's next
+   incomplete step — the drawer, not an inline accordion, is now where gate
+   approval, document filing, and MWER/trial-quantity entry all happen. */
+function projectListRow(project, proc) {
+  const fam = familyById(project.prod_family);
+  const tgt = toWeek(project.target_date) || targetDateFor(project.class_abcde, project.prf_date) || '';
+  const pr = progressOf(project);
+  const status = classifyProject(project);
+  const firstIncomplete = firstIncompleteStepOf(project, proc);
+
+  const row = el('div', 'card project-list-row');
+  row.style.cursor = firstIncomplete ? 'pointer' : 'default';
+  const rowBody = el('div', 'card-body');
+  rowBody.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap';
+
+  const info = el('div');
+  info.innerHTML = '<b>' + esc(project.project_id) + '</b> <span class="' + badgeClass(status) + '">' + esc(status.replace(/_/g, ' ')) + '</span>' +
+    '<div class="note">' + esc(fam ? fam.prod_family_name : (project.prod_family || '')) +
+    (tgt ? ' · target ' + esc(tgt) : '') + ' · ' + pr.done + '/' + pr.total + ' gates signed' +
+    (project.market_manager ? ' · ' + esc(project.market_manager) : '') + '</div>';
+  rowBody.appendChild(info);
+
+  const actions = el('div');
+  actions.appendChild(packageBar(project));
+  rowBody.appendChild(actions);
+
+  row.appendChild(rowBody);
+  row.onclick = e => {
+    if (e.target.closest('button')) return; // let the row's own buttons act without opening the drawer
+    if (firstIncomplete) openDrawer(project, firstIncomplete, null);
+  };
+  return row;
+}
+
+function viewNpi(root) {
   const b = el('div', 'banner');
   b.innerHTML = '<b>NPI gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
-    'and a named person signs. Otherwise use <b>Authorise bypass</b> — it is recorded separately and stays visible.';
-  pBody.appendChild(b);
-  const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.prod_family) || {}).prod_family_name || project.prod_family));
-  activeHead.id = 'npiActiveHead';
-  pBody.appendChild(activeHead);
-  const host = el('div'); pBody.appendChild(host);
-  p.appendChild(pBody); root.appendChild(p);
+    'and a named person signs. Click a project to open its detail — gate approval, filing, and Authorise bypass all live in that sidebar now.';
+  root.appendChild(b);
 
-  const redraw = async () => {
-    host.innerHTML = '';
-    host.appendChild(packageBar(project));
-    host.appendChild(scopeNote(project,'NPI'));
-    const grid = el('div', 'step-grid');
-    const steps = stepsOf('NPI', project);
-    let firstIncomplete = -1;
-    for (let i = 0; i < steps.length; i++) {
-      const g = gateState(project, 'NPI', steps[i]);
-      if (!g.done) { firstIncomplete = i; break; }
-    }
-    steps.forEach((step, idx) => {
-      const { card, body } = stepCard(project, 'NPI', step, redraw);
-      if (step.trial_quantity) body.appendChild(trialConfig(project, 'NPI', step, redraw));
-      const shouldExpand = (firstIncomplete >= 0 ? idx === firstIncomplete : idx === 0);
-      if (!shouldExpand) body.classList.add('collapsed');
-      grid.appendChild(card);
-    });
-    host.appendChild(grid);
-  };
-  redraw();
+  const projects = projectsOf('NPI');
+  if (!projects.length) {
+    const p = el('div', 'card'); const pb = el('div', 'card-body');
+    pb.appendChild(el('p', 'note', 'No NPI projects registered yet — use the Input tab.'));
+    p.appendChild(pb); root.appendChild(p); return;
+  }
+  const list = el('div', 'project-list');
+  projects.forEach(project => list.appendChild(projectListRow(project, 'NPI')));
+  root.appendChild(list);
 }
 
 /* Everything filed against this project, zipped, with a manifest. Works on an
@@ -4302,56 +4336,44 @@ function scopeNote(project, proc) {
 /* TAB — ECN (12 steps, lighter gates) + PPAP sub-section                */
 /* ===================================================================== */
 function viewEcn(root) {
-  ecnTreeState.active = ecnSel;
-  const project = familyFgTree(root, 'ECN', ecnTreeState, (id, isMulti) => {
-    ecnSel = id;
-    justPickedTree = true;
-    show('ecn');
-  });
-  if (!project) return;
-  ecnSel = project.project_id;
-
-  const p = el('div', 'card');
-  const pBody = el('div', 'card-body');
   const seg = el('div', 'seg');
   [['steps', 'Process steps'], ['ppap', 'PPAP package']].forEach(([k, l]) => {
     const bt = el('button', ecnMode === k ? 'on' : '', l); bt.onclick = () => { ecnMode = k; show('ecn'); }; seg.appendChild(bt);
   });
-  pBody.appendChild(seg);
-  const activeHead = el('div', 'filters', project.project_id + ' · ' + ((familyById(project.prod_family) || {}).prod_family_name || project.prod_family) + (project.customer_number ? ' · customer ' + project.customer_number : ''));
-  activeHead.id = 'ecnActiveHead';
-  pBody.appendChild(activeHead);
-  const host = el('div'); pBody.appendChild(host);
-  p.appendChild(pBody); root.appendChild(p);
+  root.appendChild(seg);
 
-  const redraw = async () => {
-    host.innerHTML = '';
-    if (ecnMode === 'ppap') { host.appendChild(ppapSection(project)); return; }
-    host.appendChild(packageBar(project));
-    host.appendChild(scopeNote(project,'ECN'));
-    const b = el('div', 'banner');
-    const steps = stepsOf('ECN', project);
-    const gatedIds = steps.filter(s => s.gate_clearance_required).map(s => s.step_id).join(', ');
-    b.innerHTML = '<b>ECN gates are lighter than NPI.</b> Only steps <b>' + gatedIds + '</b> are signed milestones; the rest are tracked. ' +
-      'ECN is driven by outside requests and several steps run close together, so the value here is visibility, not enforcement.';
-    host.appendChild(b);
-    const grid = el('div', 'step-grid');
-    let firstIncomplete = -1;
-    for (let i = 0; i < steps.length; i++) {
-      const g = gateState(project, 'ECN', steps[i]);
-      if (!g.done) { firstIncomplete = i; break; }
-    }
-    steps.forEach((step, idx) => {
-      const { card, body } = stepCard(project, 'ECN', step, redraw);
-      if (/mwer/i.test(step.step_name)) body.appendChild(mwerSection(project, step, redraw));
-      if (/trial production execution/i.test(step.step_name)) body.appendChild(trialConfig(project, 'ECN', step, redraw));
-      const shouldExpand = (firstIncomplete >= 0 ? idx === firstIncomplete : idx === 0);
-      if (!shouldExpand) body.classList.add('collapsed');
-      grid.appendChild(card);
-    });
-    host.appendChild(grid);
-  };
-  redraw();
+  const projects = projectsOf('ECN');
+  if (!projects.length) {
+    const p = el('div', 'card'); const pb = el('div', 'card-body');
+    pb.appendChild(el('p', 'note', 'No ECN projects registered yet — use the Input tab.'));
+    p.appendChild(pb); root.appendChild(p); return;
+  }
+
+  if (ecnMode === 'ppap') {
+    // PPAP is inherently a single-project checklist, so it keeps a project
+    // picker — just a plain <select>, not the removed tree/accordion.
+    if (!projects.some(p => p.project_id === ecnSel)) ecnSel = projects[0].project_id;
+    const pickBar = el('div', 'filters');
+    pickBar.appendChild(el('label', null, 'Project'));
+    const sel = el('select');
+    sel.innerHTML = projects.map(p => '<option value="' + esc(p.project_id) + '"' + (p.project_id === ecnSel ? ' selected' : '') + '>' +
+      esc(p.project_id) + ' — ' + esc((familyById(p.prod_family) || {}).prod_family_name || p.prod_family) + '</option>').join('');
+    sel.onchange = () => { ecnSel = sel.value; show('ecn'); };
+    pickBar.appendChild(sel);
+    root.appendChild(pickBar);
+    root.appendChild(ppapSection(projects.find(p => p.project_id === ecnSel) || projects[0]));
+    return;
+  }
+
+  const b = el('div', 'banner');
+  const gatedIds = allStepsOf('ECN').filter(s => s.gate_clearance_required).map(s => s.step_id).join(', ');
+  b.innerHTML = '<b>ECN gates are lighter than NPI.</b> Only steps <b>' + gatedIds + '</b> are signed milestones; the rest are tracked. ' +
+    'Click a project to open its detail — gate approval, filing, MWER records, and trial quantities all live in that sidebar now.';
+  root.appendChild(b);
+
+  const list = el('div', 'project-list');
+  projects.forEach(project => list.appendChild(projectListRow(project, 'ECN')));
+  root.appendChild(list);
 }
 
 /* MWER — the morning meeting or Zoom call whose summary email from the

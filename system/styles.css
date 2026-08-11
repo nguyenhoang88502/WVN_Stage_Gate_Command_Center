@@ -386,6 +386,9 @@ nav.tabs button.on {
   gap: var(--s3); flex-wrap: wrap;
   border-radius: var(--r3) var(--r3) 0 0;
 }
+/* NPI/ECN flat project list — one card per project, click anywhere on the
+   row (except its own buttons) to open the detail drawer. */
+.project-list-row:hover { background: var(--row-hover); }
 .card-title { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -.01em; color: var(--ink) }
 .card-body { padding: var(--s4) }
 
