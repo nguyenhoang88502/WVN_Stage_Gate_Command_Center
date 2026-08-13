@@ -1,0 +1,8 @@
+Wrote `tests/qa/agent5_export.spec.js` (3 tests) and ran it — all 3 passed (14.2s).
+
+**What I tested:**
+1. **Explorer integration** — clicked two distinct `/api/open-path` buttons: a filed document's "Open in Explorer" (inside the NPI-9611 drawer) and a project's "Open vault folder" (package bar). Both POSTs returned HTTP 200 with zero console/page errors.
+2. **PDF export** — "Download PDF" populated `#dashPrintPackage` (3 `print-page` nodes, non-empty innerHTML) and did not hang or throw. Note: the print target is `#dashPrintPackage`, not `#dashExec` as the brief guessed; `window.print()` resolved immediately in headless Chromium (no-op, not blocking).
+3. **XLSX exports** — all 5 report types (`lfi`, `transfer`, `kpi`, `ll`, `trial`) started a real download with proper filenames: `Report_<type>_<timestamp>.xlsx`.
+
+**Findings:** none — `qa-reports/agent5.json` written with `all_passed: true` and empty `findings`. Explorer launches and both export paths work cleanly end-to-end.

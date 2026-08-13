@@ -1,0 +1,12 @@
+{
+  "agent": 2,
+  "domain": "Dashboard Gantt & Stage Segmentation",
+  "tests_run": [
+    "Gantt renders planned bar + per-stage segments with labels and separators",
+    "every segment carries exactly one status class and a rendered fill colour",
+    "segment title tooltips contain the project id and a status word",
+    "clicking a mid-project stage segment opens the drawer at that exact step"
+  ],
+  "findings": [],
+  "all_passed": true
+}

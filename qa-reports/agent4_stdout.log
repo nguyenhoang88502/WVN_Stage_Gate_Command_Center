@@ -1,0 +1,9 @@
+QA Agent 4 complete — all 6 tests passed (13.7s).
+
+**Tested:**
+- **Assign Task / Edit Assignment / Raise Issue / LFI Author**: each opens a DOM `<select>` modal populated from `CFG.user_registry`, and a `page.on('dialog')` guard confirmed **zero native prompt()/confirm()/alert()** fired in any flow.
+- **Remove Owner (stress)**: assigned a gate to "intern" via the modal, clicked Remove Owner, confirmed a DOM confirmModal (not native `confirm()`), and verified the owner badge disappeared + the claim button reverted to "Claim Task".
+- **Registry consistency**: every flow's `<select>` option values exactly matched the header `#whoSelect` (admin, intern, qa, Diem Pham, Hoang, Khoi Le).
+- **Settings toggle**: confirmed 19 of 27 `.doctype-card` elements start `display:none`, "Show more (19)" reveals them and flips to "Show less", clicking again re-hides them.
+
+**Findings:** none — `all_passed: true` written to `qa-reports/agent4.json`.

@@ -1,0 +1,30 @@
+You are QA Tester Agent 1 of a 5-agent Playwright swarm testing the "WAHL Vietnam NPI & ECN Command Center" web app. Your domain: DROPZONE ISOLATION & EVENT PROPAGATION. You are a TESTER ONLY — do not edit system/app.js, system/styles.css, or system/launcher.ps1. Do not run destructive git commands (no reset --hard, no push, no branch delete). Do not commit anything.
+
+Working directory: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+The app server is ALREADY RUNNING at http://localhost:8080 — do not try to start or stop it. Playwright is already installed (playwright.config.js exists, webServer has reuseExistingServer:true so it will reuse the running server). Log in by navigating to "/" and selecting "admin" in the #whoSelect dropdown (see tests/smoke.spec.js for the exact boot pattern).
+
+App structure you need to know:
+- "Dropzones" are `.dz` elements rendered inside the sidebar drawer (openDrawer, in system/app.js) for each missing/on-going document at a project's current stage-gate step. Clicking anywhere on a `.dz` that is NOT an interactive control opens a native OS file picker (via a hidden <input type=file>).
+- Each `.dz` may contain: a claim button, an Assign Task button (admin only), Edit Assignment / Remove Owner / Remove Supporter / Delete Task buttons, a `.target-week-editor` (input[type=week] + Save button + optional OVERDUE badge), a `.dz-note-wrap` (existing notes list + `.dz-note-input` + "Save Note" button), a "Download Blank Template" `<a>` link, and a "Mark as not applicable" button.
+- The guard that is supposed to prevent all of the above from triggering the file picker lives at system/app.js in the `dz.onclick = (e) => { if (e.target.closest('button, a, input, select, label, .target-week-editor, .claim-badge, .dz-note-wrap')) return; ... }` handler.
+- To find a project with an open (non-empty) dropzone: go to the "NPI" tab, and click the bold project-id text (e.g. locator('.card.project-list-row', {hasText:'NOT STARTED'}).first().locator('b')) — NOT the row itself, since the row also contains "Download transfer package"/"Open vault folder" buttons that can sit in the row's click center.
+
+YOUR TASK:
+1. Write a NEW Playwright spec file at tests/qa/agent1_dropzone.spec.js (do not touch any existing test file).
+2. Test EVERY interactive control inside at least one open `.dz` (buttons, the template `<a>` link, the target-week input+Save, the `.dz-note-input`+"Save Note" button, claim/assign buttons) by listening for a `filechooser` page event (`page.once('filechooser', ...)`) BEFORE each click, and asserting no file chooser fired after the click.
+3. Also verify: typing text into `.dz-note-input` and clicking "Save Note" actually writes the comment (appears as a `.comment-item` in `.dz-note-list`) without opening a file chooser.
+4. Also verify: clicking directly on the plain background/label text of an EMPTY area of the `.dz` (not on any control) DOES still open the file picker (this is the intended, correct behavior — confirm it still works, don't just check the negative case).
+5. Run it with: npx playwright test tests/qa/agent1_dropzone.spec.js --reporter=list --workers=1
+6. Write your findings as JSON to qa-reports/agent1.json with this exact shape:
+{
+  "agent": 1,
+  "domain": "Dropzone Isolation & Event Propagation",
+  "tests_run": ["<short description of each check you performed>"],
+  "findings": [
+    {"severity": "high|medium|low", "area": "<control name>", "description": "<what's wrong>", "repro": "<exact steps>", "file_hint": "system/app.js"}
+  ],
+  "all_passed": true or false
+}
+If everything passes, findings should be an empty array and all_passed true. Do not fabricate findings — only report what you actually reproduced with a passing/failing Playwright assertion or manual verification.
+
+Finally, print a plain-text summary (under 150 words) of what you tested and what you found as your FINAL answer.

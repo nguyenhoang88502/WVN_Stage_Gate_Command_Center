@@ -1,0 +1,21 @@
+{
+  "agent": 3,
+  "domain": "Zero-Loss State Preservation Engine",
+  "tests_run": [
+    "1. window scroll position survives reload",
+    "2. drawer stays open on same project+step, with scroll, text and caret preserved",
+    "3. dashboard multi-select slicer selection survives reload",
+    "4. focused element regains focus after reload",
+    "5. uncommitted text in a dropzone note input survives reload"
+  ],
+  "findings": [
+    {
+      "severity": "high",
+      "area": "Uncommitted text loss in id-less drawer note inputs",
+      "description": "captureUiState() only snapshots text inputs/textareas that have a non-empty id attribute (system/app.js line 229: .filter(function(f){ return f.id; })). The per-deliverable dropzone note input is created without an id (line 4800: const inp = el('input', 'dz-note-input')), so any typed-but-unsubmitted note is excluded from inputsBuffer and silently dropped when reloadPreservingState() re-renders. The gate-note input (line 4751: const inp = el('input')) is likewise id-less and affected by the same bug. This directly violates the zero-loss promise for the most common in-drawer note fields, while the Executive note (exNote, which has an id) is preserved correctly.",
+      "repro": "Open a project drawer that has a missing/on-going document (e.g. NPI-9622LP, whose NPI-1 step is missing PRF/GANTT/QUOTE), type text into the 'Add a note…' input under any dropzone without clicking 'Save Note', then trigger the header ↻ reload (or the 15s auto-reload). The input is empty afterward; the uncommitted text is lost.",
+      "file_hint": "system/app.js"
+    }
+  ],
+  "all_passed": false
+}

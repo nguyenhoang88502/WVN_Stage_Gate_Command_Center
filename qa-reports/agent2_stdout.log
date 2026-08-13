@@ -1,0 +1,9 @@
+Agent 2 (Dashboard Gantt & Stage Segmentation) — all 4 tests passed.
+
+**Tested:**
+1. **Structure** — at least one `.gantt-live-row` renders with a visible `.gantt-bar-planned`, ≥1 `.gantt-stage-seg` each carrying an `S<id>` label, and `.gantt-stage-separator` dividers between multi-segment rows.
+2. **Status + color** — every segment across all rows has exactly one of the 5 status suffixes (`complete`/`in_progress`/`not_started`/`bypassed`/`late`) and a computed non-transparent fill (backgroundColor or backgroundImage), so the color-coding actually renders.
+3. **Tooltips** — segment `title` contains the project id plus a concrete status word.
+4. **Segmented drawer navigation** — clicking a mid-project segment (3+ segments preferred) opens `#drawer` at that exact step, verified by matching the heading's `step N` to the clicked label's id and the project id.
+
+**Findings:** none. `qa-reports/agent2.json` written with `all_passed: true`.

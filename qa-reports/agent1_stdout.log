@@ -1,0 +1,7 @@
+Done. Final summary:
+
+**What I tested (Agent 1 — Dropzone Isolation & Event Propagation):** Wrote `tests/qa/agent1_dropzone.spec.js` and ran it against the live app. For every interactive control inside an open dropzone — note input + Save Note, target-week input + Save, claim button, Assign Task / Edit Assignment / Delete Task / Mark as not applicable / Remove Owner buttons, and the "Download Blank Template" link — I attached a `filechooser` listener before each click and asserted none fired. I also confirmed the note actually writes a `.comment-item`, and the positive control: clicking the plain `<b>` label of an empty dropzone **does** open the picker.
+
+**Result:** All 6 isolation checks passed — the guard at `system/app.js:3240` correctly stops every child control from bubbling into the file picker. Report written to `qa-reports/agent1.json`.
+
+**One cross-domain finding (medium):** the dropzone target-week Save writes to `lb_deliverables.csv` but the drawer re-render shows the input blank, because `makeTargetWeekEditor`'s `onAfterSave` calls `openDrawer()` directly instead of `refreshSilently().then(openDrawer)` — the re-render reads stale in-memory tracking. No data loss; it's a state-preservation issue (Agent 3's territory), not an isolation leak.

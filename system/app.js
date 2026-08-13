@@ -394,6 +394,12 @@ function makeTargetWeekEditor(objType, store, row, upsertKeys, isDone, onAfterSa
         audit: { user: who, action: objType + '_SetTargetWeek', projectId: row.project_id, objType: objType,
           objId: rowData.step_key || rowData.deliverable_id || '', from: current, to: rowData.target_week, detail: '' }
       });
+      // Every sibling button (Edit Assignment, Remove Owner, ...) refreshes
+      // TRK before invoking its onAfter callback — this one didn't, so
+      // onAfterSave's openDrawer() rebuilt from the stale pre-save row and
+      // the just-saved target week appeared to vanish (still on disk, just
+      // not yet reflected in memory).
+      await refreshSilently();
       if (onAfterSave) onAfterSave();
       else await redrawAfterWrite();
     } catch (err) { alert('Could not save target week: ' + err.message); }
@@ -2315,8 +2321,6 @@ function buildLiveGanttSection() {
 
   function pctForDate(d) { return (d.getTime() - minT) / spanMs * 100; }
 
-  var statusColors = { COMPLETE: '#16703c', IN_PROGRESS: '#14589f', LATE: '#b02318', NOT_STARTED: '#8a5800' };
-
   var grid = el('div', 'gantt-live-grid');
   body.appendChild(grid);
 
@@ -2339,7 +2343,6 @@ function buildLiveGanttSection() {
     var p = pair.project;
     var proc = p.process;
     var pr = progressOf(p);
-    var cls = classifyProject(p);
     var openCount = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
       .filter(function(i) { return i.project_id === p.project_id && i.status !== 'Closed'; }).length;
     var commentCount = stepsOf(proc, p).reduce(function(sum, s) { return sum + cellNoteCount(p, stepKeyOf(proc, s)); }, 0);
@@ -2364,13 +2367,32 @@ function buildLiveGanttSection() {
     plannedBar.style.width = plannedWidth + '%';
     track.appendChild(plannedBar);
 
-    var actualSpanMs = (pr.total ? pr.done / pr.total : 0) * (pair.endDate.getTime() - pair.startDate.getTime());
-    var actualEndDate = new Date(pair.startDate.getTime() + actualSpanMs);
-    var actualBar = el('div', 'gantt-bar gantt-bar-actual');
-    actualBar.style.left = plannedLeft + '%';
-    actualBar.style.width = Math.max(0.5, pctForDate(actualEndDate) - plannedLeft) + '%';
-    actualBar.style.background = statusColors[cls] || '#62748a';
-    track.appendChild(actualBar);
+    // Stage segmentation (v8.0 Section 4): one coloured block per gated step,
+    // matching stepsOf(proc, p) in order, instead of a single bar whose width
+    // only tracked overall % complete. Per-gate durations aren't tracked in
+    // the data — only per-gate status — so equal-width segments across the
+    // planned span is what the data can honestly show; a wider/narrower
+    // segment would imply timing precision that doesn't exist.
+    var gatedSteps = stepsOf(proc, p).filter(function(s) { return isGated(proc, s); });
+    var segCount = gatedSteps.length || 1;
+    var segWidthPct = plannedWidth / segCount;
+    gatedSteps.forEach(function(s, idx) {
+      var gs = gateState(p, proc, s);
+      var segStatus = gs.status;
+      if (segStatus !== 'COMPLETE' && segStatus !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) segStatus = 'LATE';
+      var seg = el('div', 'gantt-bar gantt-bar-actual gantt-stage-seg gantt-stage-seg-' + segStatus.toLowerCase());
+      seg.style.left = (plannedLeft + idx * segWidthPct) + '%';
+      seg.style.width = Math.max(0.4, segWidthPct) + '%';
+      seg.appendChild(el('span', 'gantt-stage-label', 'S' + s.step_id));
+      seg.title = p.project_id + ' — ' + s.step_name + ' (S' + s.step_id + ')\nStatus: ' + segStatus.replace(/_/g, ' ');
+      seg.onclick = function(e) { e.stopPropagation(); openDrawer(p, s, null); };
+      track.appendChild(seg);
+      if (idx > 0) {
+        var sep = el('div', 'gantt-stage-separator');
+        sep.style.left = (plannedLeft + idx * segWidthPct) + '%';
+        track.appendChild(sep);
+      }
+    });
 
     track.title = p.project_id + ' (' + proc + ')\n' +
       'Planned: ' + toWeek(pair.startDate) + ' → ' + toWeek(pair.endDate) + '\n' +
@@ -3154,6 +3176,7 @@ function openDrawer(project, step, focusDocCode) {
       dz.appendChild(makeTargetWeekEditor('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], false, function() {
         openDrawer(project, step, code);
       }));
+      dz.appendChild(dzNoteSection(project, sk, code));
       var dt = docTypeById(code);
       if (dt.template_file && !lockedToOther) {
         var dlBtn = el('a');
@@ -3212,7 +3235,15 @@ function openDrawer(project, step, focusDocCode) {
         const newDrawer = $('#drawer');
         if (newDrawer) newDrawer.scrollTop = drawerScroll;
       };
-      dz.onclick = () => {
+      dz.onclick = (e) => {
+        // Any interactive control inside the dropzone (buttons, the template
+        // link, target-week input, note field/button, claim badge) handles
+        // its own click — bubbling past it into the file picker was the v6.2
+        // bug for elements that stopPropagation covered, and was never
+        // covered at all for the plain <a> template-download link. Guarding
+        // by ancestry here is robust to both cases without relying on every
+        // future control remembering to call stopPropagation itself.
+        if (e.target.closest('button, a, input, select, label, .target-week-editor, .claim-badge, .dz-note-wrap')) return;
         const inp = el('input'); inp.type = 'file'; inp.style.display = 'none';
         inp.onchange = async () => {
           if (!inp.files[0]) return;
@@ -4689,6 +4720,12 @@ function commentsFor(pid, delId) {
 function commentsForGate(pid, stepKey) {
   return (TRK.lb_doc_comments || []).filter(c => c.project_id === pid && c.step_key === stepKey && !c.deliverable_id);
 }
+// A still-missing/on-going dropzone has no deliverable_id yet — evidenceFor()
+// hasn't created the row — so notes on it are addressed by doc_code+step_key
+// instead, same "no schema change needed" logic as commentsForGate above.
+function commentsForDoc(pid, stepKey, docCode) {
+  return (TRK.lb_doc_comments || []).filter(c => c.project_id === pid && c.step_key === stepKey && c.doc_code === docCode);
+}
 /* ---- gate-level comment section (Section 4) -----------------------------
    Same visual/interaction pattern as the deliverable "Notes (N)" thread in
    evidenceTable, but for the stage gate itself rather than one document —
@@ -4718,6 +4755,14 @@ function gateCommentSection(project, stepKey) {
 
     const addWrap = el('div', 'comment-add');
     const inp = el('input');
+    // captureUiState() matches `input[type=text]` — a CSS attribute selector
+    // that requires the literal type="text" attribute, not just the DOM's
+    // implicit default for a bare <input> — plus a non-empty id to re-find
+    // the field after the reload's re-render (see line ~229). Without both,
+    // typed-but-unsubmitted text here is silently dropped on reload. Only
+    // one gate-comment section exists per open drawer, so a fixed id is safe.
+    inp.type = 'text';
+    inp.id = 'gateNoteInput';
     inp.placeholder = 'Add a note about this gate…';
     const save = el('button', 'sm primary', 'Save');
     save.onclick = async () => {
@@ -4747,6 +4792,56 @@ function gateCommentSection(project, stepKey) {
     noteWrap.appendChild(thread);
     cb.textContent = 'Gate Notes (' + notes.length + ') ▲';
   };
+  return wrap;
+}
+/* ---- inline dropzone notes (v8.0 Section 3) ------------------------------
+   A still-missing/on-going document has no deliverable_id yet, so this reuses
+   commentsForDoc (project+step+doc_code) rather than evidenceTable's
+   deliverable_id-keyed thread. Rendered open (not behind a toggle) since the
+   dropzone list is already the place people scan for what's outstanding. */
+function dzNoteSection(project, stepKey, docCode) {
+  const wrap = el('div', 'dz-note-wrap');
+  const notes = commentsForDoc(project.project_id, stepKey, docCode);
+  const list = el('div', 'dz-note-list');
+  notes.forEach(c => {
+    const ci = el('div', 'comment-item');
+    ci.innerHTML = '<b>' + esc(c.author) + '</b> <span class="note">' + esc((c.created_utc || '').slice(0, 10)) + '</span><br>' + esc(c.comment);
+    list.appendChild(ci);
+  });
+  wrap.appendChild(list);
+
+  const addWrap = el('div', 'comment-add dz-note-add');
+  const inp = el('input', 'dz-note-input');
+  // Same type+id requirement as gateNoteInput above — one dropzone per
+  // doc_code renders at a time inside the drawer, so doc_code alone is a
+  // stable, unique key across the reload's DOM rebuild.
+  inp.type = 'text';
+  inp.id = 'dzNoteInput_' + docCode;
+  inp.placeholder = 'Add a note…';
+  const save = el('button', 'sm', 'Save Note');
+  save.onclick = async (e) => {
+    e.stopPropagation();
+    const txt = inp.value.trim();
+    if (!txt) return;
+    const who = requireName() || '(unnamed)';
+    save.disabled = true; save.textContent = 'Saving…';
+    try {
+      await API.action('lb_doc_comments', {
+        project_id: project.project_id, deliverable_id: '', doc_code: docCode,
+        step_key: stepKey, author: who, comment: txt, created_utc: new Date().toISOString()
+      }, { audit: { user: who, action: 'Comment_Document', projectId: project.project_id, objType: 'Deliverable', objId: docCode, from: '', to: '', detail: txt.slice(0, 120) } });
+      const ci = el('div', 'comment-item');
+      ci.innerHTML = '<b>' + esc(who) + '</b> <span class="note">' + esc(new Date().toISOString().slice(0, 10)) + '</span><br>' + esc(txt);
+      list.appendChild(ci);
+      inp.value = '';
+    } catch (err) {
+      alert('Could not save the note: ' + err.message);
+    }
+    save.disabled = false; save.textContent = 'Save Note';
+  };
+  addWrap.appendChild(inp);
+  addWrap.appendChild(save);
+  wrap.appendChild(addWrap);
   return wrap;
 }
 function cellNoteCount(project, stepKey) {
@@ -4840,6 +4935,10 @@ function evidenceTable(g, project, step, redraw) {
 
         const addWrap = el('div', 'comment-add');
         const inp = el('input');
+        // Same type+id requirement as gateNoteInput/dzNoteInput — see those
+        // for why captureUiState() needs both to survive a reload.
+        inp.type = 'text';
+        inp.id = 'filedNoteInput_' + d.deliverable_id;
         inp.placeholder = 'Add a note…';
         const save = el('button', 'sm primary', 'Save');
         save.onclick = async () => {

@@ -1,0 +1,14 @@
+{
+  "agent": 4,
+  "domain": "User Registry, Modals & Settings",
+  "tests_run": [
+    "1. Assign Task opens a registry <select> modal, no prompt()",
+    "2. Edit Assignment opens a two-select registry modal, no prompt()",
+    "3. Remove Owner: assign then remove, no native confirm(), UI updates",
+    "4. Raise Issue Owner field is a registry <select>, no prompt() chain",
+    "5. LFI Author field is a registry <select>, no prompt()",
+    "6. settings document-types Show more/Show less toggle"
+  ],
+  "findings": [],
+  "all_passed": true
+}

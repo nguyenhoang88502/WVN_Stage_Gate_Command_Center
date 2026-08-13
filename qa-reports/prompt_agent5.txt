@@ -1,0 +1,27 @@
+You are QA Tester Agent 5 of a 5-agent Playwright swarm testing the "WAHL Vietnam NPI & ECN Command Center" web app. Your domain: EXPLORER INTEGRATION & PDF/XLSX EXPORTS. You are a TESTER ONLY — do not edit system/app.js, system/styles.css, or system/launcher.ps1. Do not run destructive git commands. Do not commit anything.
+
+Working directory: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+The app server is ALREADY RUNNING at http://localhost:8080 — do not try to start or stop it. Playwright is already installed (playwright.config.js, reuseExistingServer:true). Log in by navigating to "/" and selecting "admin" in the #whoSelect dropdown (see tests/smoke.spec.js for boot pattern — test #4 in that file already covers a basic "Open in Explorer" API-call check, read it first so you extend rather than duplicate it).
+
+App structure you need to know:
+- "Open in Explorer" / "Open vault folder" buttons POST to /api/open-path with {path}. The server actually runs `explorer.exe /select,"path"` or `explorer.exe "path"` — this WILL spawn a real Windows Explorer window on this machine when clicked. That's expected/intended; don't worry about it, just verify the POST returns 200 OK and doesn't throw a JS error (see how smoke.spec.js test 4 does this without literally waiting on the OS window).
+- The Dashboard tab has a "Download PDF" button (function buildPrintPackage() in system/app.js) that builds a hidden `#dashExec` DOM tree (3 pages: KPI/Gantt banner, matrices, project overview table) then calls window.print(). In headless Chromium this should resolve without hanging — if it does hang, treat that as a finding, but give it a generous timeout (10-15s) before declaring a hang rather than a fast fail.
+- The Dashboard tab also has a `#dashReportSelect` dropdown with 5 XLSX report types (value="lfi"|"transfer"|"kpi"|"ll"|"trial") and a "Download" button next to it that clicks a temporary `<a download>` pointing at `/api/reports/download?type=...`.
+
+YOUR TASK:
+1. Write a NEW Playwright spec file at tests/qa/agent5_export.spec.js.
+2. For "Open in Explorer"/"Open vault folder": click at least 2 different instances of these buttons (e.g. one for a filed document, one for a project's vault folder) and assert the resulting POST to /api/open-path returns HTTP 200 (use page.waitForResponse or page.on('response') filtered by url including '/api/open-path'). Assert no uncaught JS error/console error appears (page.on('pageerror') / page.on('console', msg => msg.type()==='error')).
+3. For the PDF export: click "Download PDF", wait up to 15s, then assert the page did not throw a JS error and (if feasible) assert `#dashExec` or the print container actually got populated with content (query its innerHTML length > 0) before print() was called — do this by checking DOM state via page.evaluate BEFORE the click triggers window.print (or right after, since window.print may or may not block in headless mode — handle both possibilities gracefully and note which one you observed).
+4. For EACH of the 5 XLSX report types (lfi, transfer, kpi, ll, trial): select it in #dashReportSelect, click Download, use `page.waitForEvent('download')` with a reasonable timeout, and assert a download actually started with a non-empty suggested filename. Do this for all 5 — do not stop at the first one, since each hits a different backend code path (Get-ReportData/report-specific OpenXML surgery) and could fail independently.
+5. Run it with: npx playwright test tests/qa/agent5_export.spec.js --reporter=list --workers=1
+6. Write findings as JSON to qa-reports/agent5.json with this exact shape:
+{
+  "agent": 5,
+  "domain": "Explorer Integration & PDF/XLSX Exports",
+  "tests_run": ["..."],
+  "findings": [{"severity": "high|medium|low", "area": "...", "description": "...", "repro": "...", "file_hint": "system/app.js or system/launcher.ps1"}],
+  "all_passed": true or false
+}
+Only report what you actually reproduced with a real failure (bad HTTP status, thrown JS error, missing download, timeout). Empty findings + all_passed:true if everything works.
+
+Finally, print a plain-text summary (under 150 words) of what you tested and found as your FINAL answer.

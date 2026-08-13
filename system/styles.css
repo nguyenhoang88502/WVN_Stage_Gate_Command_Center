@@ -1052,6 +1052,15 @@ select option { color: #14202c; background: #ffffff; }
   white-space: nowrap; vertical-align: middle;
 }
 
+/* -- inline dropzone notes (v8.0 Section 3) ------------------------------- */
+.dz-note-wrap {
+  margin-top: var(--s2); padding-top: var(--s2); border-top: 1px dashed var(--line);
+  max-width: 22rem; cursor: default;
+}
+.dz-note-list .comment-item { font-size: 10.5px }
+.dz-note-add { margin-top: var(--s1) }
+.dz-note-input { flex: 1; height: 28px; min-height: 28px; font-size: 11px }
+
 /* -- live Dashboard Gantt (Section 5) — HTML/CSS bars, not the print SVG --
    grid-template-columns is repeated identically on header + every row so
    the metadata columns and the week-axis track stay aligned across rows. */
@@ -1075,6 +1084,30 @@ select option { color: #14202c; background: #ffffff; }
 }
 .gantt-bar-planned { background: var(--line-strong); top: 2px; height: 14px; opacity: .55 }
 .gantt-bar-actual { top: 5px; height: 8px }
+
+/* -- Gantt stage segmentation (v8.0 Section 4) — one block per gated step -- */
+.gantt-stage-seg {
+  height: 14px; top: 2px; border: none; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: pointer;
+}
+.gantt-stage-seg-complete { background: var(--good) }
+.gantt-stage-seg-in_progress { background: var(--blue) }
+.gantt-stage-seg-not_started { background: var(--warn); opacity: .5 }
+.gantt-stage-seg-bypassed {
+  background-image: repeating-linear-gradient(45deg, var(--warn), var(--warn) 4px, #fff 4px, #fff 7px);
+  opacity: .85;
+}
+.gantt-stage-seg-late { background: var(--bad) }
+.gantt-stage-seg:hover { filter: brightness(1.15); outline: 1px solid var(--ink) }
+.gantt-stage-label {
+  font-size: 7.5px; font-weight: 700; color: #fff; letter-spacing: .2px;
+  pointer-events: none; white-space: nowrap; text-shadow: 0 0 2px rgba(0,0,0,.55);
+}
+.gantt-stage-separator {
+  position: absolute; top: 1px; bottom: 1px; width: 1px;
+  background: var(--panel); z-index: 1; pointer-events: none;
+}
 .matrix-issue-badge {
   display: inline-block; font-size: 10px; font-weight: 700;
   background: var(--bad2); color: var(--bad);

@@ -1,0 +1,31 @@
+You are QA Tester Agent 2 of a 5-agent Playwright swarm testing the "WAHL Vietnam NPI & ECN Command Center" web app. Your domain: DASHBOARD GANTT & STAGE SEGMENTATION. You are a TESTER ONLY — do not edit system/app.js, system/styles.css, or system/launcher.ps1. Do not run destructive git commands. Do not commit anything.
+
+Working directory: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+The app server is ALREADY RUNNING at http://localhost:8080 — do not try to start or stop it. Playwright is already installed (playwright.config.js, reuseExistingServer:true). Log in by navigating to "/" and selecting "admin" in the #whoSelect dropdown (see tests/smoke.spec.js for the boot pattern).
+
+App structure you need to know:
+- The Dashboard tab (default tab on load) renders a live Gantt chart at the bottom, built by buildLiveGanttSection() in system/app.js, inside `.gantt-live-wrap`.
+- Each project is one `.gantt-live-row` (the row with class `.gantt-live-header` is the axis header, not a data row — exclude it).
+- Each row has a `.gantt-live-track` containing a `.gantt-bar.gantt-bar-planned` (light background bar spanning PRF week to target week) and one `.gantt-stage-seg` element PER gated stage-gate step (class `gantt-bar gantt-bar-actual gantt-stage-seg gantt-stage-seg-<status>` where status is one of complete/in_progress/not_started/bypassed/late, lowercase). Each segment contains a `.gantt-stage-label` span with text like "S1", "S2" etc (the step_id). Between segments (idx > 0) there is a `.gantt-stage-separator` divider element.
+- Each segment has a `title` attribute (hover tooltip) with the project id, step name, and status. Clicking a segment should call `e.stopPropagation()` then open the sidebar `#drawer` at that specific project+step (not just the project's first incomplete step).
+- Clicking anywhere else on the row (not on a segment) opens the drawer at the project's first incomplete step.
+- Color mapping (CSS in system/styles.css): complete=green (var(--good)), in_progress=blue (var(--blue)), not_started=amber/grey (var(--warn) at 50% opacity), bypassed=diagonal-striped amber, late=red (var(--bad)).
+
+YOUR TASK:
+1. Write a NEW Playwright spec file at tests/qa/agent2_gantt.spec.js.
+2. Verify the Gantt renders at least one row with: a visible planned bar, one or more `.gantt-stage-seg` elements, each with a visible `.gantt-stage-label` (S1, S2, ...), and for rows with 2+ segments, at least one `.gantt-stage-separator` between them.
+3. Verify each segment's class includes exactly one of the 5 status suffixes (gantt-stage-seg-complete / -in_progress / -not_started / -bypassed / -late) and that its computed CSS background is not transparent/empty (i.e. the color-coding actually renders, not just the class name).
+4. Verify hovering or reading the `title` attribute on a segment contains the project id and a status word.
+5. Click a specific mid-project stage segment (not the first one, if a project has 3+ segments) and verify the sidebar `#drawer` opens showing that SPECIFIC step (check the drawer heading text contains the right step name/number), not just any step of that project.
+6. Run it with: npx playwright test tests/qa/agent2_gantt.spec.js --reporter=list --workers=1
+7. Write findings as JSON to qa-reports/agent2.json with this exact shape:
+{
+  "agent": 2,
+  "domain": "Dashboard Gantt & Stage Segmentation",
+  "tests_run": ["..."],
+  "findings": [{"severity": "high|medium|low", "area": "...", "description": "...", "repro": "...", "file_hint": "system/app.js or system/styles.css"}],
+  "all_passed": true or false
+}
+Only report what you actually reproduced. Empty findings + all_passed:true if everything works.
+
+Finally, print a plain-text summary (under 150 words) of what you tested and found as your FINAL answer.

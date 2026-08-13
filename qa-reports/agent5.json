@@ -1,0 +1,11 @@
+{
+  "agent": 5,
+  "domain": "Explorer Integration & PDF/XLSX Exports",
+  "tests_run": [
+    "Explorer integration: filed-document 'Open in Explorer' and 'Open vault folder' both POST /api/open-path and return HTTP 200 with no JS/console errors",
+    "Dashboard PDF export: 'Download PDF' populates the #dashPrintPackage print container (3 print-page nodes, non-empty innerHTML) without hanging or throwing",
+    "Dashboard XLSX reports: all 5 types (lfi, transfer, kpi, ll, trial) start a download with a non-empty suggested filename"
+  ],
+  "findings": [],
+  "all_passed": true
+}

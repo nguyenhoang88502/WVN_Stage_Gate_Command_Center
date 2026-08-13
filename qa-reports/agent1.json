@@ -1,0 +1,26 @@
+{
+  "agent": 1,
+  "domain": "Dropzone Isolation & Event Propagation",
+  "tests_run": [
+    "note input + Save Note writes a .comment-item into .dz-note-list and does not fire a filechooser",
+    "target-week input (fill) + Save does not fire a filechooser",
+    "claim button (Claim Task / Claimed by / Assigned to) does not fire a filechooser",
+    "Assign Task button opens a DOM modal and does not fire a filechooser",
+    "Edit Assignment button opens a DOM modal and does not fire a filechooser",
+    "Delete Task button opens a DOM modal and does not fire a filechooser",
+    "Mark as not applicable button opens a DOM modal and does not fire a filechooser",
+    "Remove Owner button opens a DOM modal and does not fire a filechooser",
+    "Download Blank Template <a> link does not fire a filechooser",
+    "positive control: clicking the plain <b> label of an empty dropzone DOES fire a filechooser"
+  ],
+  "findings": [
+    {
+      "severity": "medium",
+      "area": "target-week editor (deliverable dropzone)",
+      "description": "The guard itself is correct — filling/clicking the target-week input and Save button never opens the file picker. However, the dropzone target-week Save does not visually persist: the value IS written to the backend (lb_deliverables.csv gets target_week), but the immediate drawer re-render shows an empty input. Root cause: makeTargetWeekEditor's onAfterSave calls openDrawer() directly instead of refreshSilently().then(openDrawer). openDrawer rebuilds from the stale in-memory TRK.lb_deliverables, which does not yet contain the just-written row/target_week (API.action POST does not refresh TRK), so the editor re-renders blank until a manual/auto reload. This is a state-preservation defect (overlaps Agent 3's domain), not an event-propagation leak. No data loss — the value persists to CSV.",
+      "repro": "Log in as admin. NPI tab > click the bold project-id of the first NOT STARTED project. In the first .dz, type a week into .target-week-editor input[type=week] and click Save. Observe the input reverts to empty; the value is nonetheless present in system/tracking/lb_deliverables.csv (target_week).",
+      "file_hint": "system/app.js"
+    }
+  ],
+  "all_passed": false
+}

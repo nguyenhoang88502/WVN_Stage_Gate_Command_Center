@@ -57,7 +57,9 @@ test.describe('v7.0 live Dashboard Gantt', () => {
 
     const firstRow = rows.first();
     await expect(firstRow.locator('.gantt-bar-planned')).toBeVisible();
-    await expect(firstRow.locator('.gantt-bar-actual')).toBeVisible();
+    // v8.0 segments the actual bar into one block per gated step, so
+    // .gantt-bar-actual now matches N elements per row, not one.
+    await expect(firstRow.locator('.gantt-bar-actual').first()).toBeVisible();
 
     await firstRow.click();
     await expect(page.locator('#drawer')).toBeVisible();
