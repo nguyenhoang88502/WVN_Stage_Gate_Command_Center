@@ -1445,5 +1445,22 @@
                             },
     "moderators":  [
 
-                   ]
+                   ],
+    "user_registry":  [
+                          {
+                              "username":  "admin",
+                              "role":  "admin",
+                              "department":  "Management"
+                          },
+                          {
+                              "username":  "intern",
+                              "role":  "user",
+                              "department":  ""
+                          },
+                          {
+                              "username":  "qa",
+                              "role":  "user",
+                              "department":  "QA"
+                          }
+                      ]
 }
