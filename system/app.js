@@ -581,6 +581,65 @@ function makeAssignButton(objType, store, row, upsertKeys, onAfterAssign) {
    row/viewer, so call sites append them unconditionally. All writes go
    through the same generic API.action(store, row, { upsertKeys, audit })
    endpoint used by claim/assign. */
+/* ---- shared user_registry-backed picker modal --------------------------
+   Replaces prompt() for every "type a name" input in the app. `fields` is
+   [{ key, label, value, allowBlank }]; resolves to { key: username, ... }
+   on Save, or null on Cancel/Escape/click-outside. Same scrim/box/keydown-
+   cleanup structure as confirmModal. */
+function userRegistrySelectModal(title, fields) {
+  return new Promise(function(resolve) {
+    const registry = (CFG && CFG.user_registry) || [];
+    const scrim = el('div', 'modal-scrim');
+    const box = el('div', 'modal');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'pickerModalTitle');
+    box.innerHTML = '<h2 id="pickerModalTitle">' + esc(title) + '</h2>';
+    const body = el('div');
+    const selects = {};
+    fields.forEach(function(f) {
+      const fwrap = el('div');
+      fwrap.style.cssText = 'margin-top:8px';
+      const lab = el('label', null, f.label);
+      lab.style.cssText = 'display:block;font-size:12px;font-weight:600;margin-bottom:4px';
+      fwrap.appendChild(lab);
+      const sel = el('select');
+      sel.style.cssText = 'width:100%';
+      if (f.allowBlank || !f.value) {
+        const blankOpt = el('option', null, '(none)'); blankOpt.value = '';
+        sel.appendChild(blankOpt);
+      }
+      registry.forEach(function(u) {
+        const opt = el('option', null, u.username + (u.role ? ' (' + u.role + ')' : ''));
+        opt.value = u.username;
+        if (u.username === f.value) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      fwrap.appendChild(sel);
+      body.appendChild(fwrap);
+      selects[f.key] = sel;
+    });
+    box.appendChild(body);
+
+    const acts = el('div', 'acts');
+    const no = el('button', '', 'Cancel');
+    const yes = el('button', 'primary', 'Save');
+    const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+    const onEsc = (ev) => { if (ev.key === 'Escape') { close(); resolve(null); } };
+    no.onclick = () => { close(); resolve(null); };
+    yes.onclick = () => {
+      const result = {};
+      fields.forEach(function(f) { result[f.key] = selects[f.key].value; });
+      close(); resolve(result);
+    };
+    acts.appendChild(no); acts.appendChild(yes);
+    box.appendChild(acts);
+    scrim.appendChild(box);
+    scrim.onclick = (ev) => { if (ev.target === scrim) { close(); resolve(null); } };
+    document.addEventListener('keydown', onEsc);
+    document.body.appendChild(scrim);
+  });
+}
 function makeEditAssignmentButton(objType, store, row, upsertKeys, onAfterEdit) {
   const currentOwner = row.owner_pic || row.claimed_by || '';
   const currentSupporter = row.supporter_pic || row.supporter_by || '';
@@ -591,12 +650,13 @@ function makeEditAssignmentButton(objType, store, row, upsertKeys, onAfterEdit) 
   btn.onclick = async (e) => {
     e.stopPropagation();
     const who = requireName(); if (!who) return;
-    const ownerInput = prompt('Edit Owner — enter the new owner\'s name, or clear the field to remove the owner:', currentOwner || '');
-    if (ownerInput === null) return;
-    const newOwner = ownerInput.trim();
-    const supInput = prompt('Edit Supporter — enter the new supporter\'s name, or clear the field to remove the supporter:', currentSupporter || '');
-    if (supInput === null) return;
-    const newSupporter = supInput.trim();
+    const picked = await userRegistrySelectModal('Edit Assignment', [
+      { key: 'owner', label: 'Owner', value: currentOwner, allowBlank: true },
+      { key: 'supporter', label: 'Supporter', value: currentSupporter, allowBlank: true }
+    ]);
+    if (!picked) return;
+    const newOwner = picked.owner;
+    const newSupporter = picked.supporter;
     btn.disabled = true;
     try {
       const now = new Date().toISOString();
@@ -4573,18 +4633,79 @@ function gateActions(project, proc, step, g, redraw) {
     wrap.appendChild(el('label', null, 'Status')); wrap.appendChild(sel);
   }
   const iss = el('button', '', 'Raise issue…');
-  iss.onclick = async () => {
+  iss.onclick = async (e) => {
+    e.stopPropagation();
     const who = requireName() || '(unnamed)';
-    const d = prompt('Describe the issue found at ' + sk + ':', ''); if (!d) return;
-    const owner = prompt('Owner:', '') || '';
-    const due = prompt('Due date (yyyy-mm-dd), optional:', '') || '';
-    let severity = (prompt('Severity — Critical / Major / Minor:', 'Major') || '').trim();
-    if (!['Critical', 'Major', 'Minor'].includes(severity)) severity = 'Major';
-    await API.action('lb_issues', {
-      project_id: project.project_id, step_key: sk, raised_utc: new Date().toISOString(), raised_by: who, category: 'LFI',
-      description: d, owner, due_date: due, status: 'Open', resolution: '', closed_utc: '', severity
-    }, { audit: { user: who, action: 'Raise_Issue', projectId: project.project_id, objType: 'Issue', objId: sk, from: '', to: 'Open', detail: d } });
-    await redraw();
+    // One modal for the whole flow, not a native prompt() for description/
+    // owner/due date/severity in sequence — the Owner field specifically
+    // needs a user_registry <select>, and stacking that between two native
+    // prompts would be worse UX than just replacing the flow outright.
+    const scrim = el('div', 'modal-scrim');
+    const box = el('div', 'modal');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'raiseIssueTitle');
+    box.innerHTML = '<h2 id="raiseIssueTitle">Raise Issue — ' + esc(sk) + '</h2>';
+    const body = el('div');
+    function fld(labelText) {
+      const w = el('div'); w.style.cssText = 'margin-top:8px';
+      const lab = el('label', null, labelText);
+      lab.style.cssText = 'display:block;font-size:12px;font-weight:600;margin-bottom:4px';
+      w.appendChild(lab);
+      return w;
+    }
+    const descWrap = fld('Description *');
+    const descTa = el('textarea'); descTa.rows = 3; descTa.style.cssText = 'width:100%;box-sizing:border-box';
+    descWrap.appendChild(descTa); body.appendChild(descWrap);
+
+    const ownerWrap = fld('Owner');
+    const ownerSel = el('select'); ownerSel.style.cssText = 'width:100%';
+    const registry = (CFG && CFG.user_registry) || [];
+    const blankOpt = el('option', null, '(none)'); blankOpt.value = ''; ownerSel.appendChild(blankOpt);
+    registry.forEach(function(u) {
+      const o = el('option', null, u.username + (u.role ? ' (' + u.role + ')' : '')); o.value = u.username;
+      ownerSel.appendChild(o);
+    });
+    ownerWrap.appendChild(ownerSel); body.appendChild(ownerWrap);
+
+    const dueWrap = fld('Due date (optional)');
+    const dueIn = el('input'); dueIn.type = 'date'; dueIn.style.cssText = 'width:100%';
+    dueWrap.appendChild(dueIn); body.appendChild(dueWrap);
+
+    const sevWrap = fld('Severity');
+    const sevSel = el('select'); sevSel.style.cssText = 'width:100%';
+    ['Critical', 'Major', 'Minor'].forEach(function(s) {
+      const o = el('option', null, s); o.value = s; if (s === 'Major') o.selected = true; sevSel.appendChild(o);
+    });
+    sevWrap.appendChild(sevSel); body.appendChild(sevWrap);
+
+    const errDiv = el('div', 'note'); errDiv.style.cssText = 'color:var(--bad);display:none;margin-top:6px';
+    body.appendChild(errDiv);
+    box.appendChild(body);
+
+    const acts = el('div', 'acts');
+    const no = el('button', '', 'Cancel');
+    const yes = el('button', 'primary', 'Raise Issue');
+    const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+    const onEsc = (ev) => { if (ev.key === 'Escape') close(); };
+    no.onclick = close;
+    yes.onclick = async () => {
+      const d = descTa.value.trim();
+      if (!d) { errDiv.textContent = 'Description is required.'; errDiv.style.display = 'block'; return; }
+      close();
+      await API.action('lb_issues', {
+        project_id: project.project_id, step_key: sk, raised_utc: new Date().toISOString(), raised_by: who, category: 'LFI',
+        description: d, owner: ownerSel.value, due_date: dueIn.value, status: 'Open', resolution: '', closed_utc: '', severity: sevSel.value
+      }, { audit: { user: who, action: 'Raise_Issue', projectId: project.project_id, objType: 'Issue', objId: sk, from: '', to: 'Open', detail: d } });
+      await redraw();
+    };
+    acts.appendChild(no); acts.appendChild(yes);
+    box.appendChild(acts);
+    scrim.appendChild(box);
+    scrim.onclick = (ev) => { if (ev.target === scrim) close(); };
+    document.addEventListener('keydown', onEsc);
+    document.body.appendChild(scrim);
+    descTa.focus();
   };
   wrap.appendChild(iss);
   return wrap;
@@ -5105,12 +5226,15 @@ function viewSettings(root) {
   const dpBody = el('div', 'card-body');
   const dlist = el('div', 'taglist taglist-grid');
   CFG.document_types.forEach(d => {
-    const t = el('div', 'tagrow');
-    t.innerHTML = '<span><b>' + esc(d.doctype_id) + '</b> — ' + esc(d.name) +
-      ' <span class="note">· required at: ' + esc(d.stage_required || 'not gated') + '</span></span>';
+    const t = el('div', 'doctype-card');
+
+    const top = el('div', 'doctype-card-top');
+    top.innerHTML = '<b>' + esc(d.doctype_id) + '</b><span>' + esc(d.name) + '</span>';
+    t.appendChild(top);
+
+    const mid = el('div', 'doctype-card-mid');
     if (isPrivileged()) {
       var tmplSel = el('select');
-      tmplSel.style.cssText = 'margin-left:8px;font-size:12px;min-width:160px;height:26px';
       tmplSel.innerHTML = '<option value="">(no template)</option>' +
         TEMPLATES.map(function(tm) { return '<option value="' + esc(tm.name) + '"' + (d.template_file === tm.name ? ' selected' : '') + '>' + esc(tm.name) + '</option>'; }).join('');
       tmplSel.onchange = async function() {
@@ -5121,8 +5245,15 @@ function viewSettings(root) {
           await redrawAfterWrite();
         } catch (e) { alert('Could not save: ' + e.message); }
       };
-      t.appendChild(tmplSel);
+      mid.appendChild(tmplSel);
+    } else {
+      mid.appendChild(el('span', 'note', d.template_file || '(no template)'));
     }
+    t.appendChild(mid);
+
+    const bottom = el('div', 'doctype-card-bottom');
+    bottom.appendChild(el('span', 'badge bg-secondary-lt', d.stage_required || 'not gated'));
+    const actsWrap = el('span', 'doctype-card-acts');
     const edit = el('button', null, '✎');
     edit.title = 'Edit this document type';
     edit.style.color = 'var(--blue)';
@@ -5140,7 +5271,7 @@ function viewSettings(root) {
       dCancelBtn.className = '';
       dCancelBtn.style.marginLeft = '8px';
     };
-    t.appendChild(edit);
+    actsWrap.appendChild(edit);
     const del = el('button', null, '×');
     del.title = 'Delete this document type';
     del.onclick = async () => {
@@ -5148,12 +5279,16 @@ function viewSettings(root) {
       try { await API.doctype('delete', null, d.doctype_id, requireName() || ''); await redrawAfterWrite(); }
       catch (e) { alert('Could not delete: ' + e.message); }
     };
-    t.appendChild(del); dlist.appendChild(t);
+    actsWrap.appendChild(del);
+    bottom.appendChild(actsWrap);
+    t.appendChild(bottom);
+
+    dlist.appendChild(t);
   });
   dpBody.appendChild(dlist);
   // Collapse everything past the first 8 doctypes behind a toggle — with the
   // full 27-doctype set this card used to be a very long scroll on its own.
-  const dtRows = dlist.querySelectorAll('.tagrow');
+  const dtRows = dlist.querySelectorAll('.doctype-card');
   dtRows.forEach((row, i) => { if (i >= 8) row.classList.add('taglist-hidden'); });
   if (CFG.document_types.length > 8) {
     const dtMoreBtn = el('button', '', 'Show more (' + (CFG.document_types.length - 8) + ')');
@@ -5596,9 +5731,11 @@ function lfiSection(project, step) {
   var h = '<p class="note">' + esc(project.project_id) + ' · step ' + esc(step.step_id) + ' — ' + esc(step.step_name) + '</p>';
 
   // Field rows
+  var lfiRegistryNames = ((CFG && CFG.user_registry) || []).map(function(u) { return u.username; });
+  if (who && lfiRegistryNames.indexOf(who) === -1) lfiRegistryNames.unshift(who);
   var fields = [
     ['Title', 'text', 'lfiTitle', '', true],
-    ['Author', 'text', 'lfiAuthor', who, false],
+    ['Author', 'select', 'lfiAuthor', who, false, lfiRegistryNames],
     ['Date', 'date', 'lfiDate', todayStr, false],
     ['Plant', 'text', 'lfiPlant', 'WVN', false],
     ['Impact', 'text', 'lfiImpact', '', false],
@@ -5624,12 +5761,22 @@ function lfiSection(project, step) {
     h += '</div>';
   });
 
-  // Image attachment area
-  h += '<div class="lfi-field"><label>Attachments (.png, .jpg, .jpeg)</label>';
-  h += '<div class="lfi-attach-area">';
-  h += '<div id="lfiPreviews" class="lfi-previews"></div>';
-  h += '<label class="lfi-attach-btn">Choose files<input type="file" id="lfiFileInput" accept=".png,.jpg,.jpeg" multiple style="display:none"></label>';
-  h += '</div>';
+  // Image attachment areas — two distinct dropzones, not one shared bucket,
+  // since which panel a photo lands in (Problem vs Solution) determines
+  // which fixed cell range (A16:L47 vs M16:AA47) it gets anchored into on
+  // the server, and letting one dropzone stand for "whichever image you
+  // dropped first" was too easy to get backwards.
+  h += '<div class="lfi-dropzones">';
+  h += '<div class="lfi-field"><label>Problem / Need / General Practice</label>';
+  h += '<div class="lfi-attach-area" id="lfiProblemArea">';
+  h += '<div id="lfiProblemPreviews" class="lfi-previews"></div>';
+  h += '<label class="lfi-attach-btn">Choose files<input type="file" id="lfiProblemInput" accept=".png,.jpg,.jpeg" multiple style="display:none"></label>';
+  h += '</div></div>';
+  h += '<div class="lfi-field"><label>Solution / Best Practice</label>';
+  h += '<div class="lfi-attach-area" id="lfiSolutionArea">';
+  h += '<div id="lfiSolutionPreviews" class="lfi-previews"></div>';
+  h += '<label class="lfi-attach-btn">Choose files<input type="file" id="lfiSolutionInput" accept=".png,.jpg,.jpeg" multiple style="display:none"></label>';
+  h += '</div></div>';
   h += '</div>';
 
   // Error area. The success notice deliberately lives OUTSIDE this panel
@@ -5642,7 +5789,8 @@ function lfiSection(project, step) {
 
   box.innerHTML = h;
 
-  var imageFiles = [];
+  var problemImages = [];
+  var solutionImages = [];
 
   var collapse = function() {
     expanded = false;
@@ -5654,50 +5802,56 @@ function lfiSection(project, step) {
   var cancelBtn = box.querySelector('#lfiCancel');
   cancelBtn.onclick = collapse;
 
-  var previews = box.querySelector('#lfiPreviews');
   // Thumbnails are removed by identity, not by a captured index — splicing on
   // a stale index deletes whichever file happens to sit there after an earlier
-  // removal, which silently attached the wrong photo to the report.
-  function addImage(f) {
-    if (!/\.(png|jpe?g)$/i.test(f.name)) return;
-    imageFiles.push(f);
-    var thumb = el('div', 'lfi-thumb');
-    var img = el('img');
-    img.alt = f.name;
-    thumb.appendChild(img);
-    thumb.appendChild(el('span', '', f.name));
-    var rmBtn = el('button', 'lfi-rm-thumb', '×');
-    rmBtn.title = 'Remove ' + f.name;
-    rmBtn.onclick = function(e) {
-      e.preventDefault();
-      var at = imageFiles.indexOf(f);
-      if (at >= 0) imageFiles.splice(at, 1);
-      thumb.remove();
-    };
-    thumb.appendChild(rmBtn);
-    previews.appendChild(thumb);
-    var reader = new FileReader();
-    reader.onload = function(e) { img.src = e.target.result; };
-    reader.readAsDataURL(f);
-  }
+  // removal, which silently attached the wrong photo to the report. Wired
+  // identically for both zones via this shared factory so Problem and
+  // Solution behave the same way, just against their own array/preview list.
+  function wireDropzone(imagesArray, areaId, inputId, previewsId) {
+    var area = box.querySelector('#' + areaId);
+    var input = box.querySelector('#' + inputId);
+    var previews = box.querySelector('#' + previewsId);
 
-  var fileInput = box.querySelector('#lfiFileInput');
-  fileInput.onchange = function() {
-    for (var i = 0; i < fileInput.files.length; i++) addImage(fileInput.files[i]);
-    fileInput.value = '';
-  };
+    function addImage(f) {
+      if (!/\.(png|jpe?g)$/i.test(f.name)) return;
+      imagesArray.push(f);
+      var thumb = el('div', 'lfi-thumb');
+      var img = el('img');
+      img.alt = f.name;
+      thumb.appendChild(img);
+      thumb.appendChild(el('span', '', f.name));
+      var rmBtn = el('button', 'lfi-rm-thumb', '×');
+      rmBtn.title = 'Remove ' + f.name;
+      rmBtn.onclick = function(e) {
+        e.preventDefault();
+        var at = imagesArray.indexOf(f);
+        if (at >= 0) imagesArray.splice(at, 1);
+        thumb.remove();
+      };
+      thumb.appendChild(rmBtn);
+      previews.appendChild(thumb);
+      var reader = new FileReader();
+      reader.onload = function(e) { img.src = e.target.result; };
+      reader.readAsDataURL(f);
+    }
 
-  var attachArea = box.querySelector('.lfi-attach-area');
-  if (attachArea) {
-    attachArea.ondragover = function(e) { e.preventDefault(); attachArea.classList.add('dragover'); };
-    attachArea.ondragleave = function() { attachArea.classList.remove('dragover'); };
-    attachArea.ondrop = function(e) {
-      e.preventDefault();
-      attachArea.classList.remove('dragover');
-      var fl = e.dataTransfer.files;
-      for (var i = 0; i < fl.length; i++) addImage(fl[i]);
+    input.onchange = function() {
+      for (var i = 0; i < input.files.length; i++) addImage(input.files[i]);
+      input.value = '';
     };
+    if (area) {
+      area.ondragover = function(e) { e.preventDefault(); area.classList.add('dragover'); };
+      area.ondragleave = function() { area.classList.remove('dragover'); };
+      area.ondrop = function(e) {
+        e.preventDefault();
+        area.classList.remove('dragover');
+        var fl = e.dataTransfer.files;
+        for (var i = 0; i < fl.length; i++) addImage(fl[i]);
+      };
+    }
   }
+  wireDropzone(problemImages, 'lfiProblemArea', 'lfiProblemInput', 'lfiProblemPreviews');
+  wireDropzone(solutionImages, 'lfiSolutionArea', 'lfiSolutionInput', 'lfiSolutionPreviews');
 
   var submitBtn = box.querySelector('#lfiSubmit');
   submitBtn.onclick = async function() {
@@ -5710,15 +5864,19 @@ function lfiSection(project, step) {
       return;
     }
 
-    // Read images as base64
+    // Read images as base64. Order matters: launcher.ps1 anchors payload
+    // index 0 into A16:L47 (Problem) and index 1 into M16:AA47 (Solution) by
+    // array position, so Problem's files must be read first regardless of
+    // which dropzone the user actually filled second.
+    var orderedFiles = problemImages.concat(solutionImages);
     var imagePayloads = [];
-    for (var i = 0; i < imageFiles.length; i++) {
+    for (var i = 0; i < orderedFiles.length; i++) {
       var buf = await new Promise(function(resolve) {
         var r = new FileReader();
         r.onload = function(e) { resolve(e.target.result); };
-        r.readAsDataURL(imageFiles[i]);
+        r.readAsDataURL(orderedFiles[i]);
       });
-      imagePayloads.push({ name: imageFiles[i].name, data: buf });
+      imagePayloads.push({ name: orderedFiles[i].name, data: buf });
     }
 
     var body = {
