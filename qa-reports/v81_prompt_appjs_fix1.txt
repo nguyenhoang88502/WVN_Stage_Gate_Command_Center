@@ -1,0 +1,7 @@
+You are the DeepSeek Worker for the "WAHL Vietnam NPI & ECN Command Center" app. This is a single-line QC follow-up fix to system/app.js only — the orchestrator (Claude) already reviewed your previous diff and found one real inconsistency to correct before it ships.
+
+Working directory: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+
+In `buildLiveGanttSection()`, find the `.gantt-stage-seg` tooltip you just added (search for `'Status: ' + segStatus + ' ('`). It currently interpolates the raw internal status string directly (e.g. `IN_PROGRESS`, `NOT_STARTED` — with underscores). Every other place in this codebase that shows a status word to a human converts underscores to spaces first — e.g. the OLD version of this exact tooltip line you replaced did `segStatus.replace(/_/g, ' ')`, and `chipLabel = status.replace(/_/g, ' ')` elsewhere in the file does the same thing. Fix this one line so the tooltip shows `IN PROGRESS` / `NOT STARTED` (space, not underscore) instead of the raw enum value, matching that established convention. `COMPLETE`, `BYPASSED`, and `LATE` are single words already and are unaffected either way — this is specifically about `IN_PROGRESS` and `NOT_STARTED`.
+
+Do not touch anything else in the file — this is a one-line `.replace(/_/g, ' ')` addition on the `segStatus` interpolation inside that tooltip string, nothing more. Report a one-sentence confirmation as your final answer.

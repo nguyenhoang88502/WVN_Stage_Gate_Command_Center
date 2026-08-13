@@ -1,0 +1,25 @@
+You are the DeepSeek Worker in a Claude-orchestrated task queue for the "WAHL Vietnam NPI & ECN Command Center" web app (vanilla JS SPA + PowerShell HttpListener backend). You have full file read/write access via your tools. This is SUB-TASK 1 of the v8.1 spec, scoped to ONE file only: system/styles.css. Do not touch system/app.js, system/launcher.ps1, or system/index.html.
+
+Working directory: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+
+IMPORTANT — most of this sub-task's original spec is ALREADY IMPLEMENTED. I checked the current file before dispatching you. Do not rewrite or "improve" the following — they already match spec exactly, leave them completely untouched:
+- .dz-note-wrap / .dz-note-list / .dz-note-add / .dz-note-input (lines ~1056-1062) — already has 11px font on .dz-note-input, correct margins.
+- .taglist-grid (line 810, already `repeat(auto-fill, minmax(280px, 1fr))`), .taglist-hidden (line 811, already `display: none !important`), .doctype-card and its -top/-mid/-bottom/-acts sub-rules (lines 818-831+) — already a 3-row card layout.
+- .gantt-stage-seg, .gantt-stage-seg-complete/-in_progress/-not_started/-bypassed/-late, .gantt-stage-label, .gantt-stage-separator (lines ~1089-1108) — all 5 status classes + label + separator already exist and are colour-coded via CSS custom properties (var(--good), var(--blue), var(--warn), var(--bad)).
+
+THE ONLY GENUINELY NEW WORK — a centered screen loader:
+Currently `.loader` is just:
+```css
+.loader { padding: var(--s6); text-align: center; color: var(--muted) }
+```
+It is a plain inline block used once in system/index.html as `<div class="loader">Loading…</div>` inside `#views`, and is about to be reused by app.js (a separate dispatch, in progress in parallel) as a toggleable full-screen overlay shown during boot() and heavy operations (PDF export, XLSX download). You must restyle `.loader` to support BOTH use cases without breaking the existing static usage in index.html:
+
+1. Make `.loader` a fixed-position overlay: `position: fixed; inset: 0; z-index: 1000;` so it can cover the whole viewport when app.js adds it as an overlay element.
+2. Background: `rgba(238, 242, 247, 0.7)` for light theme (this project's `--bg` value is `#eef2f7`, i.e. this IS that colour at 70% opacity), and `rgba(13, 21, 31, 0.7)` for dark theme. This project's theme switch works via `:root[data-theme="dark"]` / the `<html data-theme="...">` attribute (grep the top of styles.css for other `[data-theme="dark"]` rules to match the exact pattern already used elsewhere in this file — do not invent a different dark-mode selector).
+3. Center a CSS-only spinning ring inside it (no external assets, no SVG needed — a `border` + `border-top-color` trick with a `@keyframes spin { to { transform: rotate(360deg) } }` is the standard approach). Use `display: flex; align-items: center; justify-content: center; flex-direction: column;` on `.loader` itself so both the ring and any text content center together.
+4. The existing static "Loading…" text usage in index.html must keep reading as a loading message once this class becomes a full overlay — do not remove text-centering, just add the overlay/spinner behavour around it. A reasonable structure: keep `.loader` as the overlay container (flex-centered), and add a `.loader-ring` (or similar name — pick something clear) child element that app.js will insert for the spinner itself; plain text content of `.loader` (like index.html's "Loading…") should still render sensibly alongside/below it.
+5. Keep the rule scoped under `d-print-none` behavior implicitly by NOT worrying about print CSS for this — the loader will never be visible during PDF export.
+
+Constraints: 2-space indent, matches this file's existing style (no comments unless something is genuinely non-obvious, this file already has some explanatory comments above related rule blocks — follow that pattern only if truly needed, don't over-comment). Do not reformat or touch any code outside the `.loader` rule and its new supporting rules (e.g. `@keyframes`, `.loader-ring`). Do not change any other selector.
+
+When done, run a final self-check: `grep -n "loader" system/styles.css` and confirm the output only shows your new/updated rules, then stop. Report a one-paragraph summary of exactly what you changed as your final answer — do not paste the full diff back, just describe it.

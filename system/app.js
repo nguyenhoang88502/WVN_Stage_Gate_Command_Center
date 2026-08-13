@@ -3,6 +3,20 @@ const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => [...(r || document).querySelectorAll(s)];
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function showLoader() {
+  let l = document.getElementById('globalLoader');
+  if (!l) {
+    l = el('div', 'loader hide'); l.id = 'globalLoader';
+    l.appendChild(el('div', 'loader-ring'));
+    document.body.appendChild(l);
+  }
+  l.classList.remove('hide');
+}
+function hideLoader() {
+  const l = document.getElementById('globalLoader');
+  if (l) l.classList.add('hide');
+}
 const BADGE_CLASS = {
   COMPLETE:'bg-success', DONE:'bg-success', APPROVED:'bg-success', Cleared:'bg-success', Connected:'bg-success',
   IN_PROGRESS:'bg-primary', FILED:'bg-primary', ON_GOING:'bg-primary', Open:'bg-primary',
@@ -126,11 +140,13 @@ async function refresh() {
 let reloadInFlight = false;
 async function boot() {
   try {
+    showLoader();
     await refresh();
     populateWhoSelect();
     $('#srvState').textContent = 'connected'; $('#srvState').className = badgeClass('Connected');
     $('#stamp').textContent = CFG.system_info.app_name + ' v' + CFG.system_info.version + '  ·  ' + nowLocal();
     buildTabs(); show(current);
+    hideLoader();
     wireReloadButton();
     // Auto-reload checkbox — read persisted state, start timer if it was enabled
     (function() {
@@ -142,6 +158,7 @@ async function boot() {
       };
     })();
   } catch (e) {
+    hideLoader();
     $('#views').innerHTML = '<div class="err"><b>Could not reach the local server.</b><br>' + esc(e.message) +
       '<br><br>Make sure <code>Open_WVN_NPI_Command_Center.cmd</code> is running, then reload this page.</div>';
     $('#srvState').textContent = 'offline'; $('#srvState').className = badgeClass('Offline');
@@ -159,7 +176,12 @@ function show(id) {
   current = id; buildTabs();
   closeDrawer();
   const v = $('#views'); v.innerHTML = '';
+  // Reveal the loader only if the view build exceeds ~150ms — near-instant
+  // tab switches shouldn't flash the full-screen overlay.
+  const loaderTimer = setTimeout(showLoader, 150);
   ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
+  clearTimeout(loaderTimer);
+  hideLoader();
   if (justPickedTree) {
     justPickedTree = false;
     requestAnimationFrame(() => {
@@ -1547,7 +1569,9 @@ function viewDashboard(root) {
     const a = document.createElement('a');
     a.href = '/api/reports/download?' + p.toString();
     a.download = '';
+    showLoader();
     a.click();
+    setTimeout(hideLoader, 1500);
   };
   toolbar.appendChild(rptBtn);
   execWrap.appendChild(toolbar);
@@ -2257,6 +2281,41 @@ function viewDashboard(root) {
    built for a print snapshot has no use for. Respects the same dashboard
    slicers as buildPrintPackage, re-implemented inline for the same reason
    that function documents: the closure vars aren't exported. */
+/* Per-segment start/end dates for a project's gated steps. A step with an
+   explicit target_week anchors its segment's end there; steps without one
+   interpolate evenly across the gap between the nearest anchors on either
+   side (falling back to the project start/end), so the old equal-width
+   behaviour survives only where no real dates exist. */
+function segmentDateRanges(proc, project, steps, startDate, endDate) {
+  var n = steps.length;
+  if (!n) return [];
+  var B = new Array(n + 1);
+  B[0] = startDate.getTime();
+  B[n] = endDate.getTime();
+  steps.forEach(function(s, i) {
+    var gate = gateRowOf(project.project_id, stepKeyOf(proc, s));
+    if (gate && gate.target_week) {
+      var d = weekToDate(gate.target_week);
+      if (d) B[i + 1] = d.getTime();
+    }
+  });
+  function boundaryT(m) {
+    if (B[m] != null) return B[m];
+    var lo = m - 1, hi = m + 1;
+    while (lo > 0 && B[lo] == null) lo--;
+    while (hi < n && B[hi] == null) hi++;
+    return B[lo] + (B[hi] - B[lo]) * (m - lo) / (hi - lo);
+  }
+  var ranges = [];
+  for (var i = 0; i < n; i++) {
+    var s = new Date(boundaryT(i));
+    var e = new Date(boundaryT(i + 1));
+    if (e.getTime() < s.getTime()) e = new Date(s.getTime() + 86400000);
+    ranges.push({ start: s, end: e });
+  }
+  return ranges;
+}
+
 function buildLiveGanttSection() {
   function filteredByProcess(process) {
     // dashFamFilter et al. are multi-select arrays, not scalars — see the
@@ -2367,29 +2426,29 @@ function buildLiveGanttSection() {
     plannedBar.style.width = plannedWidth + '%';
     track.appendChild(plannedBar);
 
-    // Stage segmentation (v8.0 Section 4): one coloured block per gated step,
-    // matching stepsOf(proc, p) in order, instead of a single bar whose width
-    // only tracked overall % complete. Per-gate durations aren't tracked in
-    // the data — only per-gate status — so equal-width segments across the
-    // planned span is what the data can honestly show; a wider/narrower
-    // segment would imply timing precision that doesn't exist.
+    // One coloured block per gated step, positioned by per-gate target weeks
+    // (see segmentDateRanges) instead of equal-width division.
     var gatedSteps = stepsOf(proc, p).filter(function(s) { return isGated(proc, s); });
-    var segCount = gatedSteps.length || 1;
-    var segWidthPct = plannedWidth / segCount;
+    var ranges = segmentDateRanges(proc, p, gatedSteps, pair.startDate, pair.endDate);
     gatedSteps.forEach(function(s, idx) {
       var gs = gateState(p, proc, s);
       var segStatus = gs.status;
       if (segStatus !== 'COMPLETE' && segStatus !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) segStatus = 'LATE';
+      var r = ranges[idx];
+      var segLeft = pctForDate(r.start);
+      var segWidthPct = pctForDate(r.end) - segLeft;
       var seg = el('div', 'gantt-bar gantt-bar-actual gantt-stage-seg gantt-stage-seg-' + segStatus.toLowerCase());
-      seg.style.left = (plannedLeft + idx * segWidthPct) + '%';
+      seg.style.left = segLeft + '%';
       seg.style.width = Math.max(0.4, segWidthPct) + '%';
       seg.appendChild(el('span', 'gantt-stage-label', 'S' + s.step_id));
-      seg.title = p.project_id + ' — ' + s.step_name + ' (S' + s.step_id + ')\nStatus: ' + segStatus.replace(/_/g, ' ');
+      seg.title = p.project_id + ' — Step ' + s.step_id + ': ' + s.step_name + ' (S' + s.step_id + ')\n' +
+        'Start: ' + isoWeek(r.start) + ' | End: ' + isoWeek(r.end) + '\n' +
+        'Status: ' + segStatus.replace(/_/g, ' ') + ' (' + (gs.req.length - gs.missing.length) + '/' + gs.req.length + ' docs filed)';
       seg.onclick = function(e) { e.stopPropagation(); openDrawer(p, s, null); };
       track.appendChild(seg);
       if (idx > 0) {
         var sep = el('div', 'gantt-stage-separator');
-        sep.style.left = (plannedLeft + idx * segWidthPct) + '%';
+        sep.style.left = segLeft + '%';
         track.appendChild(sep);
       }
     });
@@ -2471,6 +2530,7 @@ function computePortfolioKPIs() {
    FILTERED project set (respects the dashboard slicers), then calls
    window.print(). Called by the Dashboard "Download PDF" button.  --------- */
 function buildPrintPackage() {
+  showLoader();
   /* Re-implement the filter logic inline (global dash*Filter vars are
      already set by the dashboard slicers; this mirrors the closure inside
      viewDashboard exactly so the printed report matches the screen. */
@@ -2504,7 +2564,7 @@ function buildPrintPackage() {
   if (!container) { container = document.createElement('div'); container.id = 'dashPrintPackage'; document.body.appendChild(container); }
   container.innerHTML = '';
 
-  if (!allFiltered.length) { container.innerHTML = '<p style="padding:20px;font-size:12pt">No projects match the current filters.</p>'; var de = document.getElementById('dashExec'); if (de) de.style.display = 'none'; window.print(); if (de) de.style.display = ''; return; }
+  if (!allFiltered.length) { container.innerHTML = '<p style="padding:20px;font-size:12pt">No projects match the current filters.</p>'; var de = document.getElementById('dashExec'); if (de) de.style.display = 'none'; window.print(); if (de) de.style.display = ''; hideLoader(); return; }
 
   var now = new Date().toLocaleString();
   var user = getUser() || '—';
@@ -2665,6 +2725,7 @@ function buildPrintPackage() {
   if (dashExec) dashExec.style.display = 'none';
   window.print();
   if (dashExec) dashExec.style.display = '';
+  hideLoader();
 }
 
 /* ---- inline SVG Gantt chart (air-gapped — no Chart.js) ---------------
@@ -2742,15 +2803,25 @@ function _buildSvgGantt(projects) {
     svg += '<text x="' + x + '" y="' + (topMargin - 16) + '" text-anchor="middle" font-size="7" fill="#42556a">' + esc(entry.week) + '</text>';
   });
 
-  /* Project bars */
+  /* Per-step bars — one coloured rect per gated step, positioned by real
+     target-week anchors where available (interpolating only the gaps). */
   pairs.forEach(function(pair, idx) {
-    var cls = classifyProject(pair.project);
-    var color = statusColors[cls] || '#62748a';
-    var x = xForDate(pair.startDate);
-    var w = Math.max(3, xForDate(pair.endDate) - x);
+    var p = pair.project;
+    var proc = p.process;
     var y = topMargin + idx * rowH + barYOff;
+    var gatedSteps = stepsOf(proc, p).filter(function(s) { return isGated(proc, s); });
+    var ranges = segmentDateRanges(proc, p, gatedSteps, pair.startDate, pair.endDate);
 
-    svg += '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + barH + '" rx="3" ry="3" fill="' + color + '"/>';
+    gatedSteps.forEach(function(s, si) {
+      var gs = gateState(p, proc, s);
+      var segStatus = gs.status;
+      if (segStatus !== 'COMPLETE' && segStatus !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) segStatus = 'LATE';
+      var color = statusColors[segStatus] || '#62748a';
+      var r = ranges[si];
+      var x = xForDate(r.start);
+      var w = Math.max(3, xForDate(r.end) - x);
+      svg += '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + barH + '" rx="1" ry="1" fill="' + color + '"/>';
+    });
 
     /* Project label on the left */
     svg += '<text x="' + (leftMargin - 6) + '" y="' + (y + barH - 2) + '" text-anchor="end" font-size="7.5" fill="#14202c" font-weight="600">' + esc(pair.project.project_id) + '</text>';

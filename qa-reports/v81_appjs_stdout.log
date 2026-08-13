@@ -1,0 +1,20 @@
+Syntax parses cleanly. All changes are complete.
+
+## Summary
+
+**PART A — Loader integration** (all in `system/app.js`):
+- Added `showLoader()` / `hideLoader()` helpers near the top (after `esc`). They lazily create a `<div id="globalLoader" class="loader hide">` with a `.loader-ring` child appended to `document.body`, and toggle the existing `hide` class.
+- Wired into `boot()` (show on entry, hide on success + catch), `buildPrintPackage()` (show on entry, hide in both the empty-filter early-return path and the main path after `window.print()`), and the XLSX download button (show before `a.click()`, hide via a 1500 ms timeout since `a.click()` is fire-and-forget with no JS callback).
+- `show(id)` uses a 150 ms delayed reveal (`setTimeout(showLoader, 150)` + `clearTimeout`) so near-instant tab switches never flash the overlay.
+- Left `reloadPreservingState()` untouched, as required.
+
+**PART B — Gantt per-segment dates + tooltip**:
+- Added `segmentDateRanges(proc, project, steps, startDate, endDate)`: anchored steps use `weekToDate(gate.target_week)`; un-anchored steps interpolate evenly between the nearest anchors on either side (falling back to project start/end), with a 1-day forward clamp on reversed ranges. Reduces exactly to the old equal-division when no anchors exist.
+- `buildLiveGanttSection()` now positions `.gantt-stage-seg` and `.gantt-stage-separator` via per-segment dates, and the tooltip uses the required 3-line format with `isoWeek()` and `gs.req.length - gs.missing.length` / `gs.req.length`.
+- `_buildSvgGantt()` now draws one per-step `<rect>` (mirroring the live status/LATE logic) instead of a single whole-project bar.
+
+**Flagged deviations/notes**:
+- Spec said "Start/End are `toWeek()`", but `toWeek()` in this file only accepts strings (returns `''` for a `Date`), so I used `isoWeek(r.start/r.end)` — the actual Date→`YYYY-Www` converter. Functionally equivalent to intent.
+- SVG `BYPASSED` segments fall back to the grey `#62748a` since `statusColors` has no `BYPASSED` entry (I left the existing 4-status palette per spec).
+- SVG `<title>` tooltips were skipped (spec marked optional).
+- XLSX loader hide uses a fixed 1.5 s timeout — the only signal available for a fire-and-forget download.

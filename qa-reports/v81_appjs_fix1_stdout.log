@@ -1,0 +1,1 @@
+Fixed: the `.gantt-stage-seg` tooltip now applies `.replace(/_/g, ' ')` to `segStatus`, so `IN_PROGRESS`/`NOT_STARTED` render as `IN PROGRESS`/`NOT STARTED` to match the codebase convention.
