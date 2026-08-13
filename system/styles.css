@@ -280,14 +280,14 @@ header.navbar .cmdbar { display: flex; align-items: center; gap: var(--s2); marg
 #srvState.bg-danger { background: rgba(255, 138, 126, .16); color: #ff9c92; border-color: rgba(255, 138, 126, .42) }
 #srvState.bg-warning { background: rgba(232, 184, 95, .16); color: #f0c777; border-color: rgba(232, 184, 95, .42) }
 
-#whoInput {
+#whoInput, #whoSelect {
   height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
   background: rgba(255, 255, 255, .08); color: var(--header-ink);
   border: 1px solid rgba(255, 255, 255, .18); border-radius: var(--r1);
   padding: 0 var(--s2); font-size: 12px; width: 140px;
 }
 #whoInput::placeholder { color: var(--header-muted) }
-#whoInput:focus { border-color: var(--focus); background: rgba(255, 255, 255, .14); outline: none }
+#whoInput:focus, #whoSelect:focus { border-color: var(--focus); background: rgba(255, 255, 255, .14); outline: none }
 
 #themeBtn {
   height: var(--ctl-h-sm); min-width: var(--ctl-h-sm);
@@ -331,7 +331,7 @@ header.navbar .cmdbar { display: flex; align-items: center; gap: var(--s2); marg
 /* Light-theme command bar refinement: the base #whoInput above is tuned for
    the navy header; these scoped rules guarantee a crisp white field surface
    with an always-white caret and a soft placeholder in both themes. */
-header.navbar #whoInput {
+header.navbar #whoInput, header.navbar #whoSelect {
   background: rgba(255, 255, 255, 0.1) !important;
   border: 1px solid rgba(255, 255, 255, 0.25) !important;
   color: #ffffff !important;
@@ -1235,7 +1235,7 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 @media (max-width: 420px) {
   .kpi-grid { grid-template-columns: 1fr 1fr }
   .kpi-value { font-size: 21px }
-  #whoInput { width: 110px }
+  #whoInput, #whoSelect { width: 110px }
 }
 
 /* == 19. REDUCED-MOTION RULES ============================================ */
