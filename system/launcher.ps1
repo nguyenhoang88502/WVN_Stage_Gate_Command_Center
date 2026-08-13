@@ -1655,6 +1655,62 @@ try {
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; moderators = @($clean.ToArray()) }
         }
       }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/user-registry') {
+        # The user registry is the single managed roster of valid personnel -
+        # the Settings UI saves it here instead of free-typing owner/assignee
+        # names. It replaces the whole list (like moderators), and only
+        # 'admin' may change it - a moderator who could edit the roster is
+        # just an admin.
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if ($actor.ToLowerInvariant() -ne 'admin') {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the user registry.' }
+        } else {
+          $cfg = Get-Config
+          # Trim usernames, drop blanks, de-duplicate case-insensitively but
+          # keep the casing the admin typed. Roles outside admin/moderator/
+          # user collapse to 'user'; department is optional and defaults to ''.
+          $seen = @{}
+          $clean = New-Object System.Collections.Generic.List[object]
+          foreach ($e in @($body.registry)) {
+            $name = ([string]$e.username).Trim()
+            if (-not $name) { continue }
+            $k = $name.ToLowerInvariant()
+            if ($seen.ContainsKey($k)) { continue }
+            $seen[$k] = $true
+            $role = ([string]$e.role).ToLowerInvariant()
+            if ($role -notin @('admin', 'moderator', 'user')) { $role = 'user' }
+            $dept = [string]$e.department
+            if (-not $dept) { $dept = '' }
+            $clean.Add(@{ username = $name; role = $role; department = $dept })
+          }
+          # The admin account is the one entry that must always exist and
+          # always hold role 'admin' - re-add or re-promote it rather than
+          # rejecting the roster the admin just submitted.
+          $adminIndex = -1
+          for ($i = 0; $i -lt $clean.Count; $i++) {
+            if (([string]$clean[$i].username).ToLowerInvariant() -eq 'admin') { $adminIndex = $i; break }
+          }
+          if ($adminIndex -ge 0) {
+            if (([string]$clean[$adminIndex].role) -ne 'admin') {
+              $clean[$adminIndex] = @{ username = 'admin'; role = 'admin'; department = 'Management' }
+            }
+          } else {
+            $clean.Add(@{ username = 'admin'; role = 'admin'; department = 'Management' })
+          }
+          $before = (@($cfg.user_registry) | Where-Object { $null -ne $_ } | ForEach-Object { ([string]$_.username) + ':' + ([string]$_.role) }) -join ', '
+          $registryArray = @($clean.ToArray())
+          if ($cfg.PSObject.Properties.Name -contains 'user_registry') {
+            $cfg.user_registry = $registryArray
+          } else {
+            Add-Member -InputObject $cfg -NotePropertyName 'user_registry' -NotePropertyValue $registryArray -Force
+          }
+          Save-Config $cfg
+          $after = ($registryArray | ForEach-Object { ([string]$_.username) + ':' + ([string]$_.role) }) -join ', '
+          Add-Audit -User $actor -Action 'Config_UserRegistry_Update' -ProjectId '' -ObjType 'Config' -ObjId 'user_registry' -From $before -To $after -Detail ''
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; user_registry = $registryArray }
+        }
+      }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/vault') {
         # Only changes the CONFIGURED folder name/location for FUTURE server
         # starts — does not move existing evidence and does not take effect
