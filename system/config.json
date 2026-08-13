@@ -1,6 +1,6 @@
 {
     "system_info":  {
-                        "version":  "3.5.0",
+                        "version":  "8.0.0",
                         "app_name":  "WVN NPI \u0026 ECN Command Center",
                         "deployment_path":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\WVN_Stage_Gate_Command_Center",
                         "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â WOS Pillar 09",
@@ -1449,18 +1449,33 @@
     "user_registry":  [
                           {
                               "username":  "admin",
-                              "role":  "admin",
-                              "department":  "Management"
+                              "department":  "Management",
+                              "role":  "admin"
                           },
                           {
                               "username":  "intern",
-                              "role":  "user",
-                              "department":  ""
+                              "department":  "",
+                              "role":  "user"
                           },
                           {
                               "username":  "qa",
-                              "role":  "user",
-                              "department":  "QA"
+                              "department":  "QA",
+                              "role":  "user"
+                          },
+                          {
+                              "username":  "Diem Pham",
+                              "department":  "",
+                              "role":  "user"
+                          },
+                          {
+                              "username":  "Hoang",
+                              "department":  "",
+                              "role":  "user"
+                          },
+                          {
+                              "username":  "Khoi Le",
+                              "department":  "",
+                              "role":  "user"
                           }
                       ]
 }
