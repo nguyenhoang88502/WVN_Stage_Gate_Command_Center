@@ -126,6 +126,7 @@ let reloadInFlight = false;
 async function boot() {
   try {
     await refresh();
+    populateWhoSelect();
     $('#srvState').textContent = 'connected'; $('#srvState').className = badgeClass('Connected');
     $('#stamp').textContent = CFG.system_info.app_name + ' v' + CFG.system_info.version + '  ·  ' + nowLocal();
     buildTabs(); show(current);
@@ -168,7 +169,7 @@ function show(id) {
     window.scrollTo(0, 0);
   }
 }
-async function redrawAfterWrite() { await refresh(); show(current); }
+async function redrawAfterWrite() { await refresh(); populateWhoSelect(); show(current); }
 async function refreshSilently() {
   const d = await API.data();
   CFG = d.config; TRK = d.tracking; PATHS = d.paths || {};
@@ -280,7 +281,8 @@ function stopAutoReload() {
 
 /* ------------------------------------------------------------ helpers -- */
 function requireName() {
-  const v = ($('#whoInput') && $('#whoInput').value.trim()) || getUser();
+  const v = ($('#whoSelect') && $('#whoSelect').value.trim()) ||
+            ($('#whoInput') && $('#whoInput').value.trim()) || getUser();
   if (!v) { alert('Enter your name in the header first — every approval, bypass and clearance must name a person.'); return null; }
   setUser(v); return v;
 }
@@ -5148,6 +5150,107 @@ function viewSettings(root) {
   }
   mp.appendChild(mpBody); root.appendChild(mp);
 
+  /* ---- user registry ---- */
+  const urp = el('div', 'card');
+  const urpHdr = el('div', 'card-header'); urpHdr.appendChild(el('h3', 'card-title', 'User Registry')); urp.appendChild(urpHdr);
+  const urpBody = el('div', 'card-body');
+  urpBody.appendChild(el('p', 'note', 'Identity roster for the header name picker. Administrators can add, edit and remove entries here.'));
+  var urEditable = isAdmin();
+  var urList = el('div', 'taglist');
+  (CFG.user_registry || []).forEach(function(u) {
+    var row = el('div', 'tagrow');
+    row.style.flexWrap = 'wrap';
+    row.innerHTML = '<span><b>' + esc(u.username) + '</b></span>';
+    var roleSel = el('select');
+    roleSel.style.cssText = 'height:26px;font-size:12px;min-width:88px';
+    roleSel.innerHTML = '<option value="admin">admin</option><option value="moderator">moderator</option><option value="user">user</option>';
+    roleSel.value = u.role || 'user';
+    var deptIn = el('input');
+    deptIn.placeholder = 'department';
+    deptIn.value = u.department || '';
+    deptIn.style.cssText = 'height:26px;font-size:12px;min-width:150px';
+    var isAdminRow = String(u.username).toLowerCase() === 'admin';
+    if (!urEditable || isAdminRow) {
+      roleSel.disabled = true;
+    } else {
+      roleSel.onchange = async function() {
+        try {
+          var updated = (CFG.user_registry || []).map(function(x) {
+            return x.username === u.username ? Object.assign({}, x, { role: roleSel.value }) : x;
+          });
+          await API.post('/api/config/user-registry', { user: getUser(), registry: updated });
+          await redrawAfterWrite();
+        } catch (e) { alert('Could not save: ' + e.message); }
+      };
+    }
+    if (urEditable) {
+      deptIn.onchange = async function() {
+        try {
+          var updated = (CFG.user_registry || []).map(function(x) {
+            return x.username === u.username ? Object.assign({}, x, { department: deptIn.value.trim() }) : x;
+          });
+          await API.post('/api/config/user-registry', { user: getUser(), registry: updated });
+          await redrawAfterWrite();
+        } catch (e) { alert('Could not save: ' + e.message); }
+      };
+    } else {
+      deptIn.readOnly = true;
+    }
+    row.appendChild(roleSel);
+    row.appendChild(deptIn);
+    if (urEditable && !isAdminRow) {
+      var rmBtn = el('button', null, '×');
+      rmBtn.title = 'Remove user';
+      rmBtn.onclick = function() {
+        confirmModal('Remove User', 'Remove <b>' + esc(u.username) + '</b> from the registry?', 'Remove', async function() {
+          var newList = (CFG.user_registry || []).filter(function(x) { return x.username !== u.username; });
+          try {
+            await API.post('/api/config/user-registry', { user: getUser(), registry: newList });
+            // redrawAfterWrite, NOT viewSettings(root) - viewSettings appends
+            // to root and never clears it, so calling it again stacks a second
+            // copy of the whole Settings page under the first.
+            await redrawAfterWrite();
+          } catch (e) { alert('Could not save: ' + e.message); }
+        });
+      };
+      row.appendChild(rmBtn);
+    }
+    urList.appendChild(row);
+  });
+  urpBody.appendChild(urList);
+  if (urEditable) {
+    var urAddRow = el('div');
+    urAddRow.style.cssText = 'margin-top:8px;display:flex;gap:6px;flex-wrap:wrap';
+    var urNameIn = el('input');
+    urNameIn.placeholder = 'User name';
+    urNameIn.style.cssText = 'flex:1;min-width:120px';
+    var urAddRoleSel = el('select');
+    urAddRoleSel.style.cssText = 'height:26px';
+    urAddRoleSel.innerHTML = '<option value="user" selected>user</option><option value="moderator">moderator</option><option value="admin">admin</option>';
+    var urDeptIn = el('input');
+    urDeptIn.placeholder = 'Department';
+    urDeptIn.style.cssText = 'flex:1;min-width:120px';
+    var urAddBtn = el('button', 'primary', 'Add');
+    urAddBtn.onclick = async function() {
+      var uname = urNameIn.value.trim();
+      if (!uname) return;
+      try {
+        var newList = (CFG.user_registry || []).concat([{ username: uname, role: urAddRoleSel.value, department: urDeptIn.value.trim() }]);
+        await API.post('/api/config/user-registry', { user: getUser(), registry: newList });
+        // The server trims, de-duplicates and always keeps exactly one 'admin'
+        // entry, so re-read the config rather than rendering the list we hoped
+        // it would store.
+        await redrawAfterWrite();
+      } catch (e) { alert('Could not save: ' + e.message); }
+    };
+    urAddRow.appendChild(urNameIn);
+    urAddRow.appendChild(urAddRoleSel);
+    urAddRow.appendChild(urDeptIn);
+    urAddRow.appendChild(urAddBtn);
+    urpBody.appendChild(urAddRow);
+  }
+  urp.appendChild(urpBody); root.appendChild(urp);
+
   /* ---- evidence vault location ---- */
   const vp = el('div', 'card');
   const vpHdr = el('div', 'card-header'); vpHdr.appendChild(el('h3', 'card-title', 'Evidence vault location')); vp.appendChild(vpHdr);
@@ -5590,9 +5693,33 @@ try { setTheme(localStorage.getItem(TK) === 'dark' ? 'dark' : 'light'); } catch 
 $('#themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 
 /* -------------------------------------------------------------- header name field -- */
+function populateWhoSelect() {
+  const s = $('#whoSelect');
+  if (!s) return;
+  const list = (CFG && CFG.user_registry) || [];
+  if (!list.length) {
+    // Safety net — the registry is empty (shouldn't happen; 'admin' is always
+    // present). Fall back to the old free-text input so the app stays usable.
+    const fb = el('input'); fb.id = 'whoInput'; fb.placeholder = 'Your name'; fb.style.width = '140px'; fb.value = getUser();
+    fb.onchange = () => setUser(fb.value.trim());
+    s.insertAdjacentElement('beforebegin', fb);
+    s.remove();
+    return;
+  }
+  s.innerHTML = '';
+  list.forEach(function(u) {
+    const opt = el('option');
+    opt.value = u.username;
+    opt.textContent = u.username + ' (' + (u.role || 'user') + ')';
+    s.appendChild(opt);
+  });
+  const saved = getUser();
+  s.value = list.some(function(u) { return u.username === saved; }) ? saved : '';
+}
+
 (function initWho() {
-  const who = el('input'); who.id = 'whoInput'; who.placeholder = 'Your name'; who.style.width = '140px'; who.value = getUser();
-  who.onchange = () => setUser(who.value.trim());
+  const who = el('select'); who.id = 'whoSelect';
+  who.onchange = () => setUser(who.value);
   $('#srvState').insertAdjacentElement('afterend', who);
 })();
 
