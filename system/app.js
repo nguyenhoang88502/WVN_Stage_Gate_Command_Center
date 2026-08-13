@@ -331,7 +331,7 @@ function startAutoReload() {
   autoReloadId = setInterval(function() {
     if (reloadInFlight) return;
     // Skip while a modal is open — .modal-backdrop means user is mid-action
-    if (document.querySelector('.modal-backdrop')) return;
+    if (document.querySelector('.modal-backdrop, .modal-scrim')) return;
     // Skip while the user is mid-drag-and-drop over a dropzone
     if (dragActive) return;
     // Skip while the user is typing in a form element
