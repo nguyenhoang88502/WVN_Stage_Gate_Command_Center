@@ -92,6 +92,7 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
   async changeTypes(changeTypes, user) { return API.post('/api/config/changetypes', { change_types: changeTypes, user }); },
   async importIssues(csv, user) { return API.post('/api/issues/import', { csv, user }); },
   async batchProjects(csv, user) { return API.post('/api/projects/batch', { csv, user }); },
+  async openPath(path) { return API.post('/api/open-path', { path }); },
   async post(path, body) {
     const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) throw await API.err(r);
@@ -365,8 +366,12 @@ function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
   const wrap = el('span');
   wrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap';
 
+  // "Claimed by X" implies X self-claimed the task. When an admin/moderator
+  // placed them here instead (row.assigned_by is set), the button must say
+  // so - the badge below already gets this right via renderBadges(), but the
+  // main button label did not until now.
   const btn = el('button', currentOwner ? 'claimed-btn' : 'primary',
-    currentOwner ? 'Claimed by ' + currentOwner : 'Claim Task');
+    currentOwner ? (row.assigned_by ? 'Assigned to ' : 'Claimed by ') + currentOwner : 'Claim Task');
   wrap.appendChild(btn);
 
   var ownerBadge = null;
@@ -394,7 +399,8 @@ function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
   }
   renderBadges();
 
-  btn.onclick = async () => {
+  btn.onclick = async (e) => {
+    e.stopPropagation();
     const who = requireName(); if (!who) return;
     const owner = row.owner_pic || row.claimed_by || '';
     const supporter = row.supporter_pic || row.supporter_by || '';
@@ -475,12 +481,55 @@ function makeClaimButton(objType, store, row, upsertKeys, onAfterClaim) {
 function makeAssignButton(objType, store, row, upsertKeys, onAfterAssign) {
   const btn = el('button', '', 'Assign Task');
   btn.style.cssText = 'margin-left:4px';
-  btn.onclick = async function() {
+  btn.onclick = (e) => {
+    e.stopPropagation();
     const admin = requireName(); if (!admin) return;
-    const target = prompt('Assign to whom? Enter the target user\'s name:');
-    if (!target || !target.trim()) return;
-    const targetName = target.trim();
-    const isPrimary = confirm('Assign as Primary Owner?\n\nOK = Primary Owner\nCancel = Supporter');
+    const registry = (CFG && CFG.user_registry) || [];
+    if (!registry.length) { alert('No registered users — add personnel in Settings → User Registry first.'); return; }
+
+    const scrim = el('div', 'modal-scrim');
+    const box = el('div', 'modal');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'assignModalTitle');
+    box.innerHTML = '<h2 id="assignModalTitle">Assign Task</h2>';
+    const body = el('div');
+    const sel = el('select');
+    registry.forEach(function(u) {
+      const opt = el('option'); opt.value = u.username; opt.textContent = u.username + (u.role ? ' (' + u.role + ')' : '');
+      sel.appendChild(opt);
+    });
+    const roleWrap = el('div');
+    roleWrap.style.cssText = 'margin-top:8px;display:flex;gap:14px;align-items:center';
+    const ownerLabel = el('label'); ownerLabel.style.cssText = 'display:flex;align-items:center;gap:4px;font-weight:400';
+    const ownerRadio = el('input'); ownerRadio.type = 'radio'; ownerRadio.name = 'assignRole'; ownerRadio.value = 'owner'; ownerRadio.checked = true;
+    ownerLabel.appendChild(ownerRadio); ownerLabel.appendChild(document.createTextNode('Primary Owner'));
+    const supLabel = el('label'); supLabel.style.cssText = 'display:flex;align-items:center;gap:4px;font-weight:400';
+    const supRadio = el('input'); supRadio.type = 'radio'; supRadio.name = 'assignRole'; supRadio.value = 'supporter';
+    supLabel.appendChild(supRadio); supLabel.appendChild(document.createTextNode('Supporter'));
+    roleWrap.appendChild(ownerLabel); roleWrap.appendChild(supLabel);
+    body.appendChild(sel); body.appendChild(roleWrap);
+    box.appendChild(body);
+
+    const acts = el('div', 'acts');
+    const no = el('button', '', 'Cancel');
+    const yes = el('button', 'primary', 'Assign');
+    // Same close/cleanup pattern as confirmModal - every close path shares
+    // one teardown so the keydown listener never outlives the modal.
+    const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+    const onEsc = (ev) => { if (ev.key === 'Escape') close(); };
+    no.onclick = close;
+    yes.onclick = () => { close(); doAssign(sel.value, ownerRadio.checked); };
+    acts.appendChild(no); acts.appendChild(yes);
+    box.appendChild(acts);
+    scrim.appendChild(box);
+    scrim.onclick = (ev) => { if (ev.target === scrim) close(); };
+    document.addEventListener('keydown', onEsc);
+    document.body.appendChild(scrim);
+  };
+
+  async function doAssign(targetName, isPrimary) {
+    const admin = getUser();
     btn.disabled = true;
     const now = new Date().toISOString();
     try {
@@ -523,7 +572,7 @@ function makeAssignButton(objType, store, row, upsertKeys, onAfterAssign) {
       if (onAfterAssign) onAfterAssign(targetName, isPrimary, admin);
     } catch (e) { alert('Assignment failed: ' + e.message); }
     btn.disabled = false;
-  };
+  }
   return btn;
 }
 /* ---- task lifecycle buttons ----------------------------------------------
@@ -539,7 +588,8 @@ function makeEditAssignmentButton(objType, store, row, upsertKeys, onAfterEdit) 
 
   const btn = el('button', 'sm', 'Edit Assignment');
   btn.style.cssText = 'margin-left:4px';
-  btn.onclick = async () => {
+  btn.onclick = async (e) => {
+    e.stopPropagation();
     const who = requireName(); if (!who) return;
     const ownerInput = prompt('Edit Owner — enter the new owner\'s name, or clear the field to remove the owner:', currentOwner || '');
     if (ownerInput === null) return;
@@ -585,7 +635,8 @@ function makeRemoveOwnerButton(objType, store, row, upsertKeys, onAfterRemove) {
 
   const btn = el('button', 'sm', 'Remove Owner');
   btn.style.cssText = 'margin-left:4px';
-  btn.onclick = () => {
+  btn.onclick = (e) => {
+    e.stopPropagation();
     const who = requireName(); if (!who) return;
     const promote = !!currentSupporter;
     confirmModal('Remove Owner',
@@ -609,6 +660,13 @@ function makeRemoveOwnerButton(objType, store, row, upsertKeys, onAfterRemove) {
             rowData.claimed_by = '';
             rowData.claimed_utc = '';
           }
+          // Neither path is an assignment event - a promoted supporter was
+          // never assigned by anyone, and an unowned task has no one left to
+          // attribute an assignment to. Without this, the badge kept showing
+          // "(Assigned by admin)" against whoever ended up here next, which
+          // wrongly implied admin placed them.
+          rowData.assigned_by = '';
+          rowData.assigned_utc = '';
           await API.action(store, rowData, {
             upsertKeys: upsertKeys,
             audit: { user: who, action: objType + '_RemoveOwner', projectId: row.project_id, objType: objType,
@@ -632,7 +690,8 @@ function makeRemoveSupporterButton(objType, store, row, upsertKeys, onAfterRemov
 
   const btn = el('button', 'sm', 'Remove Supporter');
   btn.style.cssText = 'margin-left:4px';
-  btn.onclick = () => {
+  btn.onclick = (e) => {
+    e.stopPropagation();
     const who = requireName(); if (!who) return;
     confirmModal('Remove Supporter',
       'Remove <b>' + esc(currentSupporter) + '</b> as supporter?',
@@ -664,7 +723,8 @@ function makeDeleteTaskButton(objType, store, row, upsertKeys, onAfterDelete) {
 
   const btn = el('button', 'sm danger', 'Delete Task');
   btn.style.cssText = 'margin-left:4px';
-  btn.onclick = () => {
+  btn.onclick = (e) => {
+    e.stopPropagation();
     const who = requireName(); if (!who) return;
     const oldStatus = row.status || '';
     const newStatus = store === 'lb_issues' ? 'Closed' : 'Removed';
@@ -2441,14 +2501,12 @@ function vaultPathLine(filePath, label) {
   p.textContent = filePath;
   p.title = 'Full path — click to select, then copy';
   wrap.appendChild(p);
-  var copy = el('button', '', 'Copy path');
-  copy.onclick = async function(e) {
+  var openBtn = el('button', 'primary', 'Open in Explorer');
+  openBtn.onclick = async function(e) {
     e.preventDefault();
-    var ok = await copyText(filePath);
-    copy.textContent = ok ? 'Copied' : 'Copy failed';
-    setTimeout(function() { copy.textContent = 'Copy path'; }, 1500);
+    try { await API.openPath(filePath); } catch (err) { alert('Could not open: ' + err.message); }
   };
-  wrap.appendChild(copy);
+  wrap.appendChild(openBtn);
   return wrap;
 }
 
@@ -2656,13 +2714,14 @@ function openDrawer(project, step, focusDocCode) {
       // doc_code click → re-open drawer focused on this doc
       const dcLink = tr.querySelector('.doc-link');
       if (dcLink) dcLink.onclick = () => openDrawerForDoc(project, step, x.doc_code);
-      const cp = el('button', '', 'Copy path');
-      cp.onclick = async () => {
-        const ok = await copyText(path);
-        cp.textContent = ok ? 'Copied' : 'Copy failed';
-        setTimeout(() => { cp.textContent = 'Copy path'; }, 1500);
-      };
-      tr.lastChild.appendChild(cp);
+      // A link_url isn't a filesystem path — nothing for Explorer to open.
+      if (path && !isLink) {
+        const openBtn = el('button', 'primary', 'Open in Explorer');
+        openBtn.onclick = async () => {
+          try { await API.openPath(path); } catch (err) { alert('Could not open: ' + err.message); }
+        };
+        tr.lastChild.appendChild(openBtn);
+      }
       // No Claim/Assign button here — every row in this table already has a
       // file or an approval (see the filter above), so there is nothing left
       // to claim. "Filed by" already names who did the work.
@@ -4324,20 +4383,6 @@ function familyFgTree(root, proc, state, onPick) {
   return state.active ? list.find(x => x.project_id === state.active) : null;
 }
 
-/* Clipboard: the modern API needs a secure context, and http://localhost counts
-   on Chrome/Edge but not everywhere — fall back to the old selection trick so
-   Copy path works on whatever browser is actually on the shop-floor PC. */
-async function copyText(s) {
-  try { await navigator.clipboard.writeText(s); return true; } catch (e) { }
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = s; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
-  } catch (e) { return false; }
-}
 function commentsFor(pid, delId) {
   return (TRK.lb_doc_comments || []).filter(c => c.project_id === pid && c.deliverable_id === delId);
 }
@@ -4400,14 +4445,15 @@ function evidenceTable(g, project, step, redraw) {
     act.appendChild(rmBtn);
     if (d && !isRemoved) {
       const path = d.link_url || d.file_path || '';
-      const cp = el('button', '', 'Copy path');
-      cp.title = path;
-      cp.onclick = async () => {
-        const ok = await copyText(path);
-        cp.textContent = ok ? 'Copied' : 'Copy failed';
-        setTimeout(() => { cp.textContent = 'Copy path'; }, 1500);
-      };
-      act.appendChild(cp);
+      // A link_url isn't a filesystem path — nothing for Explorer to open.
+      if (path && !isLink) {
+        const openBtn = el('button', 'primary', 'Open in Explorer');
+        openBtn.title = path;
+        openBtn.onclick = async () => {
+          try { await API.openPath(path); } catch (err) { alert('Could not open: ' + err.message); }
+        };
+        act.appendChild(openBtn);
+      }
 
       const notes = commentsFor(project.project_id, d.deliverable_id);
       const noteWrap = el('div');
@@ -4737,13 +4783,11 @@ function packageBar(project) {
                         : 'Nothing has been filed against this project yet';
   b.onclick = () => { window.location.href = '/api/package/' + encodeURIComponent(project.project_id); };
   wrap.appendChild(b);
-  const cp = el('button', '', 'Copy vault folder');
-  cp.onclick = async () => {
-    const ok = await copyText(PATHS.vault || '');
-    cp.textContent = ok ? 'Copied' : 'Copy failed';
-    setTimeout(() => { cp.textContent = 'Copy vault folder'; }, 1500);
+  const openVaultBtn = el('button', 'primary', 'Open vault folder');
+  openVaultBtn.onclick = async () => {
+    try { await API.openPath(PATHS.vault || ''); } catch (err) { alert('Could not open: ' + err.message); }
   };
-  wrap.appendChild(cp);
+  wrap.appendChild(openVaultBtn);
   wrap.appendChild(el('span', 'note', files + ' file(s) filed, ' + links + ' link(s) cited' +
     (dels.length ? ' — the zip is a snapshot of what exists, not proof of completeness.' : '')));
   return wrap;

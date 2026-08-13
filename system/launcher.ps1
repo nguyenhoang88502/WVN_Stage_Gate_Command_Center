@@ -2438,6 +2438,43 @@ try {
           [System.Environment]::Exit(0)
         }
       }
+      elseif ($method -eq 'POST' -and $path -eq '/api/open-path') {
+        # Launches Windows Explorer on the SERVER machine - same class of
+        # action as /api/shutdown, so it gets the same loopback-only guard.
+        # There is no further path restriction (e.g. "must be inside the
+        # vault") beyond that: every path this endpoint is ever asked to open
+        # is one the server itself already handed back to the client (a filed
+        # document, a generated LL_info.xlsx, the vault root), so locality is
+        # the only boundary that actually matters here.
+        $okLocal = Test-LoopbackRequest -Request $req
+        if (-not $okLocal) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{
+            error = 'This action may only be requested from this machine.'
+          }
+        } else {
+          $body = Read-JsonBody -Request $req
+          $target = [string]$body.path
+          if (-not $target) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'path is required.' }
+          } elseif (-not (Test-Path -LiteralPath $target)) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'That path does not exist on this machine.' }
+          } else {
+            try {
+              if (Test-Path -LiteralPath $target -PathType Leaf) {
+                # /select, has no space after the comma - Explorer's undocumented
+                # switch parser treats "/select, C:\..." (with the space) as two
+                # separate malformed arguments instead of one.
+                Start-Process explorer.exe -ArgumentList "/select,`"$target`""
+              } else {
+                Start-Process explorer.exe -ArgumentList "`"$target`""
+              }
+              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true }
+            } catch {
+              New-JsonResponse -Response $res -StatusCode 500 -Body @{ error = 'Could not launch Explorer: ' + $_.Exception.Message }
+            }
+          }
+        }
+      }
       elseif ($method -eq 'POST' -and $path -eq '/api/filename/preview') {
         # lets the browser show the name before anything is written
         $body = Read-JsonBody -Request $req
