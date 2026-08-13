@@ -1,0 +1,14 @@
+{
+  "name": "wvn-stage-gate-command-center-tests",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Playwright end-to-end tests for the WVN NPI & ECN Stage Gate Command Center app.js/launcher.ps1 tool.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}
