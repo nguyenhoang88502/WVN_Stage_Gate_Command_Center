@@ -807,7 +807,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
 
 /* Settings > Document types — grid instead of a long wrapped pill list,
    with rows past the first 8 hidden behind a "Show more" toggle. */
-.taglist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px }
+.taglist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px }
 .taglist-hidden { display: none }
 
 /* == 15. UPLOAD AND EMPTY STATES ========================================= */
@@ -924,6 +924,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
   cursor: pointer; flex-shrink: 0; margin: 0;
 }
 .ms-option:hover { background: var(--soft); }
+
+/* Native <select> POPUPS (the open option list) are rendered by the OS/
+   browser chrome on an effectively-always-white surface, ignoring this
+   app's --ink/--bg theme variables — that left light-themed option text
+   illegible against it. Scoped to `option` only, not `select` itself: the
+   closed control's own text must keep following the theme (it sits on a
+   themed background, e.g. white-on-navy in the header), only the popup
+   text is hard-coded here. .ms-popover/.ms-option are this app's own
+   custom (non-native) dropdown for the dashboard slicers; forced to the
+   same fixed light/dark-text styling so it reads the same as every other
+   dropdown regardless of app theme. */
+select option { color: #14202c; background: #ffffff; }
+.ms-popover, .ms-option { color: #14202c; }
+.ms-popover, .ms-search { background: #ffffff; }
+.ms-search { color: #14202c; }
+.ms-option:hover { background: #eef2f6; }
 .ms-option input[type="checkbox"] {
   width: 14px; height: 14px; margin: 0; flex-shrink: 0; cursor: pointer;
   accent-color: var(--blue);
@@ -1040,6 +1056,16 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   display: flex; align-items: center; justify-content: center; padding: var(--s4);
 }
 .modal {
+  /* Explicit display is load-bearing: the vendored Tabler/Bootstrap CSS
+     defines its own .modal{display:none} for ITS OWN modal component
+     (toggled visible via a JS-added .show class this app never uses). Same
+     class name, same specificity, so without this declaration Tabler's rule
+     silently wins and every confirmModal()/assign-task dialog in the app
+     renders with zero size - invisible to a real user, even though a script
+     calling .click() on a button inside it still fires (click doesn't check
+     visibility), which is why this went undetected until Playwright's
+     toBeVisible() check caught it. */
+  display: block;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--r3); padding: var(--s5);
   max-width: 500px; width: 100%; box-shadow: var(--sh3);
