@@ -355,6 +355,55 @@ function requireName() {
   setUser(v); return v;
 }
 
+/* ---- editable target week (Section 3) -----------------------------------
+   HTML5 <input type="week"> speaks the same YYYY-Www format this whole app
+   already uses (isoWeek()/weekToDate()), so no extra parsing is needed.
+   `isDone` is supplied by the caller (gate: !!g.approval; deliverable: is
+   this doc_code in c.done/c.filed) rather than re-derived here, since
+   working that out generically would need the full cellStateFor() context
+   this helper doesn't have. */
+function isOverdueWeek(week, isDone) {
+  return !!week && !isDone && week < nowWeek();
+}
+function makeTargetWeekEditor(objType, store, row, upsertKeys, isDone, onAfterSave) {
+  const current = row.target_week || '';
+  const wrap = el('span', 'target-week-editor');
+  wrap.appendChild(el('span', 'note', 'Target week: '));
+  const inp = el('input');
+  inp.type = 'week';
+  inp.value = current;
+  inp.className = isOverdueWeek(current, isDone) ? 'target-week-overdue' : '';
+  wrap.appendChild(inp);
+  const saveBtn = el('button', 'sm', 'Save');
+  saveBtn.onclick = async (e) => {
+    e.stopPropagation();
+    const who = requireName(); if (!who) return;
+    saveBtn.disabled = true;
+    try {
+      const rowData = Object.assign({}, row);
+      rowData.target_week = inp.value || '';
+      if (store === 'lb_gates') {
+        if (!rowData.process) rowData.process = '';
+        if (!rowData.step_num) rowData.step_num = '';
+        if (!rowData.step_name) rowData.step_name = '';
+        if (!rowData.status) rowData.status = 'NotStarted';
+        rowData.updated_utc = new Date().toISOString();
+      }
+      await API.action(store, rowData, {
+        upsertKeys: upsertKeys,
+        audit: { user: who, action: objType + '_SetTargetWeek', projectId: row.project_id, objType: objType,
+          objId: rowData.step_key || rowData.deliverable_id || '', from: current, to: rowData.target_week, detail: '' }
+      });
+      if (onAfterSave) onAfterSave();
+      else await redrawAfterWrite();
+    } catch (err) { alert('Could not save target week: ' + err.message); }
+    saveBtn.disabled = false;
+  };
+  wrap.appendChild(saveBtn);
+  if (isOverdueWeek(current, isDone)) wrap.appendChild(el('span', 'badge bg-danger target-week-badge', 'OVERDUE'));
+  return wrap;
+}
+
 /* ---- claim button builder (Task 2a) ------------------------------------
    Returns a span container with a claim button plus Owner / Supporter
    badges. Two-tier logic: if the row is unowned the clicker becomes
@@ -1362,6 +1411,16 @@ function matrixCell(project, step) {
   if (c.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
   const nc = cellNoteCount(project, stepKeyOf(project.process, step));
   if (nc) bits.push('<span class="matrix-note-indicator" title="' + nc + ' note(s)">💬 ' + nc + '</span>');
+  // Overdue = a target_week is set, is in the past, and the thing it's on
+  // still isn't done — a signed gate or a filed/approved doc clears it.
+  var sk2 = stepKeyOf(project.process, step);
+  var overdueCount = 0;
+  if (isOverdueWeek(c.g.gate && c.g.gate.target_week, !!c.g.approval)) overdueCount++;
+  c.missing.concat(c.ongoing).forEach(function(code) {
+    var delRow = (TRK.lb_deliverables || []).find(function(x) { return x.project_id === project.project_id && x.step_key === sk2 && x.doc_code === code; });
+    if (delRow && isOverdueWeek(delRow.target_week, false)) overdueCount++;
+  });
+  if (overdueCount) bits.push('<span class="badge bg-danger matrix-overdue-indicator" title="' + overdueCount + ' overdue">⏰ ' + overdueCount + ' overdue</span>');
   td.innerHTML = bits.join('<br>');
   td.querySelectorAll('.mcell-doc-badge').forEach(function(badge) {
     badge.style.cursor = 'pointer';
@@ -1871,6 +1930,20 @@ function viewDashboard(root) {
                 }
               });
               if (groupNoteCount) bits.push('<span class="matrix-note-indicator" title="' + groupNoteCount + ' note(s)">💬 ' + groupNoteCount + '</span>');
+              let groupOverdueCount = 0;
+              group.steps.forEach(function(gs) {
+                if (on.indexOf(gs) < 0) return;
+                var gsk = stepKeyOf(proc, gs);
+                var gateRow2 = gateRowOf(project.project_id, gsk);
+                var gateApproved = !!(TRK.lb_approvals || []).filter(function(a) { return a.project_id === project.project_id && a.step_key === gsk; }).length;
+                if (isOverdueWeek(gateRow2 && gateRow2.target_week, gateApproved)) groupOverdueCount++;
+                (TRK.lb_deliverables || []).filter(function(x) { return x.project_id === project.project_id && x.step_key === gsk; }).forEach(function(delRow) {
+                  var lvl = evidenceFor(project.project_id, gsk, delRow.doc_code).level;
+                  var delDone = lvl === 'APPROVED' || lvl === 'FILED';
+                  if (isOverdueWeek(delRow.target_week, delDone)) groupOverdueCount++;
+                });
+              });
+              if (groupOverdueCount) bits.push('<span class="badge bg-danger matrix-overdue-indicator" title="' + groupOverdueCount + ' overdue">⏰ ' + groupOverdueCount + ' overdue</span>');
             }
             td.innerHTML = bits.join('<br>');
 
@@ -2168,6 +2241,152 @@ function viewDashboard(root) {
     wmWrap.appendChild(wmBody);
     execWrap.appendChild(wmWrap);
   })();
+
+  execWrap.appendChild(buildLiveGanttSection());
+}
+
+/* ---- Section 5: interactive Dashboard Gantt (planned vs actual) --------
+   HTML/CSS bars, not the static print SVG (_buildSvgGantt) — this one needs
+   real hover tooltips and click-to-open-drawer, which a raw SVG string
+   built for a print snapshot has no use for. Respects the same dashboard
+   slicers as buildPrintPackage, re-implemented inline for the same reason
+   that function documents: the closure vars aren't exported. */
+function buildLiveGanttSection() {
+  function filteredByProcess(process) {
+    // dashFamFilter et al. are multi-select arrays, not scalars — see the
+    // identical fix in buildPrintPackage's own copy of this closure for why
+    // the naive `!==` comparison used here originally silently zeroed out
+    // every project the instant any slicer array existed at all.
+    var list = projectsOf(process);
+    var any = dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length;
+    if (!any) return list;
+    return list.filter(function(p) {
+      if (dashFamFilter.length && !dashFamFilter.includes(p.prod_family)) return false;
+      if (dashModelFilter.length && !dashModelFilter.includes(p.family)) return false;
+      if (dashStartWeekFilter.length) { var sw = toWeek(p.prf_date); if (!sw || !dashStartWeekFilter.includes(sw)) return false; }
+      if (dashEndWeekFilter.length) {
+        var ew = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
+        if (!ew || !dashEndWeekFilter.includes(ew)) return false;
+      }
+      return true;
+    });
+  }
+  var projects = filteredByProcess('NPI').concat(filteredByProcess('ECN'));
+
+  var wrap = el('div', 'card gantt-live-wrap');
+  var hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'Project Schedule (Gantt) — Planned vs Actual'));
+  wrap.appendChild(hdr);
+  var body = el('div', 'card-body');
+  wrap.appendChild(body);
+
+  var pairs = [];
+  projects.forEach(function(p) {
+    var sw = toWeek(p.prf_date);
+    var ew = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
+    var sd = weekToDate(sw);
+    var ed = weekToDate(ew);
+    if (sd && ed) {
+      ed = new Date(ed); ed.setDate(ed.getDate() + 6);
+      pairs.push({ project: p, startDate: sd, endDate: ed });
+    }
+  });
+  if (!pairs.length) {
+    body.appendChild(el('p', 'note', 'No projects with valid PRF/target weeks to chart' + (projects.length ? '' : ' for the current filters') + '.'));
+    return wrap;
+  }
+
+  var allStarts = pairs.map(function(x) { return x.startDate.getTime(); });
+  var allEnds = pairs.map(function(x) { return x.endDate.getTime(); });
+  var pad = 7 * 86400000;
+  var minT = Math.min.apply(null, allStarts) - pad;
+  var maxT = Math.max.apply(null, allEnds) + pad;
+  var spanMs = maxT - minT;
+
+  var weekSet = new Map();
+  var cursor = new Date(minT);
+  while (cursor.getTime() <= maxT) {
+    var wk = isoWeek(cursor);
+    if (wk && !weekSet.has(wk)) { var wd = weekToDate(wk); if (wd) weekSet.set(wk, wd); }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  var weekEntries = [];
+  weekSet.forEach(function(d, w) { weekEntries.push({ week: w, date: d }); });
+  weekEntries.sort(function(a, b) { return a.date - b.date; });
+
+  function pctForDate(d) { return (d.getTime() - minT) / spanMs * 100; }
+
+  var statusColors = { COMPLETE: '#16703c', IN_PROGRESS: '#14589f', LATE: '#b02318', NOT_STARTED: '#8a5800' };
+
+  var grid = el('div', 'gantt-live-grid');
+  body.appendChild(grid);
+
+  var headerRow = el('div', 'gantt-live-row gantt-live-header');
+  ['Project', 'Process', 'Owner PIC', 'Issues', 'Comments'].forEach(function(h) {
+    headerRow.appendChild(el('div', 'gantt-live-meta-cell', h));
+  });
+  var trackHeader = el('div', 'gantt-live-track gantt-live-track-header');
+  var labelInterval = Math.max(1, Math.ceil(weekEntries.length / 20));
+  weekEntries.forEach(function(entry, i) {
+    if (i % labelInterval !== 0) return;
+    var lbl = el('span', 'gantt-week-label', entry.week);
+    lbl.style.left = pctForDate(entry.date) + '%';
+    trackHeader.appendChild(lbl);
+  });
+  headerRow.appendChild(trackHeader);
+  grid.appendChild(headerRow);
+
+  pairs.forEach(function(pair) {
+    var p = pair.project;
+    var proc = p.process;
+    var pr = progressOf(p);
+    var cls = classifyProject(p);
+    var openCount = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
+      .filter(function(i) { return i.project_id === p.project_id && i.status !== 'Closed'; }).length;
+    var commentCount = stepsOf(proc, p).reduce(function(sum, s) { return sum + cellNoteCount(p, stepKeyOf(proc, s)); }, 0);
+
+    var row = el('div', 'gantt-live-row');
+    row.style.cursor = 'pointer';
+    row.appendChild(el('div', 'gantt-live-meta-cell', p.project_id));
+    row.appendChild(el('div', 'gantt-live-meta-cell', proc));
+    row.appendChild(el('div', 'gantt-live-meta-cell', p.market_manager || '—'));
+    var issuesCell = el('div', 'gantt-live-meta-cell');
+    if (openCount) issuesCell.innerHTML = '<span class="matrix-issue-badge">⚠ ' + openCount + '</span>';
+    row.appendChild(issuesCell);
+    var commentsCell = el('div', 'gantt-live-meta-cell');
+    if (commentCount) commentsCell.innerHTML = '<span class="matrix-note-indicator">💬 ' + commentCount + '</span>';
+    row.appendChild(commentsCell);
+
+    var track = el('div', 'gantt-live-track');
+    var plannedLeft = pctForDate(pair.startDate);
+    var plannedWidth = Math.max(0.5, pctForDate(pair.endDate) - plannedLeft);
+    var plannedBar = el('div', 'gantt-bar gantt-bar-planned');
+    plannedBar.style.left = plannedLeft + '%';
+    plannedBar.style.width = plannedWidth + '%';
+    track.appendChild(plannedBar);
+
+    var actualSpanMs = (pr.total ? pr.done / pr.total : 0) * (pair.endDate.getTime() - pair.startDate.getTime());
+    var actualEndDate = new Date(pair.startDate.getTime() + actualSpanMs);
+    var actualBar = el('div', 'gantt-bar gantt-bar-actual');
+    actualBar.style.left = plannedLeft + '%';
+    actualBar.style.width = Math.max(0.5, pctForDate(actualEndDate) - plannedLeft) + '%';
+    actualBar.style.background = statusColors[cls] || '#62748a';
+    track.appendChild(actualBar);
+
+    track.title = p.project_id + ' (' + proc + ')\n' +
+      'Planned: ' + toWeek(pair.startDate) + ' → ' + toWeek(pair.endDate) + '\n' +
+      'Actual progress: ' + pr.pct + '% (' + pr.done + '/' + pr.total + ' gates)\n' +
+      'Open issues: ' + openCount + ' · Comments: ' + commentCount;
+    row.title = track.title;
+    row.appendChild(track);
+
+    row.onclick = function() {
+      var target = firstIncompleteStepOf(p, proc) || stepsOf(proc, p)[0];
+      if (target) openDrawer(p, target, null);
+    };
+    grid.appendChild(row);
+  });
+
+  return wrap;
 }
 
 /* ---- computePortfolioKPIs — shared between the KPI bar and the management
@@ -2234,16 +2453,22 @@ function buildPrintPackage() {
      already set by the dashboard slicers; this mirrors the closure inside
      viewDashboard exactly so the printed report matches the screen. */
   function filteredByProcess(process) {
+    // dashFamFilter et al. are multi-select arrays (see viewDashboard's own
+    // filtering around line 1598, the source of truth for this pattern) -
+    // this closure used to compare them as scalars, which silently returned
+    // zero projects the moment any slicer array existed at all, empty or
+    // not, since even [] is truthy and !== against any string is always
+    // true. Fixed to match viewDashboard's .length/.includes() convention.
     var list = projectsOf(process);
-    var any = dashFamFilter || dashModelFilter || dashStartWeekFilter || dashEndWeekFilter;
+    var any = dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length;
     if (!any) return list;
     return list.filter(function(p) {
-      if (dashFamFilter && p.prod_family !== dashFamFilter) return false;
-      if (dashModelFilter && p.family !== dashModelFilter) return false;
-      if (dashStartWeekFilter) { var sw = toWeek(p.prf_date); if (!sw || sw !== dashStartWeekFilter) return false; }
-      if (dashEndWeekFilter) {
+      if (dashFamFilter.length && !dashFamFilter.includes(p.prod_family)) return false;
+      if (dashModelFilter.length && !dashModelFilter.includes(p.family)) return false;
+      if (dashStartWeekFilter.length) { var sw = toWeek(p.prf_date); if (!sw || !dashStartWeekFilter.includes(sw)) return false; }
+      if (dashEndWeekFilter.length) {
         var ew = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
-        if (!ew || ew !== dashEndWeekFilter) return false;
+        if (!ew || !dashEndWeekFilter.includes(ew)) return false;
       }
       return true;
     });
@@ -2640,6 +2865,10 @@ function openDrawer(project, step, focusDocCode) {
    makeDeleteTaskButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function() { openDrawer(project, step, focusDocCode); })
   ].forEach(function(b) { if (b) stageClaimWrap.appendChild(b); });
   d.appendChild(stageClaimWrap);
+  d.appendChild(makeTargetWeekEditor('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], !!g.approval, function() {
+    openDrawer(project, step, focusDocCode);
+  }));
+  d.appendChild(gateCommentSection(project, sk));
 
   // Shared reopen-in-place callback for anything below that needs to redraw
   // the drawer after a write (gate sign-off, trial quantities, MWER record).
@@ -2918,6 +3147,13 @@ function openDrawer(project, step, focusDocCode) {
        makeRemoveSupporterButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() { openDrawer(project, step, code); }),
        makeDeleteTaskButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() { openDrawer(project, step, code); })
       ].forEach(function(b) { if (b) dz.appendChild(b); });
+      dz.appendChild(el('br'));
+      // Everything reaching this dropzone is by definition still missing or
+      // on-going (never done/filed), so the overdue check just needs "is
+      // there a past-due date at all" — see needsDropzone above.
+      dz.appendChild(makeTargetWeekEditor('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], false, function() {
+        openDrawer(project, step, code);
+      }));
       var dt = docTypeById(code);
       if (dt.template_file && !lockedToOther) {
         var dlBtn = el('a');
@@ -4446,10 +4682,77 @@ function familyFgTree(root, proc, state, onPick) {
 function commentsFor(pid, delId) {
   return (TRK.lb_doc_comments || []).filter(c => c.project_id === pid && c.deliverable_id === delId);
 }
+// Gate-level comments reuse lb_doc_comments with deliverable_id left blank —
+// step_key is what ties them to the gate instead. No schema change needed,
+// the field was already there for exactly this kind of "not tied to one
+// specific document" note.
+function commentsForGate(pid, stepKey) {
+  return (TRK.lb_doc_comments || []).filter(c => c.project_id === pid && c.step_key === stepKey && !c.deliverable_id);
+}
+/* ---- gate-level comment section (Section 4) -----------------------------
+   Same visual/interaction pattern as the deliverable "Notes (N)" thread in
+   evidenceTable, but for the stage gate itself rather than one document —
+   there was previously no comment mechanism at the gate level at all. */
+function gateCommentSection(project, stepKey) {
+  const wrap = el('div', 'gate-comment-section');
+  const notes = commentsForGate(project.project_id, stepKey);
+  const cb = el('button', 'sm', 'Gate Notes (' + notes.length + ')');
+  const noteWrap = el('div');
+  wrap.appendChild(cb);
+  wrap.appendChild(noteWrap);
+
+  cb.onclick = () => {
+    const existing = noteWrap.querySelector('.comment-thread');
+    if (existing) { existing.remove(); cb.textContent = 'Gate Notes (' + notes.length + ')'; return; }
+
+    const thread = el('div', 'comment-thread');
+    if (notes.length) {
+      notes.forEach(c => {
+        const ci = el('div', 'comment-item');
+        ci.innerHTML = '<b>' + esc(c.author) + '</b> <span class="note">' + esc((c.created_utc || '').slice(0, 10)) + '</span><br>' + esc(c.comment);
+        thread.appendChild(ci);
+      });
+    } else {
+      thread.appendChild(el('p', 'note', 'No notes on this gate yet.'));
+    }
+
+    const addWrap = el('div', 'comment-add');
+    const inp = el('input');
+    inp.placeholder = 'Add a note about this gate…';
+    const save = el('button', 'sm primary', 'Save');
+    save.onclick = async () => {
+      const txt = inp.value.trim();
+      if (!txt) return;
+      const who = requireName() || '(unnamed)';
+      save.disabled = true; save.textContent = 'Saving…';
+      try {
+        await API.action('lb_doc_comments', {
+          project_id: project.project_id, deliverable_id: '', doc_code: '',
+          step_key: stepKey, author: who, comment: txt, created_utc: new Date().toISOString()
+        }, { audit: { user: who, action: 'Comment_Gate', projectId: project.project_id, objType: 'Gate', objId: stepKey, from: '', to: '', detail: txt.slice(0, 120) } });
+        const ci = el('div', 'comment-item');
+        ci.innerHTML = '<b>' + esc(who) + '</b> <span class="note">' + esc(new Date().toISOString().slice(0, 10)) + '</span><br>' + esc(txt);
+        thread.insertBefore(ci, addWrap);
+        inp.value = '';
+        notes.push({ author: who, created_utc: new Date().toISOString(), comment: txt });
+        cb.textContent = 'Gate Notes (' + notes.length + ')';
+      } catch (e) {
+        alert('Could not save the note: ' + e.message);
+      }
+      save.disabled = false; save.textContent = 'Save';
+    };
+    addWrap.appendChild(inp);
+    addWrap.appendChild(save);
+    thread.appendChild(addWrap);
+    noteWrap.appendChild(thread);
+    cb.textContent = 'Gate Notes (' + notes.length + ') ▲';
+  };
+  return wrap;
+}
 function cellNoteCount(project, stepKey) {
   if (!TRK.lb_doc_comments || !TRK.lb_doc_comments.length) return 0;
   const dels = (TRK.lb_deliverables || []).filter(d => d.project_id === project.project_id && d.step_key === stepKey);
-  let count = 0;
+  let count = commentsForGate(project.project_id, stepKey).length;
   dels.forEach(d => { count += commentsFor(project.project_id, d.deliverable_id).length; });
   return count;
 }

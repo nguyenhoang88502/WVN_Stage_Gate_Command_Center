@@ -808,7 +808,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
 /* Settings > Document types — grid instead of a long wrapped pill list,
    with rows past the first 8 hidden behind a "Show more" toggle. */
 .taglist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px }
-.taglist-hidden { display: none }
+.taglist-hidden { display: none !important }
 
 /* Document type cards: rectangular, three stacked rows (id+name / template
    picker / stage badge + actions) — replaces the overlapping pill look
@@ -1041,7 +1041,40 @@ select option { color: #14202c; background: #ffffff; }
 }
 .matrix-note-indicator:hover { background: var(--warn); color: #fff }
 
-/* -- matrix issue badge — red chip with count, title lists the issue titles -- */
+/* -- editable target week (drawer) + overdue indicators ------------------ */
+.target-week-editor { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0; flex-wrap: wrap }
+.target-week-editor input[type="week"] { width: 140px; height: 28px; font-size: 12px }
+.target-week-editor input.target-week-overdue { border-color: var(--bad); color: var(--bad) }
+.target-week-badge { margin-left: 2px }
+.matrix-overdue-indicator {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  border-radius: 999px; padding: 1px 6px; margin-left: 3px;
+  white-space: nowrap; vertical-align: middle;
+}
+
+/* -- live Dashboard Gantt (Section 5) — HTML/CSS bars, not the print SVG --
+   grid-template-columns is repeated identically on header + every row so
+   the metadata columns and the week-axis track stay aligned across rows. */
+.gantt-live-wrap { margin-top: var(--s5) }
+.gantt-live-grid { overflow-x: auto }
+.gantt-live-row {
+  display: grid;
+  grid-template-columns: 90px 64px 110px 64px 90px minmax(480px, 1fr);
+  align-items: center; gap: 4px;
+  border-bottom: 1px solid var(--line); padding: 4px 0;
+}
+.gantt-live-row:hover { background: var(--soft) }
+.gantt-live-header { border-bottom: 2px solid var(--line-strong); font-weight: 700; font-size: 11px; color: var(--ink2) }
+.gantt-live-meta-cell { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.gantt-live-track { position: relative; height: 24px }
+.gantt-live-track-header { height: 16px }
+.gantt-week-label { position: absolute; top: 0; font-size: 8.5px; color: var(--muted); transform: translateX(-50%); white-space: nowrap }
+.gantt-bar {
+  position: absolute; top: 4px; height: 10px; border-radius: 3px;
+  min-width: 3px;
+}
+.gantt-bar-planned { background: var(--line-strong); top: 2px; height: 14px; opacity: .55 }
+.gantt-bar-actual { top: 5px; height: 8px }
 .matrix-issue-badge {
   display: inline-block; font-size: 10px; font-weight: 700;
   background: var(--bad2); color: var(--bad);
