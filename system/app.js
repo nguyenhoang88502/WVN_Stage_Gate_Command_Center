@@ -457,6 +457,173 @@ function makeAssignButton(objType, store, row, upsertKeys, onAfterAssign) {
   };
   return btn;
 }
+/* ---- task lifecycle buttons ----------------------------------------------
+   Four small actions wired next to Claim/Assign wherever a task row renders.
+   Each returns a <button>, or null when the action does not apply to this
+   row/viewer, so call sites append them unconditionally. All writes go
+   through the same generic API.action(store, row, { upsertKeys, audit })
+   endpoint used by claim/assign. */
+function makeEditAssignmentButton(objType, store, row, upsertKeys, onAfterEdit) {
+  const currentOwner = row.owner_pic || row.claimed_by || '';
+  const currentSupporter = row.supporter_pic || row.supporter_by || '';
+  if (!isPrivileged() && (!currentOwner || getUser() !== currentOwner)) return null;
+
+  const btn = el('button', 'sm', 'Edit Assignment');
+  btn.style.cssText = 'margin-left:4px';
+  btn.onclick = async () => {
+    const who = requireName(); if (!who) return;
+    const ownerInput = prompt('Edit Owner — enter the new owner\'s name, or clear the field to remove the owner:', currentOwner || '');
+    if (ownerInput === null) return;
+    const newOwner = ownerInput.trim();
+    const supInput = prompt('Edit Supporter — enter the new supporter\'s name, or clear the field to remove the supporter:', currentSupporter || '');
+    if (supInput === null) return;
+    const newSupporter = supInput.trim();
+    btn.disabled = true;
+    try {
+      const now = new Date().toISOString();
+      const rowData = Object.assign({}, row);
+      rowData.owner_pic = newOwner;
+      rowData.claimed_by = newOwner;
+      rowData.supporter_pic = newSupporter;
+      rowData.supporter_by = newSupporter;
+      if (newOwner !== currentOwner) rowData.claimed_utc = newOwner ? now : '';
+      if (newSupporter !== currentSupporter) rowData.supporter_utc = newSupporter ? now : '';
+      if (store === 'lb_gates') {
+        if (!rowData.process) rowData.process = '';
+        if (!rowData.step_num) rowData.step_num = '';
+        if (!rowData.step_name) rowData.step_name = '';
+        if (!rowData.status) rowData.status = 'NotStarted';
+        rowData.updated_utc = now;
+      }
+      await API.action(store, rowData, {
+        upsertKeys: upsertKeys,
+        audit: { user: who, action: objType + '_EditAssignment', projectId: row.project_id, objType: objType,
+          objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+          from: currentOwner + '/' + currentSupporter, to: newOwner + '/' + newSupporter, detail: '' }
+      });
+      await redrawAfterWrite();
+      if (onAfterEdit) onAfterEdit(newOwner, newSupporter);
+    } catch (e) { alert('Edit assignment failed: ' + e.message); }
+    btn.disabled = false;
+  };
+  return btn;
+}
+function makeRemoveOwnerButton(objType, store, row, upsertKeys, onAfterRemove) {
+  const currentOwner = row.owner_pic || row.claimed_by || '';
+  if (!currentOwner) return null;
+  if (!isPrivileged() && getUser() !== currentOwner) return null;
+  const currentSupporter = row.supporter_pic || row.supporter_by || '';
+
+  const btn = el('button', 'sm', 'Remove Owner');
+  btn.style.cssText = 'margin-left:4px';
+  btn.onclick = () => {
+    const who = requireName(); if (!who) return;
+    const promote = !!currentSupporter;
+    confirmModal('Remove Owner',
+      promote
+        ? 'Remove <b>' + esc(currentOwner) + '</b> as owner? <b>' + esc(currentSupporter) + '</b> will be promoted to owner.'
+        : 'Remove <b>' + esc(currentOwner) + '</b> as owner?',
+      'Remove', async () => {
+        btn.disabled = true;
+        try {
+          const now = new Date().toISOString();
+          const rowData = Object.assign({}, row);
+          if (promote) {
+            rowData.owner_pic = currentSupporter;
+            rowData.claimed_by = currentSupporter;
+            rowData.claimed_utc = row.supporter_utc || now;
+            rowData.supporter_pic = '';
+            rowData.supporter_by = '';
+            rowData.supporter_utc = '';
+          } else {
+            rowData.owner_pic = '';
+            rowData.claimed_by = '';
+            rowData.claimed_utc = '';
+          }
+          await API.action(store, rowData, {
+            upsertKeys: upsertKeys,
+            audit: { user: who, action: objType + '_RemoveOwner', projectId: row.project_id, objType: objType,
+              objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+              from: currentOwner, to: currentSupporter, detail: promote ? 'Supporter promoted to owner' : 'Owner removed' }
+          });
+          await redrawAfterWrite();
+          if (onAfterRemove) onAfterRemove();
+        } catch (e) { alert('Remove owner failed: ' + e.message); }
+        btn.disabled = false;
+      });
+  };
+  return btn;
+}
+function makeRemoveSupporterButton(objType, store, row, upsertKeys, onAfterRemove) {
+  const currentOwner = row.owner_pic || row.claimed_by || '';
+  const currentSupporter = row.supporter_pic || row.supporter_by || '';
+  if (!currentSupporter) return null;
+  const me = getUser();
+  if (!isPrivileged() && me !== currentOwner && me !== currentSupporter) return null;
+
+  const btn = el('button', 'sm', 'Remove Supporter');
+  btn.style.cssText = 'margin-left:4px';
+  btn.onclick = () => {
+    const who = requireName(); if (!who) return;
+    confirmModal('Remove Supporter',
+      'Remove <b>' + esc(currentSupporter) + '</b> as supporter?',
+      'Remove', async () => {
+        btn.disabled = true;
+        try {
+          const rowData = Object.assign({}, row);
+          rowData.supporter_pic = '';
+          rowData.supporter_by = '';
+          rowData.supporter_utc = '';
+          await API.action(store, rowData, {
+            upsertKeys: upsertKeys,
+            audit: { user: who, action: objType + '_RemoveSupporter', projectId: row.project_id, objType: objType,
+              objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+              from: currentSupporter, to: '', detail: '' }
+          });
+          await redrawAfterWrite();
+          if (onAfterRemove) onAfterRemove();
+        } catch (e) { alert('Remove supporter failed: ' + e.message); }
+        btn.disabled = false;
+      });
+  };
+  return btn;
+}
+function makeDeleteTaskButton(objType, store, row, upsertKeys, onAfterDelete) {
+  if (store !== 'lb_deliverables' && store !== 'lb_issues') return null;
+  const currentOwner = row.owner_pic || row.claimed_by || '';
+  if (!isPrivileged() && (!currentOwner || getUser() !== currentOwner)) return null;
+
+  const btn = el('button', 'sm danger', 'Delete Task');
+  btn.style.cssText = 'margin-left:4px';
+  btn.onclick = () => {
+    const who = requireName(); if (!who) return;
+    const oldStatus = row.status || '';
+    const newStatus = store === 'lb_issues' ? 'Closed' : 'Removed';
+    confirmModal('Delete Task',
+      'This removes the task from active tracking. It stays in history.<br><br>' +
+      'Status: <b>' + esc(oldStatus || 'not set') + '</b> → <b>' + esc(newStatus) + '</b>',
+      'Delete', async () => {
+        btn.disabled = true;
+        try {
+          const rowData = Object.assign({}, row);
+          rowData.status = newStatus;
+          if (store === 'lb_issues' && rowData.closed_utc !== undefined) {
+            rowData.closed_utc = new Date().toISOString();
+          }
+          await API.action(store, rowData, {
+            upsertKeys: upsertKeys,
+            audit: { user: who, action: objType + '_Delete', projectId: row.project_id, objType: objType,
+              objId: rowData.step_key || rowData.deliverable_id || rowData.sp_id || rowData.raised_utc || '',
+              from: oldStatus, to: newStatus, detail: '' }
+          });
+          await redrawAfterWrite();
+          if (onAfterDelete) onAfterDelete();
+        } catch (e) { alert('Delete task failed: ' + e.message); }
+        btn.disabled = false;
+      });
+  };
+  return btn;
+}
 const projectsOf = proc => TRK.lb_projects.filter(p => p.process === proc);
 const projById = id => TRK.lb_projects.find(p => p.project_id === id);
 const allStepsOf = proc => (proc === 'NPI' ? CFG.npi_workflow.steps : CFG.ecn_workflow.steps);
@@ -2278,6 +2445,13 @@ function openDrawer(project, step, focusDocCode) {
       openDrawer(project, step, focusDocCode);
     }));
   }
+  // Task-lifecycle buttons (Edit Assignment, Remove Owner/Supporter, Delete).
+  // Delete returns null for gates, so it never renders here.
+  [makeEditAssignmentButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function() { openDrawer(project, step, focusDocCode); }),
+   makeRemoveOwnerButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function() { openDrawer(project, step, focusDocCode); }),
+   makeRemoveSupporterButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function() { openDrawer(project, step, focusDocCode); }),
+   makeDeleteTaskButton('Gate', 'lb_gates', gateRow, ['project_id', 'step_key'], function() { openDrawer(project, step, focusDocCode); })
+  ].forEach(function(b) { if (b) stageClaimWrap.appendChild(b); });
   d.appendChild(stageClaimWrap);
 
   // Shared reopen-in-place callback for anything below that needs to redraw
@@ -2549,6 +2723,13 @@ function openDrawer(project, step, focusDocCode) {
           openDrawer(project, step, code);
         }));
       }
+      // Task-lifecycle buttons render in both the locked and unlocked branch
+      // based on each action's own visibility (privileged vs. row owner).
+      [makeEditAssignmentButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() { openDrawer(project, step, code); }),
+       makeRemoveOwnerButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() { openDrawer(project, step, code); }),
+       makeRemoveSupporterButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() { openDrawer(project, step, code); }),
+       makeDeleteTaskButton('Deliverable', 'lb_deliverables', dzRow, ['project_id', 'step_key', 'doc_code'], function() { openDrawer(project, step, code); })
+      ].forEach(function(b) { if (b) dz.appendChild(b); });
       var dt = docTypeById(code);
       if (dt.template_file && !lockedToOther) {
         var dlBtn = el('a');
@@ -2753,6 +2934,11 @@ function openDrawer(project, step, focusDocCode) {
           }
         }));
       }
+      [makeEditAssignmentButton('Issue', 'lb_issues', i, ['issue_id'], function() { openDrawer(project, step, focusDocCode); }),
+       makeRemoveOwnerButton('Issue', 'lb_issues', i, ['issue_id'], function() { openDrawer(project, step, focusDocCode); }),
+       makeRemoveSupporterButton('Issue', 'lb_issues', i, ['issue_id'], function() { openDrawer(project, step, focusDocCode); }),
+       makeDeleteTaskButton('Issue', 'lb_issues', i, ['issue_id'], function() { openDrawer(project, step, focusDocCode); })
+      ].forEach(function(b) { if (b) div.appendChild(b); });
       // An LFI carries a generated LL_info workbook; surface where it landed.
       var lfiPath = vaultPathLine(i.evidence_path, 'LFI report');
       if (lfiPath) div.appendChild(lfiPath);
