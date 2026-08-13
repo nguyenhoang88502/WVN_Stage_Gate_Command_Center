@@ -32,6 +32,10 @@ $ProgressPreference = 'SilentlyContinue'
 # regardless of request order.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
+# Needed by Add-XlsxImageAnchors to read a photo's natural pixel size for its
+# single-cell OpenXML anchor (v8.3) - oneCellAnchor has no from/to cell box to
+# imply a size from, so the real width/height has to come from somewhere.
+Add-Type -AssemblyName System.Drawing
 
 # ============================================================ paths & log ==
 $SystemDir  = $PSScriptRoot
@@ -1113,13 +1117,15 @@ function Set-ZipEntryBytes { param($Archive, [string]$Path, [byte[]]$Bytes)
   $s.Write($Bytes, 0, $Bytes.Length); $s.Close()
 }
 
-# Embeds LFI photos into a worksheet as real drawing objects anchored between
-# two cells, so they scale with the sheet and print with the form instead of
-# living outside the workbook as loose files. $Slots gives one {fromCol,
-# fromRow, toCol, toRow} per image position (0-based, as OpenXML counts them);
-# images past the last slot stack underneath it. LL_info.xlsx ships with NO
-# drawing infrastructure at all - no drawing part, no sheet rels, no image
-# content types - so the whole chain is created here:
+# Embeds LFI photos into a worksheet as real drawing objects, each anchored
+# to a single top-left cell at its own natural size (v8.3) - no stretching
+# or cell-fitting, unlike the two-cell "stretch to this box" anchor this
+# replaced. $Slots gives one {fromCol, fromRow, toCol, toRow} per image
+# position (0-based, as OpenXML counts them); toCol/toRow are no longer used
+# for the anchor box itself (oneCellAnchor has none), only to keep computing
+# where an overflow image (past the last slot) stacks below it. LL_info.xlsx
+# ships with NO drawing infrastructure at all - no drawing part, no sheet
+# rels, no image content types - so the whole chain is created here:
 #   xl/media/*                       the image bytes
 #   xl/drawings/drawing1.xml         the anchors
 #   xl/drawings/_rels/...rels        anchor -> media
@@ -1134,8 +1140,9 @@ function Add-XlsxImageAnchors {
   $anchors = New-Object System.Collections.Generic.List[string]
   $relsList = New-Object System.Collections.Generic.List[string]
   $exts = @{}
-  # Height of the last slot, reused to stack any overflow images beneath the
-  # defined slots rather than dropping them or piling them on one another.
+  # Height of the last slot, reused only to stack any overflow images beneath
+  # the defined slots rather than dropping them or piling them on one another
+  # - the anchor itself no longer has a box to size against.
   $lastSlot = $Slots[$Slots.Count - 1]
   $slotHeight = [int]$lastSlot.toRow - [int]$lastSlot.fromRow
 
@@ -1149,31 +1156,45 @@ function Add-XlsxImageAnchors {
 
     if ($i -lt $Slots.Count) {
       $slot = $Slots[$i]
-      $fromColI = [int]$slot.fromCol; $toColI = [int]$slot.toCol
-      $top = [int]$slot.fromRow; $bottom = [int]$slot.toRow
+      $fromColI = [int]$slot.fromCol
+      $top = [int]$slot.fromRow
     } else {
-      # Overflow: reuse the first slot's columns, one band lower each time.
+      # Overflow: reuse the first slot's column, one band lower each time.
       $slot = $Slots[0]
-      $fromColI = [int]$slot.fromCol; $toColI = [int]$slot.toCol
+      $fromColI = [int]$slot.fromCol
       $overflowIdx = $i - $Slots.Count
       $top = [int]$lastSlot.toRow + 1 + ($overflowIdx * ($slotHeight + 1))
-      $bottom = $top + $slotHeight
     }
+
+    # Natural pixel size -> EMU (914400 EMU/inch over 96 px/inch = 9525
+    # EMU/px, the standard OOXML/Excel assumption) - oneCellAnchor requires
+    # its own explicit <xdr:ext>, there is no from/to box to imply one from,
+    # so this is the one place a real width/height has to come from. Falls
+    # back to a fixed 3in x 2in box if the bytes don't decode as an image
+    # (corrupt upload) rather than aborting the whole XLSX write.
+    $cx = 2743200; $cy = 1828800
+    $ms = New-Object System.IO.MemoryStream(,$img.bytes)
+    try {
+      $bmp = [System.Drawing.Image]::FromStream($ms)
+      try { $cx = [int]([math]::Round($bmp.Width * 9525)); $cy = [int]([math]::Round($bmp.Height * 9525)) }
+      finally { $bmp.Dispose() }
+    } catch { } finally { $ms.Dispose() }
+
     $rid = 'rIdImg' + ($i + 1)
     $anchors.Add(
-      '<xdr:twoCellAnchor editAs="oneCell">' +
+      '<xdr:oneCellAnchor>' +
         '<xdr:from><xdr:col>' + $fromColI + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $top + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>' +
-        '<xdr:to><xdr:col>' + $toColI + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + $bottom + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>' +
+        '<xdr:ext cx="' + $cx + '" cy="' + $cy + '" />' +
         '<xdr:pic>' +
           '<xdr:nvPicPr>' +
             '<xdr:cNvPr id="' + ($i + 2) + '" name="LFI Photo ' + ($i + 1) + '" descr="' + (ConvertTo-XmlSafe $img.name) + '" />' +
             '<xdr:cNvPicPr><a:picLocks noChangeAspect="1" /></xdr:cNvPicPr>' +
           '</xdr:nvPicPr>' +
           '<xdr:blipFill><a:blip r:embed="' + $rid + '" /><a:stretch><a:fillRect /></a:stretch></xdr:blipFill>' +
-          '<xdr:spPr><a:xfrm><a:off x="0" y="0" /><a:ext cx="0" cy="0" /></a:xfrm><a:prstGeom prst="rect"><a:avLst /></a:prstGeom></xdr:spPr>' +
+          '<xdr:spPr><a:xfrm><a:off x="0" y="0" /><a:ext cx="' + $cx + '" cy="' + $cy + '" /></a:xfrm><a:prstGeom prst="rect"><a:avLst /></a:prstGeom></xdr:spPr>' +
         '</xdr:pic>' +
         '<xdr:clientData />' +
-      '</xdr:twoCellAnchor>')
+      '</xdr:oneCellAnchor>')
     $relsList.Add('<Relationship Id="' + $rid + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/' + $mediaName + '" />')
   }
 
@@ -1709,6 +1730,50 @@ try {
           $after = ($registryArray | ForEach-Object { ([string]$_.username) + ':' + ([string]$_.role) }) -join ', '
           Add-Audit -User $actor -Action 'Config_UserRegistry_Update' -ProjectId '' -ObjType 'Config' -ObjId 'user_registry' -From $before -To $after -Detail ''
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; user_registry = $registryArray }
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/verify-pin') {
+        # Gate on the header's admin identity switch (v8.3) — anyone can call
+        # this (there is no admin session yet to check against), it exists
+        # purely to compare the typed PIN. sessionStorage on the client is
+        # what actually remembers the result; this is a convenience gate
+        # against a shared workstation, not a hardened auth boundary.
+        $body = Read-JsonBody -Request $req
+        $cfg = Get-Config
+        $expected = [string]$cfg.admin_pin
+        $given = [string]$body.pin
+        $ok = ($expected -and $given -and $given -eq $expected)
+        if ($ok) { New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true } }
+        else { New-JsonResponse -Response $res -StatusCode 403 -Body @{ ok = $false; error = 'Incorrect PIN.' } }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/change-pin') {
+        # Requires the current PIN, not just admin identity — the header
+        # switch only proves someone picked "admin" from a dropdown and typed
+        # today's PIN; changing the PIN itself asks for that same proof again
+        # rather than trusting the client-side sessionStorage flag alone.
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if ($actor.ToLowerInvariant() -ne 'admin') {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the PIN.' }
+        } else {
+          $cfg = Get-Config
+          $currentPin = [string]$cfg.admin_pin
+          $givenPin = [string]$body.currentPin
+          $newPin = ([string]$body.newPin).Trim()
+          if (-not $newPin -or $newPin.Length -lt 4) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'New PIN must be at least 4 characters.' }
+          } elseif ($currentPin -and $givenPin -ne $currentPin) {
+            New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Current PIN is incorrect.' }
+          } else {
+            if ($cfg.PSObject.Properties.Name -contains 'admin_pin') {
+              $cfg.admin_pin = $newPin
+            } else {
+              Add-Member -InputObject $cfg -NotePropertyName 'admin_pin' -NotePropertyValue $newPin -Force
+            }
+            Save-Config $cfg
+            Add-Audit -User $actor -Action 'Config_AdminPin_Change' -ProjectId '' -ObjType 'Config' -ObjId 'admin_pin' -From '(hidden)' -To '(hidden)' -Detail ''
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true }
+          }
         }
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/vault') {
@@ -2682,10 +2747,13 @@ try {
             $w2.Write($s2xml); $w2.Close()
 
             # ---- attached photos, anchored into the LL INFO form -----------------
-            # The first photo lands in the PROBLEM panel (A16:L47) and the
-            # second in the SOLUTION panel (M16:AA47) - the same two blocks the
-            # description and remediation text are written into above, so a
-            # photo illustrates the wording it sits beside.
+            # The first photo's top-left corner lands at A16 (the PROBLEM
+            # panel) and the second's at M16 (the SOLUTION panel) - the same
+            # two blocks the description and remediation text are written
+            # into above, so a photo illustrates the wording it sits beside.
+            # v8.3: single-cell anchor at natural size, no stretch-to-fit -
+            # toCol/toRow below are kept only so overflow images (a 3rd+
+            # photo, past these two slots) still know how far to stack down.
             if ($decodedImages.Count -gt 0) {
               $lfiSlots = @(
                 @{ fromCol = 0;  fromRow = 15; toCol = 11; toRow = 46 },

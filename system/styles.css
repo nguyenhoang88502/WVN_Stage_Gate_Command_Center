@@ -1286,11 +1286,23 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   font-size: 11.5px;
 }
 .claim-issue-row {
-  display: flex; align-items: center; gap: var(--s2); margin-top: 2px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin-top: 2px;
 }
 .claim-issue-row button {
   height: var(--ctl-h-sm); min-height: var(--ctl-h-sm); font-size: 11px; padding: 0 var(--s2);
 }
+/* -- issue resolution dropzone (v8.3 Section 3) -------------------------- */
+.dz-issue-resolve {
+  flex: 1 0 100%; margin-top: var(--s1);
+  padding: var(--s2) var(--s3); text-align: left; align-items: flex-start;
+  border-color: var(--blue); font-size: 11.5px;
+}
+.dz-issue-resolve:hover { border-color: var(--good); background: var(--good2); color: var(--ink2) }
+
+/* -- Settings: Admin Security PIN card (v8.3 Section 4) ------------------ */
+.admin-pin-card .card-header { border-left: 3px solid var(--bad) }
+.admin-pin-row { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center }
+.admin-pin-row input { height: var(--ctl-h); min-width: 140px; flex: 1 1 140px }
 
 /* custom doc section in drawer */
 .custom-doc-section {

@@ -55,6 +55,12 @@ async function findDrawerWithDzNote(page) {
 test.beforeEach(async ({ page }) => {
   await boot(page);
   await page.locator('#whoSelect').selectOption('admin');
+  // v8.3 Section 4: first switch to admin per browser context prompts a PIN.
+  const pinModal = page.locator('.modal-scrim .modal', { hasText: 'Admin PIN required' });
+  await expect(pinModal).toBeVisible();
+  await pinModal.locator('input[type="password"]').fill('1234');
+  await pinModal.locator('button', { hasText: 'Unlock' }).click();
+  await expect(pinModal).not.toBeVisible();
   // The 15s auto-reload timer would interleave with our manual reloads.
   const autoChk = page.locator('#autoReloadChk');
   if ((await autoChk.count()) && (await autoChk.isChecked())) await autoChk.uncheck();

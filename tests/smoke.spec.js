@@ -16,6 +16,18 @@ async function boot(page) {
   await expect(page.locator('#srvState')).toHaveText('connected', { timeout: 15000 });
 }
 
+// v8.3 Section 4: switching #whoSelect to 'admin' for the first time in a
+// browser context now prompts a PIN modal (sessionStorage-gated, so every
+// fresh Playwright context hits it). PIN is the config.json default.
+async function loginAsAdmin(page) {
+  await page.locator('#whoSelect').selectOption('admin');
+  const pinModal = page.locator('.modal-scrim .modal', { hasText: 'Admin PIN required' });
+  await expect(pinModal).toBeVisible();
+  await pinModal.locator('input[type="password"]').fill('1234');
+  await pinModal.locator('button', { hasText: 'Unlock' }).click();
+  await expect(pinModal).not.toBeVisible();
+}
+
 test.describe('boot and header identity', () => {
   test('app boots clean and the header dropdown lists registered users', async ({ page }) => {
     const errors = trackConsoleErrors(page);
@@ -26,7 +38,7 @@ test.describe('boot and header identity', () => {
     const optionCount = await who.locator('option').count();
     expect(optionCount).toBeGreaterThan(0);
 
-    await who.selectOption('admin');
+    await loginAsAdmin(page);
     await expect(who).toHaveValue('admin');
 
     // localStorage persistence, per spec Section 5.
@@ -40,7 +52,7 @@ test.describe('boot and header identity', () => {
 test.describe('task lifecycle (v6.2)', () => {
   test.beforeEach(async ({ page }) => {
     await boot(page);
-    await page.locator('#whoSelect').selectOption('admin');
+    await loginAsAdmin(page);
   });
 
   async function openFirstNpiProject(page) {

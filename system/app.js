@@ -107,6 +107,8 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
   async importIssues(csv, user) { return API.post('/api/issues/import', { csv, user }); },
   async batchProjects(csv, user) { return API.post('/api/projects/batch', { csv, user }); },
   async openPath(path) { return API.post('/api/open-path', { path }); },
+  async verifyPin(pin) { return API.post('/api/config/verify-pin', { pin }); },
+  async changePin(currentPin, newPin, user) { return API.post('/api/config/change-pin', { currentPin, newPin, user }); },
   async post(path, body) {
     const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) throw await API.err(r);
@@ -121,6 +123,11 @@ let TRK = {};                      // tracking store arrays, keyed by store name
 let PATHS = {};                    // resolved server-side paths (vault, templates, root)
 let TEMPLATES = [];                // blank company forms available for download
 const UK = 'wvn-epm-user';
+// sessionStorage, not localStorage — the admin PIN gate (v8.3 Section 4) is
+// meant to survive a reload within the same tab, but never a closed tab or
+// a fresh one, even though getUser()'s 'admin' value itself persists in
+// localStorage across both.
+const ADMIN_AUTH_KEY = 'wvn_admin_auth';
 function getUser() { try { return localStorage.getItem(UK) || ''; } catch (e) { return ''; } }
 function setUser(v) { try { localStorage.setItem(UK, v); } catch (e) { } }
 function isAdmin() { return (getUser() || '').toLowerCase() === 'admin'; }
@@ -717,6 +724,48 @@ function userRegistrySelectModal(title, fields) {
     document.body.appendChild(scrim);
   });
 }
+/* ---- admin PIN prompt (v8.3 Section 4) ----------------------------------
+   Same scrim/modal/Escape/click-outside pattern as userRegistrySelectModal
+   above, but a single password-masked field instead of <select>s. Resolves
+   the typed PIN string, or null on Cancel/Escape/click-outside. */
+function promptAdminPinModal(title, message) {
+  return new Promise(function(resolve) {
+    const scrim = el('div', 'modal-scrim');
+    const box = el('div', 'modal');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'pinModalTitle');
+    box.innerHTML = '<h2 id="pinModalTitle">' + esc(title) + '</h2>' + (message ? '<p class="note">' + esc(message) + '</p>' : '');
+    const inp = el('input');
+    inp.type = 'password';
+    inp.inputMode = 'numeric';
+    inp.autocomplete = 'off';
+    inp.style.cssText = 'width:100%;margin-top:8px';
+    box.appendChild(inp);
+
+    const errMsg = el('p', 'note', '');
+    errMsg.style.color = 'var(--bad)';
+    box.appendChild(errMsg);
+
+    const acts = el('div', 'acts');
+    const no = el('button', '', 'Cancel');
+    const yes = el('button', 'primary', 'Unlock');
+    const close = () => { scrim.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') { close(); resolve(null); }
+      if (ev.key === 'Enter') { close(); resolve(inp.value); }
+    };
+    no.onclick = () => { close(); resolve(null); };
+    yes.onclick = () => { close(); resolve(inp.value); };
+    acts.appendChild(no); acts.appendChild(yes);
+    box.appendChild(acts);
+    scrim.appendChild(box);
+    scrim.onclick = (ev) => { if (ev.target === scrim) { close(); resolve(null); } };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(scrim);
+    requestAnimationFrame(() => inp.focus());
+  });
+}
 function makeEditAssignmentButton(objType, store, row, upsertKeys, onAfterEdit) {
   const currentOwner = row.owner_pic || row.claimed_by || '';
   const currentSupporter = row.supporter_pic || row.supporter_by || '';
@@ -889,6 +938,75 @@ function makeDeleteTaskButton(objType, store, row, upsertKeys, onAfterDelete) {
       });
   };
   return btn;
+}
+
+/* ---- issue resolution dropzone (v8.3 Section 3) --------------------------
+   A claimed/assigned open issue gets its own upload target: drop or pick a
+   file and the issue closes itself with that file as the evidence, instead
+   of requiring a separate "close this issue" action after filing something
+   elsewhere. Unclaimed issues get no dropzone — same reasoning as the
+   deliverable dropzones (uploadEvidence/dz.onclick above): resolving
+   something nobody has taken ownership of is not a click anyone should be
+   one drag-and-drop away from doing by accident. */
+function issueResolveDropzone(project, onAfterResolve, issueRow) {
+  const currentOwner = issueRow.owner_pic || issueRow.claimed_by || '';
+  if (!currentOwner) return null;
+
+  const dz = el('div', 'dz dz-issue-resolve');
+  dz.innerHTML = '<b>Resolve this issue</b><br><span class="note">Drop resolution evidence or click to browse</span>';
+
+  async function resolveWithFile(file) {
+    const who = requireName(); if (!who) return;
+    const reader = new FileReader();
+    const dataUrl = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const b64 = dataUrl.split(',')[1];
+    try {
+      const up = await API.upload({
+        fileName: file.name, contentBase64: b64, docType: 'ISSUE-RESOLUTION',
+        family: project.family, wvnId: project.family, wnbId: project.customer_number || '',
+        description: 'Issue Resolution', partId: ''
+      });
+      const rowData = Object.assign({}, issueRow);
+      rowData.evidence_path = up.path;
+      rowData.status = 'Closed';
+      rowData.resolution = 'Resolved via uploaded evidence';
+      rowData.closed_utc = new Date().toISOString();
+      await API.action('lb_issues', rowData, {
+        upsertKeys: ['issue_id'],
+        audit: { user: who, action: 'Issue_Resolve', projectId: project.project_id, objType: 'Issue',
+          objId: issueRow.issue_id, from: 'Open', to: 'Closed', detail: up.fileName }
+      });
+      // The ⚠ N badge on matrix cells counts lb_issues rows with
+      // status !== 'Closed' — refreshing TRK before the redraw is what
+      // actually makes it disappear, same as every other write in this file.
+      await refreshSilently();
+      if (onAfterResolve) onAfterResolve();
+    } catch (err) { alert('Could not resolve the issue: ' + err.message); }
+  }
+
+  dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
+  dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
+  dz.ondrop = async e => {
+    e.preventDefault();
+    dz.style.borderColor = ''; dz.style.background = '';
+    const files = e.dataTransfer.files;
+    if (!files.length) return;
+    await resolveWithFile(files[0]);
+  };
+  dz.onclick = (e) => {
+    if (e.target.closest('button, a, input, select, label')) return;
+    const inp = el('input'); inp.type = 'file'; inp.style.display = 'none';
+    inp.onchange = async () => {
+      if (!inp.files[0]) return;
+      await resolveWithFile(inp.files[0]);
+    };
+    document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
+  };
+  return dz;
 }
 const projectsOf = proc => TRK.lb_projects.filter(p => p.process === proc);
 const projById = id => TRK.lb_projects.find(p => p.project_id === id);
@@ -3450,7 +3568,11 @@ function openDrawer(project, step, focusDocCode) {
     iss.forEach(function(i) {
       var div = el('div', 'note claim-issue-row');
       div.innerHTML = '• <b>Issue</b> ' + esc(i.description) + (i.owner ? ' — ' + esc(i.owner) : '');
-      var issueClaimBtn = makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function(who) {});
+      // Unlike its siblings below, makeClaimButton patches the button/badges
+      // in place instead of redrawing — reasonable for most rows, but this
+      // one also needs to reveal issueResolveDropzone() once an owner
+      // exists, and that dropzone is only decided at the initial render.
+      var issueClaimBtn = makeClaimButton('Issue', 'lb_issues', i, ['issue_id'], function() { openDrawer(project, step, focusDocCode); });
       div.appendChild(issueClaimBtn);
       if (isPrivileged()) {
         div.appendChild(makeAssignButton('Issue', 'lb_issues', i, ['issue_id'], function(target, isPrimary, admin) {
@@ -3468,6 +3590,8 @@ function openDrawer(project, step, focusDocCode) {
       // An LFI carries a generated LL_info workbook; surface where it landed.
       var lfiPath = vaultPathLine(i.evidence_path, 'LFI report');
       if (lfiPath) div.appendChild(lfiPath);
+      var resolveDz = issueResolveDropzone(project, function() { openDrawer(project, step, focusDocCode); }, i);
+      if (resolveDz) div.appendChild(resolveDz);
       ul.appendChild(div);
     });
     tks.forEach(k => ul.insertAdjacentHTML('beforeend', '<div class="note">• <b>Ticket ' + esc(k.ticket_id) + '</b> ' + esc(k.title) + ' — ' + esc(k.assigned_dept || 'unassigned') + ' (' + esc(k.status) + ')</div>'));
@@ -5970,6 +6094,44 @@ function viewSettings(root) {
   }
   urp.appendChild(urpBody); root.appendChild(urp);
 
+  /* ---- admin security PIN (v8.3 Section 4) ---- */
+  if (isAdmin()) {
+    const pinp = el('div', 'card admin-pin-card');
+    const pinpHdr = el('div', 'card-header'); pinpHdr.appendChild(el('h3', 'card-title', 'Admin Security PIN')); pinp.appendChild(pinpHdr);
+    const pinpBody = el('div', 'card-body');
+    pinpBody.appendChild(el('p', 'note', 'Required to switch the header identity to admin on a new browser tab. Changing it here requires the current PIN.'));
+
+    const pinRow = el('div', 'admin-pin-row');
+    const curIn = el('input'); curIn.type = 'password'; curIn.placeholder = 'Current PIN'; curIn.autocomplete = 'off';
+    const newIn = el('input'); newIn.type = 'password'; newIn.placeholder = 'New PIN'; newIn.autocomplete = 'off';
+    const pinSaveBtn = el('button', 'primary', 'Change PIN');
+    pinRow.appendChild(curIn); pinRow.appendChild(newIn); pinRow.appendChild(pinSaveBtn);
+    pinpBody.appendChild(pinRow);
+    const pinStatus = el('p', 'note'); pinStatus.style.marginTop = '6px';
+    pinpBody.appendChild(pinStatus);
+
+    pinSaveBtn.onclick = async () => {
+      const who = getUser();
+      pinStatus.textContent = ''; pinStatus.style.color = '';
+      if (!newIn.value || newIn.value.length < 4) {
+        pinStatus.textContent = 'New PIN must be at least 4 characters.'; pinStatus.style.color = 'var(--bad)';
+        return;
+      }
+      pinSaveBtn.disabled = true;
+      try {
+        await API.changePin(curIn.value, newIn.value, who);
+        pinStatus.textContent = 'PIN updated.'; pinStatus.style.color = 'var(--good)';
+        curIn.value = ''; newIn.value = '';
+        await refreshSilently();
+      } catch (e) {
+        pinStatus.textContent = e.message; pinStatus.style.color = 'var(--bad)';
+      }
+      pinSaveBtn.disabled = false;
+    };
+
+    pinp.appendChild(pinpBody); root.appendChild(pinp);
+  }
+
   /* ---- evidence vault location ---- */
   const vp = el('div', 'card');
   const vpHdr = el('div', 'card-header'); vpHdr.appendChild(el('h3', 'card-title', 'Evidence vault location')); vp.appendChild(vpHdr);
@@ -6455,13 +6617,46 @@ function populateWhoSelect() {
     opt.textContent = u.username + ' (' + (u.role || 'user') + ')';
     s.appendChild(opt);
   });
-  const saved = getUser();
+  let saved = getUser();
+  // getUser() persists 'admin' in localStorage across tabs/reloads, but the
+  // PIN gate's sessionStorage flag does not — restoring the select to
+  // 'admin' here without also checking that flag would silently grant admin
+  // identity on a fresh tab with no PIN prompt at all. Fall back to signed-
+  // out instead; the user has to re-pick admin and clear the gate again.
+  if (saved.toLowerCase() === 'admin' && sessionStorage.getItem(ADMIN_AUTH_KEY) !== '1') {
+    saved = '';
+    setUser('');
+  }
   s.value = list.some(function(u) { return u.username === saved; }) ? saved : '';
 }
 
+/* Admin identity is PIN-gated per browser tab (v8.3 Section 4): picking
+   "admin" from the header dropdown for the first time this session prompts
+   for the PIN before the switch takes effect. */
 (function initWho() {
   const who = el('select'); who.id = 'whoSelect';
-  who.onchange = () => setUser(who.value);
+  let lastKnownWho = who.value;
+  who.onchange = async () => {
+    const picked = who.value;
+    if (picked.toLowerCase() !== 'admin' || sessionStorage.getItem(ADMIN_AUTH_KEY) === '1') {
+      lastKnownWho = picked;
+      setUser(picked);
+      return;
+    }
+    // Switching TO admin, not yet authorised this tab — hold the switch
+    // until the PIN checks out.
+    const pin = await promptAdminPinModal('Admin PIN required', 'Enter the admin PIN to switch to the admin identity.');
+    if (pin == null) { who.value = lastKnownWho; return; }
+    try {
+      await API.verifyPin(pin);
+      sessionStorage.setItem(ADMIN_AUTH_KEY, '1');
+      lastKnownWho = picked;
+      setUser(picked);
+    } catch (e) {
+      alert('Incorrect PIN.');
+      who.value = lastKnownWho;
+    }
+  };
   $('#srvState').insertAdjacentElement('afterend', who);
 })();
 
