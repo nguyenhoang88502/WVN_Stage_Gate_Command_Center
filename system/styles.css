@@ -885,7 +885,21 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums }
 .empty-title { font-size: 13.5px; font-weight: 650; color: var(--ink2) }
 .empty p { margin: 0; font-size: 12px; max-width: 46ch; line-height: 1.55 }
 
-.loader { padding: var(--s6); text-align: center; color: var(--muted) }
+.loader {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--s2);
+  background: rgba(238, 242, 247, .7);
+  color: var(--muted); text-align: center;
+}
+html[data-theme="dark"] .loader { background: rgba(13, 21, 31, .7) }
+.loader-ring {
+  width: 36px; height: 36px;
+  border: 3px solid var(--line-strong);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: wvn-spin .8s linear infinite;
+}
 
 /* -- dashboard slicer controls ------------------------------------------- */
 .dashboard-slicers {
