@@ -182,6 +182,23 @@ function wireReloadButton() {
   if (btn) btn.onclick = reloadPreservingState;
 }
 
+/* ---- drag-in-progress guard: skip auto-reload while a drag is active ----
+   Document-level + capture phase so it catches every dropzone (some toggle
+   .on, some .dragover, some inline styles). dragover fires repeatedly while
+   dragging, so the 400ms timer keeps sliding; dragActive only clears once the
+   drag stops — a drop, or the cursor leaving the window with no drop event. */
+let dragActive = false;
+let dragActiveTimer = null;
+document.addEventListener('dragover', function(e) {
+  dragActive = true;
+  clearTimeout(dragActiveTimer);
+  dragActiveTimer = setTimeout(function() { dragActive = false; }, 400);
+}, true);
+document.addEventListener('drop', function() {
+  dragActive = false;
+  clearTimeout(dragActiveTimer);
+}, true);
+
 function captureUiState() {
   var d = $('#drawer');
   return {
@@ -200,7 +217,25 @@ function captureUiState() {
       docCode: drawerContext.docCode
     } : null,
     pageY: window.scrollY,
-    drawerScroll: d ? d.scrollTop : 0
+    drawerScroll: d ? d.scrollTop : 0,
+    // Nth .scroll container before reload = Nth after, because the same view
+    // re-renders the same structure.
+    containerScroll: $$('.scroll').map(function(node, i) {
+      return { index: i, top: node.scrollTop, left: node.scrollLeft };
+    }),
+    // Typed-but-unsubmitted text. Only elements with a non-empty id are kept —
+    // an id is the only safe way to re-find a field after a full re-render.
+    inputsBuffer: $$('input[type=text], input[type=number], textarea')
+      .filter(function(f) { return f.id; })
+      .map(function(f) {
+        return {
+          id: f.id,
+          value: f.value,
+          selectionStart: f.selectionStart,
+          selectionEnd: f.selectionEnd,
+          focused: f === document.activeElement
+        };
+      })
   };
 }
 
@@ -235,11 +270,41 @@ function restoreUiState(state) {
   // time. Re-apply until the value sticks, then stop. Bounded so a genuinely
   // unscrollable drawer (short content) does not spin forever.
   var attempts = 0;
+  var buffersApplied = false;
   (function applyScroll() {
     attempts++;
     window.scrollTo(0, state.pageY);
     var d = $('#drawer');
     if (d) d.scrollTop = state.drawerScroll;
+    // Restore .scroll container positions by index order. Re-applied every
+    // frame for the same reason as the drawer scrollTop above: a container
+    // inside the sliding drawer has no scrollable height for its first few
+    // frames and silently clamps back to 0. Indices that no longer exist
+    // after reload are skipped gracefully.
+    var containers = $$('.scroll');
+    (state.containerScroll || []).forEach(function(c) {
+      var node = containers[c.index];
+      if (node) { node.scrollTop = c.top; node.scrollLeft = c.left; }
+    });
+    // Refill typed-but-unsubmitted text into freshly-rendered empty fields.
+    // Applied once, after show()/openDrawer() have synchronously built the
+    // DOM, and only when the fresh field is empty — never clobber a value the
+    // server data legitimately populated. Only the field that was focused
+    // before the reload gets focus + caret restored.
+    if (!buffersApplied) {
+      buffersApplied = true;
+      (state.inputsBuffer || []).forEach(function(entry) {
+        var target = document.getElementById(entry.id);
+        if (!target || target.value !== '') return;
+        target.value = entry.value;
+        if (entry.focused) {
+          target.focus();
+          try {
+            target.setSelectionRange(entry.selectionStart, entry.selectionEnd);
+          } catch (e) { /* type=number and similar reject selection ranges */ }
+        }
+      });
+    }
     var pageSettled = Math.abs(window.scrollY - state.pageY) < 2;
     var drawerSettled = !d || Math.abs(d.scrollTop - state.drawerScroll) < 2;
     if ((!pageSettled || !drawerSettled) && attempts < 30) requestAnimationFrame(applyScroll);
@@ -267,6 +332,8 @@ function startAutoReload() {
     if (reloadInFlight) return;
     // Skip while a modal is open — .modal-backdrop means user is mid-action
     if (document.querySelector('.modal-backdrop')) return;
+    // Skip while the user is mid-drag-and-drop over a dropzone
+    if (dragActive) return;
     // Skip while the user is typing in a form element
     var el = document.activeElement;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
