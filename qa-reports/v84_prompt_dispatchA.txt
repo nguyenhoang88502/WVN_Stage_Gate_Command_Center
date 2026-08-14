@@ -1,0 +1,152 @@
+You are a DeepSeek Worker implementing Patch 8.4 for the WVN Stage Gate Command Center (vanilla-JS SPA + PowerShell backend). Work ONLY in this file:
+
+  system/app.js
+
+Do not touch any other file. Preserve the existing code style exactly: 2-space indent, single quotes, no semicolon-style changes beyond what's needed, UTF-8 no-BOM.
+
+There are TWO independent bugs to fix in system/app.js. Make MINIMAL, surgical edits — do not rewrite, reformat, or reorganize anything outside the exact lines described below.
+
+============================================================
+BUG 1 — Gate approval "Cancel" triggers auto-approval
+============================================================
+
+Location: function gateActions(project, proc, step, g, redraw), the `ap.onclick`
+handler (the "Approve step N" button), currently reads:
+
+  ap.onclick = async () => {
+    const who = requireName(); if (!who) return;
+    const note = prompt('Comment (optional):', '') || '';
+    await API.action('lb_approvals', {
+      project_id: project.project_id, step_key: sk, deliverable_id: '', approved_by: who, approved_utc: new Date().toISOString(),
+      approval_type: proc === 'NPI' ? 'Evidence-Based' : 'Milestone', evidence_count: g.ev.length, comments: note
+    });
+    await API.action('lb_gates', {
+      project_id: project.project_id, process: proc, step_key: sk, step_num: step.step_id, step_name: step.step_name,
+      status: 'Approved', approved_by: who, approved_utc: new Date().toISOString(),
+      evidence_cited: g.ev.map(x => x.code + '=' + x.ev.level).join('; '), updated_utc: new Date().toISOString()
+    }, { upsertKeys: ['project_id', 'step_key'], audit: { user: who, action: 'Approve_Gate', projectId: project.project_id, objType: 'Gate', objId: sk, from: 'Open', to: 'Approved', detail: note } });
+    await redraw();
+  };
+
+ROOT CAUSE: the browser's native `prompt()` returns `null` when the user clicks
+Cancel (or presses Escape), and returns `''` (empty string) when the user clicks
+OK with an empty textbox. The code does `prompt(...) || ''`, which collapses
+BOTH cases to `''` and then falls straight through into approving the gate
+regardless of whether the user clicked OK or Cancel. Clicking Cancel on this
+prompt currently still signs/approves the gate — that is the bug.
+
+FIX: distinguish `null` (Cancel/Escape) from `''` (OK with no comment typed).
+On Cancel, return immediately WITHOUT calling `API.action('lb_approvals', ...)`
+or `API.action('lb_gates', ...)`, and without calling `redraw()` — leave the
+gate exactly as it was, and leave the button re-clickable (do not disable it,
+do not leave any stray DOM state behind; nothing else in this handler holds
+state across calls so a plain early `return` is sufficient).
+
+Example of the corrected shape (adapt to match the exact surrounding code):
+
+  ap.onclick = async () => {
+    const who = requireName(); if (!who) return;
+    const noteRaw = prompt('Comment (optional):', '');
+    if (noteRaw === null) return; // user clicked Cancel / pressed Escape — abort, do not approve
+    const note = noteRaw;
+    await API.action('lb_approvals', { ... });
+    await API.action('lb_gates', { ... }, { ... });
+    await redraw();
+  };
+
+Keep everything else in the handler (the two API.action calls, their payloads,
+the audit block) byte-for-byte identical — only the Cancel-detection logic
+changes.
+
+============================================================
+BUG 2 — Sidebar dropzone only uploads the first of multiple dropped files
+============================================================
+
+Location: inside the function that builds the per-document sidebar dropzone
+(the block that also builds `naBtn`, right after the `if (!lockedToOther) {`
+guard), there are TWO nearly-identical handlers that each currently process
+only `files[0]` / `inp.files[0]`, and each does a synchronous
+refreshSilently() + full openDrawer() re-render immediately after a single
+upload:
+
+  dz.ondrop = async e => {
+    e.preventDefault();
+    dz.style.borderColor = ''; dz.style.background = '';
+    const files = e.dataTransfer.files;
+    if (!files.length) return;
+    await uploadEvidence(project, sk, code, files[0]);
+    const pageY = window.scrollY;
+    const drawerEl = $('#drawer');
+    const drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+    await refreshSilently();
+    openDrawer(project, step, code);
+    window.scrollTo(0, pageY);
+    const newDrawer = $('#drawer');
+    if (newDrawer) newDrawer.scrollTop = drawerScroll;
+  };
+  dz.onclick = (e) => {
+    if (e.target.closest('button, a, input, select, label, .target-week-editor, .claim-badge, .dz-note-wrap')) return;
+    const inp = el('input'); inp.type = 'file'; inp.style.display = 'none';
+    inp.onchange = async () => {
+      if (!inp.files[0]) return;
+      await uploadEvidence(project, sk, code, inp.files[0]);
+      const pageY = window.scrollY;
+      const drawerEl = $('#drawer');
+      const drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
+      await refreshSilently();
+      openDrawer(project, step, code);
+      window.scrollTo(0, pageY);
+      const newDrawer = $('#drawer');
+      if (newDrawer) newDrawer.scrollTop = drawerScroll;
+    };
+    document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
+  };
+
+BUGS:
+  (a) Only `files[0]` (drop) / `inp.files[0]` (file picker) is ever uploaded.
+      `<input type="file">` here is not `multiple`, so the picker path is
+      inherently single-file (leave that one alone), but the DRAG-AND-DROP
+      path (`dz.ondrop`) receives a real `FileList` that can contain several
+      files at once, and everything past `files[0]` is silently discarded.
+  (b) Every single file upload does its own full `refreshSilently()` +
+      `openDrawer()` teardown/rebuild. For a multi-file drop this means N
+      full sidebar/drawer rebuilds instead of one, which is visibly janky and
+      breaks the "drop several files onto the same dropzone in one go"
+      workflow this patch needs to support smoothly.
+
+FIX for `dz.ondrop` specifically (`dz.onclick`'s single-file `<input>` picker
+does NOT need the loop — leave its own upload call as a single call, but you
+MAY factor the shared post-upload refresh/scroll-restore logic into one local
+helper function used by both, to avoid duplicating it):
+
+  1. Iterate over ALL files in `e.dataTransfer.files` (there is no `multiple`
+     attribute to add — this is a native drag-and-drop FileList, so `for`/
+     `Array.from(files).forEach` etc. all work), calling
+     `await uploadEvidence(project, sk, code, file)` for each one IN SEQUENCE
+     (sequential `await` in a loop, not `Promise.all` — the existing
+     `uploadEvidence` calls `requireName()` and hits the same backend
+     `/api/upload` + `/api/action` endpoints per call; keep them sequential to
+     avoid surprising concurrent-write ordering).
+  2. Do the `refreshSilently()` + scroll-preserving `openDrawer()` re-render
+     exactly ONCE, after the loop finishes uploading every file — not once
+     per file.
+  3. If any individual `uploadEvidence()` call in the loop throws, catch it,
+     `alert('Could not upload ' + file.name + ': ' + err.message)`, and
+     continue on to the next file rather than aborting the whole batch. Still
+     do the single end-of-batch refresh/redraw afterward so whatever files DID
+     succeed show up.
+
+Keep the pageY/drawerScroll capture-and-restore logic exactly as it already
+is (capture before the refresh, restore after `openDrawer()`), just relocate
+it to run once after the loop instead of once per file. Do not change
+`uploadEvidence()` itself, do not add a `multiple` attribute to the hidden
+file `<input>`, and do not touch any other dropzone in the file (e.g. the
+issue-resolution dropzone, template dropzone, batch-import dropzone) — this
+fix is scoped to the per-document evidence dropzone only.
+
+============================================================
+OUTPUT
+============================================================
+Make both edits directly to system/app.js using your file-editing tools.
+When done, print a short plain-text summary of exactly what you changed (which
+functions/handlers, in 2-4 sentences) — no other commentary.

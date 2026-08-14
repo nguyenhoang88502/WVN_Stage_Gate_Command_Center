@@ -1,0 +1,5 @@
+Both edits are complete and verified.
+
+**Bug 1** — in `gateActions` (`ap.onclick`), the `prompt(...) || ''` collapse is replaced with `const noteRaw = prompt(...)` + an early `return` on `noteRaw === null` (Cancel/Escape), so the two `API.action` calls and `redraw()` are skipped on cancel.
+
+**Bug 2** — in the per-document sidebar dropzone, the shared post-upload refresh/scroll-restore logic is factored into a local `afterUpload` helper; `dz.ondrop` now loops all dropped files sequentially, alerting and continuing on per-file errors, and calls `afterUpload()` once after the batch; `dz.onclick`'s single-file `inp.onchange` now reuses the same helper.

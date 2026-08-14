@@ -1,0 +1,9 @@
+Both patches are applied to `system/app.js`.
+
+**What changed:**
+
+1. **`show(id, preserveScroll)`** — added an optional second parameter. When truthy, it skips both the `justPickedTree` scrollIntoView branch and the `window.scrollTo(0, 0)`, leaving scroll position and the `justPickedTree` flag untouched.
+
+2. **`restoreUiState(state)`** — the single line `show(state.tab);` is now `show(state.tab, true);` so background reloads no longer snap the page to the top. All other `show(...)` call sites are unchanged.
+
+3. **`userIsMidAction()` + `reloadPreservingState()` + `startAutoReload()`** — factored the modal/drag/focused-field guard into a shared `userIsMidAction()` helper. `startAutoReload()` calls it before starting a reload, and `reloadPreservingState()` now re-checks it immediately after `await refreshSilently()` resolves, skipping `restoreUiState(state)` if the user began an action mid-flight.

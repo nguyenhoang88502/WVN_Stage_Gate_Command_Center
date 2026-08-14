@@ -1,0 +1,189 @@
+You are a DeepSeek Worker implementing Patch 8.4 for the WVN Stage Gate Command Center (vanilla-JS SPA + PowerShell backend). Work ONLY in this file:
+
+  system/app.js
+
+Do not touch any other file. Preserve the existing code style exactly: 2-space indent, single quotes, UTF-8 no-BOM. Make MINIMAL, surgical edits — do not rewrite, reformat, or reorganize anything outside what's described below.
+
+CONTEXT: the app auto-reloads its data every 15 seconds in the background
+(`startAutoReload()` → `reloadPreservingState()`) so users see live updates
+from other people working the same projects. There is already a
+`captureUiState()` / `restoreUiState()` pair that is supposed to make this
+invisible — it snapshots scroll position, the open drawer, filters, and
+in-progress typed text before the reload, then restores all of it after. Two
+concrete bugs undermine this:
+
+============================================================
+BUG 1 — visible scroll-to-top flash on every background reload
+============================================================
+
+`show(id)` currently ends with:
+
+  function show(id) {
+    current = id; buildTabs();
+    closeDrawer();
+    const v = $('#views'); v.innerHTML = '';
+    const loaderTimer = setTimeout(showLoader, 150);
+    ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
+    clearTimeout(loaderTimer);
+    hideLoader();
+    if (justPickedTree) {
+      justPickedTree = false;
+      requestAnimationFrame(() => {
+        const detail = $('#npiActiveHead') || $('#ecnActiveHead');
+        if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+
+`restoreUiState(state)` calls `show(state.tab)` (see below) and THEN, via a
+bounded `requestAnimationFrame` polling loop later in the same function, does
+`window.scrollTo(0, state.pageY)` to put the page back where the user was.
+
+ROOT CAUSE: `show()`'s own `window.scrollTo(0, 0)` (the `else` branch above)
+runs synchronously and unconditionally, including when `show()` is invoked
+from inside `restoreUiState()` during a background auto-reload. So on every
+15-second reload the page visibly snaps to the top, then a frame or more
+later the rAF loop scrolls it back down to where the user actually was — a
+visible jump/flash that reads as lag or as the app "restarting."
+
+FIX: give `show()` an optional second parameter, e.g. `show(id, preserveScroll)`,
+defaulting to falsy so every existing call site (`show(current)`,
+`b.onclick = () => show(id)` in `buildTabs()`, etc.) is unaffected. When
+`preserveScroll` is truthy, skip BOTH the `justPickedTree` scrollIntoView
+branch AND the `window.scrollTo(0, 0)` — i.e. do not touch scroll position at
+all in that call, and leave `justPickedTree` untouched too (do not clear the
+flag if you skip its branch, so a real tab-switch still gets the intended
+scrollIntoView behavior next time `show()` runs without `preserveScroll`).
+
+  function show(id, preserveScroll) {
+    current = id; buildTabs();
+    closeDrawer();
+    const v = $('#views'); v.innerHTML = '';
+    const loaderTimer = setTimeout(showLoader, 150);
+    ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
+    clearTimeout(loaderTimer);
+    hideLoader();
+    if (preserveScroll) {
+      // caller (restoreUiState) owns scroll restoration for this call
+    } else if (justPickedTree) {
+      justPickedTree = false;
+      requestAnimationFrame(() => {
+        const detail = $('#npiActiveHead') || $('#ecnActiveHead');
+        if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+
+Then in `restoreUiState(state)`, find the line `show(state.tab);` and change it
+to `show(state.tab, true);`. Do not change any other call site of `show(...)`
+anywhere else in the file — every other caller should keep behaving exactly
+as before (scroll-to-top on a real tab switch is correct there).
+
+============================================================
+BUG 2 — background reload can race ahead of a user action mid-flight
+============================================================
+
+`startAutoReload()`'s interval callback already skips starting a reload while
+a modal is open, a drag is in progress, or a form field is focused:
+
+  function startAutoReload() {
+    stopAutoReload();
+    autoReloadId = setInterval(function() {
+      if (reloadInFlight) return;
+      if (document.querySelector('.modal-backdrop, .modal-scrim')) return;
+      if (dragActive) return;
+      var el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
+                 el.contentEditable === 'true' || el.isContentEditable)) return;
+      reloadPreservingState();
+    }, 15000);
+  }
+
+...and `reloadPreservingState()` is:
+
+  async function reloadPreservingState() {
+    if (reloadInFlight) return;
+    var btn = $('#reloadBtn');
+    try {
+      reloadInFlight = true;
+      if (btn) { btn.disabled = true; btn.classList.add('is-busy'); }
+      var state = captureUiState();
+      await refreshSilently();
+      restoreUiState(state);
+    } finally {
+      reloadInFlight = false;
+      if (btn) { btn.disabled = false; btn.classList.remove('is-busy'); }
+    }
+  }
+
+ROOT CAUSE: those guards are only checked once, at the moment the 15-second
+timer fires — BEFORE `await refreshSilently()` (a real network round-trip to
+the local server) resolves. If the user opens a modal, starts dragging a file
+onto a dropzone, or clicks into a text field WHILE that fetch is in flight,
+`restoreUiState(state)` still runs unconditionally afterward using the
+snapshot captured before any of that started — tearing down and rebuilding
+the view (including the now-open modal's surrounding DOM, or interrupting the
+in-progress drag) out from under the user.
+
+FIX: re-check the exact same three conditions (modal open, drag active,
+focused form-field-like element) again immediately after
+`await refreshSilently()` resolves, right before calling `restoreUiState(state)`.
+If any of them is now true, skip `restoreUiState(state)` entirely for this
+cycle (the freshly-fetched CFG/TRK data silently stays in memory — harmless,
+since nothing was rendered from it — and the next 15-second cycle will pick
+up whatever is current then). Factor the three-condition check into a small
+shared helper so `startAutoReload()`'s interval callback and
+`reloadPreservingState()` both call the same logic instead of duplicating it,
+e.g.:
+
+  function userIsMidAction() {
+    if (document.querySelector('.modal-backdrop, .modal-scrim')) return true;
+    if (dragActive) return true;
+    var el = document.activeElement;
+    return !!(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
+               el.contentEditable === 'true' || el.isContentEditable));
+  }
+
+  function startAutoReload() {
+    stopAutoReload();
+    autoReloadId = setInterval(function() {
+      if (reloadInFlight) return;
+      if (userIsMidAction()) return;
+      reloadPreservingState();
+    }, 15000);
+  }
+
+  async function reloadPreservingState() {
+    if (reloadInFlight) return;
+    var btn = $('#reloadBtn');
+    try {
+      reloadInFlight = true;
+      if (btn) { btn.disabled = true; btn.classList.add('is-busy'); }
+      var state = captureUiState();
+      await refreshSilently();
+      if (userIsMidAction()) return;
+      restoreUiState(state);
+    } finally {
+      reloadInFlight = false;
+      if (btn) { btn.disabled = false; btn.classList.remove('is-busy'); }
+    }
+  }
+
+Do NOT change `captureUiState()` or `restoreUiState()`'s internal logic beyond
+the single `show(state.tab);` → `show(state.tab, true);` edit from BUG 1 —
+their scroll/drawer/filter/inputsBuffer snapshot-and-restore behavior is
+already correct and should not be touched otherwise. Do not change the
+manual "Reload" button's behavior (`wireReloadButton()` calling
+`reloadPreservingState()` directly is fine as-is and benefits from the same
+`userIsMidAction()` re-check automatically once it's added).
+
+============================================================
+OUTPUT
+============================================================
+Make both edits directly to system/app.js using your file-editing tools.
+When done, print a short plain-text summary of exactly what you changed (which
+functions, in 2-4 sentences) — no other commentary.

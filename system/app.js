@@ -179,7 +179,7 @@ function buildTabs() {
   const n = $('#tabs'); n.innerHTML = '';
   TABS.forEach(([id, label]) => { const b = el('button', id === current ? 'on' : '', label); b.onclick = () => show(id); n.appendChild(b); });
 }
-function show(id) {
+function show(id, preserveScroll) {
   current = id; buildTabs();
   closeDrawer();
   const v = $('#views'); v.innerHTML = '';
@@ -189,7 +189,9 @@ function show(id) {
   ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
   clearTimeout(loaderTimer);
   hideLoader();
-  if (justPickedTree) {
+  if (preserveScroll) {
+    // caller (restoreUiState) owns scroll restoration for this call
+  } else if (justPickedTree) {
     justPickedTree = false;
     requestAnimationFrame(() => {
       const detail = $('#npiActiveHead') || $('#ecnActiveHead');
@@ -278,7 +280,7 @@ function restoreUiState(state) {
   dashModelFilter = state.dashModelFilter;
   dashStartWeekFilter = state.dashStartWeekFilter;
   dashEndWeekFilter = state.dashEndWeekFilter;
-  show(state.tab);
+  show(state.tab, true);
   if (state.drawer) {
     var project = projById(state.drawer.projectId);
     if (project) {
@@ -349,6 +351,7 @@ async function reloadPreservingState() {
     if (btn) { btn.disabled = true; btn.classList.add('is-busy'); }
     var state = captureUiState();
     await refreshSilently();
+    if (userIsMidAction()) return;
     restoreUiState(state);
   } finally {
     reloadInFlight = false;
@@ -356,18 +359,19 @@ async function reloadPreservingState() {
   }
 }
 
+function userIsMidAction() {
+  if (document.querySelector('.modal-backdrop, .modal-scrim')) return true;
+  if (dragActive) return true;
+  var el = document.activeElement;
+  return !!(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
+             el.contentEditable === 'true' || el.isContentEditable));
+}
+
 function startAutoReload() {
   stopAutoReload();
   autoReloadId = setInterval(function() {
     if (reloadInFlight) return;
-    // Skip while a modal is open — .modal-backdrop means user is mid-action
-    if (document.querySelector('.modal-backdrop, .modal-scrim')) return;
-    // Skip while the user is mid-drag-and-drop over a dropzone
-    if (dragActive) return;
-    // Skip while the user is typing in a form element
-    var el = document.activeElement;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
-               el.contentEditable === 'true' || el.isContentEditable)) return;
+    if (userIsMidAction()) return;
     reloadPreservingState();
   }, 15000);
 }
@@ -3409,12 +3413,7 @@ function openDrawer(project, step, focusDocCode) {
       if (!lockedToOther) {
       dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
       dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
-      dz.ondrop = async e => {
-        e.preventDefault();
-        dz.style.borderColor = ''; dz.style.background = '';
-        const files = e.dataTransfer.files;
-        if (!files.length) return;
-        await uploadEvidence(project, sk, code, files[0]);
+      const afterUpload = async () => {
         const pageY = window.scrollY;
         const drawerEl = $('#drawer');
         const drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
@@ -3423,6 +3422,20 @@ function openDrawer(project, step, focusDocCode) {
         window.scrollTo(0, pageY);
         const newDrawer = $('#drawer');
         if (newDrawer) newDrawer.scrollTop = drawerScroll;
+      };
+      dz.ondrop = async e => {
+        e.preventDefault();
+        dz.style.borderColor = ''; dz.style.background = '';
+        const files = e.dataTransfer.files;
+        if (!files.length) return;
+        for (const file of files) {
+          try {
+            await uploadEvidence(project, sk, code, file);
+          } catch (err) {
+            alert('Could not upload ' + file.name + ': ' + err.message);
+          }
+        }
+        await afterUpload();
       };
       dz.onclick = (e) => {
         // Any interactive control inside the dropzone (buttons, the template
@@ -3437,14 +3450,7 @@ function openDrawer(project, step, focusDocCode) {
         inp.onchange = async () => {
           if (!inp.files[0]) return;
           await uploadEvidence(project, sk, code, inp.files[0]);
-          const pageY = window.scrollY;
-          const drawerEl = $('#drawer');
-          const drawerScroll = drawerEl ? drawerEl.scrollTop : 0;
-          await refreshSilently();
-          openDrawer(project, step, code);
-          window.scrollTo(0, pageY);
-          const newDrawer = $('#drawer');
-          if (newDrawer) newDrawer.scrollTop = drawerScroll;
+          await afterUpload();
         };
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
@@ -5186,7 +5192,9 @@ function gateActions(project, proc, step, g, redraw) {
         : 'blocking issue open';
       ap.onclick = async () => {
         const who = requireName(); if (!who) return;
-        const note = prompt('Comment (optional):', '') || '';
+        const noteRaw = prompt('Comment (optional):', '');
+        if (noteRaw === null) return; // user clicked Cancel / pressed Escape — abort, do not approve
+        const note = noteRaw;
         await API.action('lb_approvals', {
           project_id: project.project_id, step_key: sk, deliverable_id: '', approved_by: who, approved_utc: new Date().toISOString(),
           approval_type: proc === 'NPI' ? 'Evidence-Based' : 'Milestone', evidence_count: g.ev.length, comments: note
