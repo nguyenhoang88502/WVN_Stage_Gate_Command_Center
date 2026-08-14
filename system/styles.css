@@ -267,7 +267,10 @@ code {
   padding-inline: var(--s4);
 }
 
-.page-body { padding: var(--s4); padding-bottom: 60px }
+/* v9.2.1: tightened top spacing. The topbar already separates chrome from
+   content, so a full --s4 above the page header just pushed the first card
+   below the fold on a 1080p screen. */
+.page-body { padding: var(--s2) var(--s4) 48px }
 
 .topbar-title { font-size: 14px; font-weight: 600; color: var(--ink) }
 .cmdbar { display: flex; align-items: center; gap: var(--s2); margin-left: auto }
@@ -302,12 +305,39 @@ code {
 /* Page header band — app.js emits the markup */
 .page-header {
   display: flex; align-items: flex-start; gap: var(--s3);
-  margin-bottom: var(--s4); padding-bottom: var(--s3);
+  margin-bottom: var(--s2); padding-bottom: var(--s2);
   border-bottom: 1px solid var(--line);
 }
 .page-header-title { font-size: 19px; font-weight: 650; margin: 0; color: var(--ink); line-height: 1.25 }
 .page-header-sub { font-size: 12px; color: var(--muted); margin-top: 2px }
 .page-header-actions { margin-left: auto; display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap }
+
+/* Collapsible section header (v9.2.1) — the whole bar is the hit target, so
+   it reads as one control rather than a title with a small chevron beside it. */
+.section-toggle {
+  display: flex; align-items: center; gap: var(--s2);
+  width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: none;
+  padding: var(--s2) 0; margin: 0;
+  color: var(--ink);
+}
+.section-toggle:hover { color: var(--blue) }
+.section-toggle h3 { margin: 0; font-size: 13px; font-weight: 700 }
+.section-toggle .icon { flex: none; color: var(--muted) }
+.section-toggle:hover .icon { color: var(--blue) }
+
+/* Language switch (v9.2.1) — the inactive half is dimmed rather than hidden
+   so the button always shows both options and reads as a switch, not a label. */
+.lang-toggle {
+  height: var(--ctl-h-sm);
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--soft); color: var(--ink2);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  font-size: 11.5px; letter-spacing: .02em; cursor: pointer;
+  padding: 0 var(--s2);
+}
+.lang-toggle:hover { background: var(--grey2); color: var(--ink) }
+.lang-toggle .lang-dim { opacity: .45; font-weight: 400 }
 
 .banner {
   background: var(--blue2);
@@ -648,6 +678,15 @@ button.claimed-btn:hover:not(:disabled) {
 .acts { display: flex; gap: var(--s2); justify-content: flex-end; margin-top: var(--s4); flex-wrap: wrap }
 
 /* == 12. TABLES AND MATRICES ============================================= */
+/* Change / project types (v9.2.1): eight columns of editable inputs. The
+   inputs used to carry fixed pixel widths, which meant collapsing the sidebar
+   rail left the table stranded at its old width while expanding it pushed the
+   trailing columns past the card edge. Widths are fluid now and the wrapper
+   owns the horizontal scroll, so the card holds its margins in either rail
+   state; min-width keeps the columns legible instead of crushing them. */
+.change-types-scroll { width: 100%; overflow-x: auto; box-sizing: border-box }
+.change-types-scroll table { width: 100%; min-width: 720px }
+.change-types-scroll input[data-ct] { width: 100%; min-width: 0; box-sizing: border-box }
 table { border-collapse: collapse; width: 100%; font-size: 12.2px }
 th, td {
   text-align: left; padding: 6px 10px;

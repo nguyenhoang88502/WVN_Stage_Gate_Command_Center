@@ -16,6 +16,10 @@ const TEST_PNG = Buffer.from(
    already covered by tests/v81.spec.js and are not duplicated. */
 
 async function boot(page) {
+  /* v9.2.1: the app defaults to Vietnamese. Every #tabs button selector in
+     this suite matches English labels, so pin the language before the app
+     boots rather than making each assertion locale-aware. */
+  await page.addInitScript(() => { try { localStorage.setItem('wvn_lang', 'en'); } catch (e) { } });
   await page.goto('/');
   await expect(page.locator('#srvState')).toHaveText('connected', { timeout: 15000 });
 }

@@ -2,6 +2,10 @@
 const { test, expect } = require('@playwright/test');
 
 async function boot(page) {
+  /* v9.2.1: the app defaults to Vietnamese. Every #tabs button selector in
+     this suite matches English labels, so pin the language before the app
+     boots rather than making each assertion locale-aware. */
+  await page.addInitScript(() => { try { localStorage.setItem('wvn_lang', 'en'); } catch (e) { } });
   await page.goto('/');
   await expect(page.locator('#srvState')).toHaveText('connected', { timeout: 15000 });
   await page.locator('#whoSelect').selectOption('admin');

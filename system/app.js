@@ -21,6 +21,76 @@ function iconHtml(name, cls) {
     '<use href="#i-' + name + '"/></svg>';
 }
 
+/* ---- i18n (v9.2.1) -------------------------------------------------------
+   The floor team works in Vietnamese, so 'vi' is the default. Deliberately a
+   flat key→string dictionary rather than a library: the app is air-gapped and
+   vendoring an i18n runtime for ~40 operational terms would cost more than it
+   returns. Only shell chrome and status vocabulary are translated — project
+   ids, document codes, personnel names and vault paths are data and stay
+   verbatim in both languages.
+
+   i18n(key) returns the active language's string, falling back to English and
+   then to the key itself, so a missing entry degrades to readable text rather
+   than blank UI. */
+const LANG_KEY = 'wvn_lang';
+const LOCALES = {
+  en: {
+    dashboard: 'Dashboard', claimed: 'Claimed Work', input: 'Input',
+    npi: 'NPI · 7 steps', ecn: 'ECN · 12 steps + PPAP', settings: 'Settings',
+
+    dashboardTitle: 'Executive Dashboard',
+    dashboardSub: 'Portfolio health, stage matrix and schedule',
+    claimedTitle: 'Claimed Work', claimedSub: 'Tasks claimed by or assigned to a person',
+    inputTitle: 'Data Input', inputSub: 'Register projects and file evidence',
+    npiTitle: 'NPI Projects', npiSub: '7-step new product introduction workflow',
+    ecnTitle: 'ECN Projects', ecnSub: '12-step engineering change workflow + PPAP',
+    settingsTitle: 'Settings', settingsSub: 'Master data, personnel and system configuration',
+
+    npiStageCompletion: 'NPI Stage Completion',
+    startWeek: 'Start Week', targetWeek: 'Target Week', today: 'Today',
+    progress: 'Progress',
+
+    COMPLETE: 'Complete', IN_PROGRESS: 'In Progress', NOT_STARTED: 'Not Started',
+    BYPASSED: 'Bypassed', LATE: 'Late',
+
+    save: 'Save', close: 'Close', del: 'Delete', approve: 'Approve',
+    claimTask: 'Claim Task', assignTask: 'Assign Task',
+    openInExplorer: 'Open in Explorer', cancel: 'Cancel',
+  },
+  vi: {
+    dashboard: 'Bảng điều khiển', claimed: 'Công việc đã nhận', input: 'Nhập liệu',
+    npi: 'Quy trình NPI · 7 bước', ecn: 'Quy trình ECN · 12 bước + PPAP', settings: 'Cài đặt',
+
+    dashboardTitle: 'Bảng điều khiển tổng hợp',
+    dashboardSub: 'Tình trạng dự án, ma trận giai đoạn và tiến độ',
+    claimedTitle: 'Công việc đã nhận', claimedSub: 'Công việc đã nhận hoặc được giao cho từng người',
+    inputTitle: 'Nhập liệu', inputSub: 'Đăng ký dự án và nộp hồ sơ',
+    npiTitle: 'Dự án NPI', npiSub: 'Quy trình giới thiệu sản phẩm mới 7 bước',
+    ecnTitle: 'Dự án ECN', ecnSub: 'Quy trình thay đổi kỹ thuật 12 bước + PPAP',
+    settingsTitle: 'Cài đặt', settingsSub: 'Dữ liệu gốc, nhân sự và cấu hình hệ thống',
+
+    npiStageCompletion: 'Sơ đồ giai đoạn NPI',
+    startWeek: 'Tuần bắt đầu', targetWeek: 'Tuần mục tiêu', today: 'Hôm nay',
+    progress: 'Tiến độ',
+
+    COMPLETE: 'Hoàn thành', IN_PROGRESS: 'Đang thực hiện', NOT_STARTED: 'Chưa bắt đầu',
+    BYPASSED: 'Bỏ qua', LATE: 'Trễ hạn',
+
+    save: 'Lưu', close: 'Đóng', del: 'Xóa', approve: 'Phê duyệt',
+    claimTask: 'Nhận việc', assignTask: 'Giao việc',
+    openInExplorer: 'Mở trong thư mục', cancel: 'Hủy',
+  },
+};
+function getLang() {
+  try { return localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'vi'; } catch (e) { return 'vi'; }
+}
+function setLang(v) { try { localStorage.setItem(LANG_KEY, v); } catch (e) { } }
+function i18n(key) {
+  const L = LOCALES[getLang()] || LOCALES.en;
+  if (L[key] != null) return L[key];
+  return LOCALES.en[key] != null ? LOCALES.en[key] : key;
+}
+
 function showLoader() {
   let l = document.getElementById('globalLoader');
   if (!l) {
@@ -188,6 +258,27 @@ async function boot() {
         try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) { }
       };
     })();
+    /* Language toggle (v9.2.1). Re-renders through show(current, true) rather
+       than reloading: preserveScroll keeps the user where they were, and the
+       whole view is rebuilt from i18n() anyway, so the new language appears
+       without losing the active tab or scroll position. */
+    (function wireLangToggle() {
+      const btn = $('#langToggleBtn'); if (!btn) return;
+      const paint = () => {
+        const lang = getLang();
+        btn.innerHTML = lang === 'vi'
+          ? '<b>VI</b> <span class="lang-dim">| EN</span>'
+          : '<span class="lang-dim">VI |</span> <b>EN</b>';
+        btn.setAttribute('aria-label', lang === 'vi' ? 'Đang dùng tiếng Việt' : 'English active');
+        document.documentElement.setAttribute('lang', lang);
+      };
+      paint();
+      btn.onclick = () => {
+        setLang(getLang() === 'vi' ? 'en' : 'vi');
+        paint();
+        show(current, true);
+      };
+    })();
     // Auto-reload checkbox — read persisted state, start timer if it was enabled
     (function() {
       var chk = $('#autoReloadChk'); if (!chk) return;
@@ -205,12 +296,16 @@ async function boot() {
   }
 }
 
-const TABS = [['dash', 'Dashboard', 'layout-dashboard'], ['claimed', 'Claimed Work', 'checklist'], ['input', 'Input', 'file-import'], ['npi', 'NPI · 7 steps', 'rocket'], ['ecn', 'ECN · 12 steps + PPAP', 'git-branch'],
-              ['settings', 'Settings', 'settings']];
+/* [viewId, i18n key, icon]. The label is resolved through i18n() at render
+   time so switching language re-labels the rail without a reload. */
+const TABS = [['dash', 'dashboard', 'layout-dashboard'], ['claimed', 'claimed', 'checklist'],
+              ['input', 'input', 'file-import'], ['npi', 'npi', 'rocket'],
+              ['ecn', 'ecn', 'git-branch'], ['settings', 'settings', 'settings']];
 let current = 'dash';
 function buildTabs() {
   const n = $('#tabs'); n.innerHTML = '';
-  TABS.forEach(([id, label, iconName]) => {
+  TABS.forEach(([id, labelKey, iconName]) => {
+    const label = i18n(labelKey);
     const b = el('button', id === current ? 'on' : '');
     b.type = 'button';
     b.title = label;
@@ -223,7 +318,11 @@ function buildTabs() {
 function show(id, preserveScroll) {
   current = id; buildTabs();
   const pt = $('#pageTitle');
-  if (pt) pt.textContent = (TABS.find(t => t[0] === id) || [null, ''])[1];
+  // NB: the find callback is `tab`, not `t` — `t` is the translator and a
+  // NB: the find callback is `tab`, not `t` — a bare `t` here would read as
+  // the old translator name and invites re-introducing the shadowing bug.
+  const activeTab = TABS.find(tab => tab[0] === id);
+  if (pt) pt.textContent = activeTab ? i18n(activeTab[1]) : '';
   closeDrawer();
   const v = $('#views'); v.innerHTML = '';
   // Reveal the loader only if the view build exceeds ~150ms — near-instant
@@ -310,6 +409,7 @@ function captureUiState() {
     ecnSel: ecnSel,
     ecnMode: ecnMode,
     dashMatrixOpen: dashMatrixOpen,
+    npiStageOpen: npiStageOpen,
     dashFamFilter: dashFamFilter.slice(),
     dashModelFilter: dashModelFilter.slice(),
     dashStartWeekFilter: dashStartWeekFilter.slice(),
@@ -347,6 +447,7 @@ function restoreUiState(state) {
   ecnSel = state.ecnSel;
   ecnMode = state.ecnMode;
   dashMatrixOpen = state.dashMatrixOpen;
+  npiStageOpen = state.npiStageOpen;
   dashFamFilter = state.dashFamFilter;
   dashModelFilter = state.dashModelFilter;
   dashStartWeekFilter = state.dashStartWeekFilter;
@@ -1734,7 +1835,7 @@ function groupCellStateFor(project, group) {
 }
 
 function viewDashboard(root) {
-  root.appendChild(pageHeader('Executive Dashboard', 'Portfolio health, stage matrix and schedule'));
+  root.appendChild(pageHeader(i18n('dashboardTitle'), i18n('dashboardSub')));
   const b = el('div', 'banner');
   b.innerHTML = '<b>Executive summary.</b> Gate completion by process step and product family, with click-through to the full project detail.';
   root.appendChild(b);
@@ -2385,13 +2486,29 @@ function viewDashboard(root) {
       renderDashboardNpiMatrix();
       renderDashboardEcnMatrix();
 
-      // Rebuild stage cards
+      // Rebuild stage cards — collapsed by default (v9.2.1). The whole header
+      // is the hit target, not just the chevron, so it behaves like the step
+      // cards elsewhere in the app.
       wrap.innerHTML = '';
-      const h3 = el('h3', null, 'NPI Stage Completion');
-      wrap.appendChild(h3);
+      const head = el('button', 'section-toggle');
+      head.type = 'button';
+      head.setAttribute('aria-expanded', npiStageOpen ? 'true' : 'false');
       const cardHost = el('div', 'stage-grid'); cardHost.id = 'npiStageCards';
+      cardHost.id = 'npiStageCards';
+
+      function paintHead() {
+        head.innerHTML = '';
+        head.appendChild(icon(npiStageOpen ? 'chevron-down' : 'chevron-right'));
+        head.appendChild(el('h3', null, i18n('npiStageCompletion')));
+        head.setAttribute('aria-expanded', npiStageOpen ? 'true' : 'false');
+        cardHost.className = npiStageOpen ? 'stage-grid' : 'stage-grid hide';
+      }
+      head.onclick = () => { npiStageOpen = !npiStageOpen; paintHead(); };
+
+      wrap.appendChild(head);
       renderCards(cardHost);
       wrap.appendChild(cardHost);
+      paintHead();
     }
 
     dashRenderAll = renderAll;
@@ -3070,6 +3187,20 @@ function _buildSvgGantt(projects) {
     /* Project label on the left */
     svg += '<text x="' + (leftMargin - 6) + '" y="' + (y + barH - 2) + '" text-anchor="end" font-size="7.5" fill="#14202c" font-weight="600">' + esc(pair.project.project_id) + '</text>';
   });
+
+  /* Current-week marker (v9.2.1) — drawn last so it sits above the bars, and
+     only when today actually falls inside the charted span; a project set
+     entirely in the past or future would otherwise pin the line to an edge
+     and imply a date the chart does not cover. Matches the live Gantt's
+     --today-line red so the printed page and the screen agree. */
+  var todayT = new Date().getTime();
+  if (todayT >= minT && todayT <= maxT) {
+    var xToday = xForDate(new Date());
+    svg += '<line x1="' + xToday + '" y1="' + (topMargin - 6) + '" x2="' + xToday + '" y2="' + (totalH - 4) +
+      '" stroke="#ff0000" stroke-width="2.5" stroke-linecap="round"/>';
+    svg += '<text x="' + xToday + '" y="' + (topMargin - 8) + '" text-anchor="middle" font-size="7.5" fill="#ff0000" font-weight="700">' +
+      esc(i18n('today') + ' (' + nowWeek() + ')') + '</text>';
+  }
 
   svg += '</svg>';
   return svg;
@@ -3781,7 +3912,7 @@ var PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 var claimedUserSel = '';
 
 function viewClaimed(root) {
-  root.appendChild(pageHeader('Claimed Work', 'Tasks claimed by or assigned to a person'));
+  root.appendChild(pageHeader(i18n('claimedTitle'), i18n('claimedSub')));
   var who = getUser();
   var b = el('div', 'banner');
   if (!who) {
@@ -4046,7 +4177,7 @@ function viewClaimed(root) {
 /* TAB — INPUT                                                           */
 /* ===================================================================== */
 function viewInput(root) {
-  root.appendChild(pageHeader('Data Input', 'Register projects and file evidence'));
+  root.appendChild(pageHeader(i18n('inputTitle'), i18n('inputSub')));
   const b = el('div', 'banner');
   b.innerHTML = '<b>What this tool is.</b> It tracks the NPI and ECN stage-gate workflow defined in ' +
     esc(CFG.system_info.compiled_from.slice(0, 2).join(' and ')) + ' so a team can see whether a project is really ready ' +
@@ -4712,6 +4843,11 @@ function viewInput(root) {
 /* ===================================================================== */
 let justPickedTree = false;
 let dashMatrixOpen = true;
+// v9.2.1: the stage-completion grid is a drill-down, not a landing view — it
+// pushed the Gantt and Work Matrix below the fold on every load. Collapsed by
+// default; the flag lives at module scope so the choice survives the filter
+// re-renders inside viewDashboard and the 15s auto-reload.
+let npiStageOpen = false;
 let dashFamFilter = [];
 let dashModelFilter = [];
 let dashStartWeekFilter = [];
@@ -5426,10 +5562,17 @@ function gateActions(project, proc, step, g, redraw) {
     const ownerSel = el('select'); ownerSel.style.cssText = 'width:100%';
     const registry = (CFG && CFG.user_registry) || [];
     const blankOpt = el('option', null, '(none)'); blankOpt.value = ''; ownerSel.appendChild(blankOpt);
+    // v9.2.1: whoever spotted the problem owns it until it is handed over.
+    // Leaving this blank produced unowned issues nobody was accountable for;
+    // the dropdown is still free to reassign to anyone in the registry.
     registry.forEach(function(u) {
       const o = el('option', null, u.username + (u.role ? ' (' + u.role + ')' : '')); o.value = u.username;
       ownerSel.appendChild(o);
     });
+    // Pre-select the raiser. Only if they are actually in the registry —
+    // requireName() can return '(unnamed)', and forcing that into the value
+    // would silently select nothing and look like a rendering bug.
+    if (registry.some(function(u) { return u.username === who; })) ownerSel.value = who;
     ownerWrap.appendChild(ownerSel); body.appendChild(ownerWrap);
 
     const dueWrap = fld('Due date (optional)');
@@ -5639,7 +5782,7 @@ function projectListRow(project, proc) {
 }
 
 function viewNpi(root) {
-  root.appendChild(pageHeader('NPI Projects', '7-step new product introduction workflow'));
+  root.appendChild(pageHeader(i18n('npiTitle'), i18n('npiSub')));
   const b = el('div', 'banner');
   b.innerHTML = '<b>NPI gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
     'and a named person signs. Click a project to open its detail — gate approval, filing, and Authorise bypass all live in that sidebar now.';
@@ -5704,7 +5847,7 @@ function scopeNote(project, proc) {
 /* TAB — ECN (12 steps, lighter gates) + PPAP sub-section                */
 /* ===================================================================== */
 function viewEcn(root) {
-  root.appendChild(pageHeader('ECN Projects', '12-step engineering change workflow + PPAP'));
+  root.appendChild(pageHeader(i18n('ecnTitle'), i18n('ecnSub')));
   const seg = el('div', 'seg');
   [['steps', 'Process steps'], ['ppap', 'PPAP package']].forEach(([k, l]) => {
     const bt = el('button', ecnMode === k ? 'on' : '', l); bt.onclick = () => { ecnMode = k; show('ecn'); }; seg.appendChild(bt);
@@ -5855,7 +5998,7 @@ function ppapSection(project) {
 /* TAB — SETTINGS (add / delete product families & document types)      */
 /* ===================================================================== */
 function viewSettings(root) {
-  root.appendChild(pageHeader('Settings', 'Master data, personnel and system configuration'));
+  root.appendChild(pageHeader(i18n('settingsTitle'), i18n('settingsSub')));
   const b = el('div', 'banner');
   b.innerHTML = '<b>Settings edit system\\config.json directly.</b> Changes apply immediately for every user of this tool — ' +
     'nothing is regenerated from a workbook.';
@@ -6363,13 +6506,13 @@ function viewSettings(root) {
     changeTypes().forEach((t, i) => {
       const tr = el('tr');
       tr.innerHTML =
-        '<td><input data-ct="type_id" data-idx="' + i + '" value="' + esc(t.type_id || '') + '" style="width:50px" maxlength="3"></td>' +
-        '<td><input data-ct="name" data-idx="' + i + '" value="' + esc(t.name || '') + '" style="width:180px"></td>' +
-        '<td><input data-ct="description" data-idx="' + i + '" value="' + esc(t.description || '') + '" style="width:260px"></td>' +
-        '<td><input data-ct="cycle_time_days" data-idx="' + i + '" value="' + (t.cycle_time_days != null ? t.cycle_time_days : '') + '" style="width:70px" placeholder="TBD"></td>' +
-        '<td><input data-ct="npi_steps" data-idx="' + i + '" value="' + esc((t.npi_steps || []).join(',')) + '" style="width:100px" title="Comma-separated step numbers, e.g. 1,3,5"></td>' +
-        '<td><input data-ct="ecn_steps" data-idx="' + i + '" value="' + esc((t.ecn_steps || []).join(',')) + '" style="width:120px" title="Comma-separated step numbers"></td>' +
-        '<td><input data-ct="trial_preset" data-idx="' + i + '" value="' + esc(t.trial_preset || '') + '" style="width:80px"></td>' +
+        '<td><input data-ct="type_id" data-idx="' + i + '" value="' + esc(t.type_id || '') + '" maxlength="3"></td>' +
+        '<td><input data-ct="name" data-idx="' + i + '" value="' + esc(t.name || '') + '"></td>' +
+        '<td><input data-ct="description" data-idx="' + i + '" value="' + esc(t.description || '') + '"></td>' +
+        '<td><input data-ct="cycle_time_days" data-idx="' + i + '" value="' + (t.cycle_time_days != null ? t.cycle_time_days : '') + '" placeholder="TBD"></td>' +
+        '<td><input data-ct="npi_steps" data-idx="' + i + '" value="' + esc((t.npi_steps || []).join(',')) + '" title="Comma-separated step numbers, e.g. 1,3,5"></td>' +
+        '<td><input data-ct="ecn_steps" data-idx="' + i + '" value="' + esc((t.ecn_steps || []).join(',')) + '" title="Comma-separated step numbers"></td>' +
+        '<td><input data-ct="trial_preset" data-idx="' + i + '" value="' + esc(t.trial_preset || '') + '"></td>' +
         '<td><button class="sm" title="Remove this type">×</button></td>';
       const delBtn = tr.querySelector('button');
       delBtn.onclick = () => {
@@ -6443,7 +6586,15 @@ function viewSettings(root) {
     }
   };
 
-  ctTable.appendChild(ctBody); cpBody.appendChild(ctTable);
+  /* v9.2.1: the table is 8 columns of editable inputs and used to carry fixed
+     pixel widths, so collapsing the sidebar rail (which widens .page-wrapper)
+     left it stranded while expanding it pushed the last columns past the card
+     edge. The inputs are fluid now and this wrapper owns the horizontal
+     scroll, so the card never overflows regardless of rail state. */
+  const ctScroll = el('div', 'scroll change-types-scroll');
+  ctTable.appendChild(ctBody);
+  ctScroll.appendChild(ctTable);
+  cpBody.appendChild(ctScroll);
   cpBody.appendChild(ctAddBtn);
   cpBody.appendChild(ctSaveBtn);
   cpBody.appendChild(ctSaveMsg);
