@@ -22,7 +22,7 @@ $ScriptDir = $PSScriptRoot
 if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $RootDir   = Split-Path -Parent $ScriptDir
 
-$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v8.4'
+$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v9.0'
 $OutZip    = Join-Path $RootDir "$ZipName.zip"
 
 # --- 1. Stage into a temp directory ---

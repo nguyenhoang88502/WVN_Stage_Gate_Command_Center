@@ -1,0 +1,1 @@
+Updated `redrawAfterWrite()` in `system/app.js` to capture `window.scrollY` before refreshing, pass `true` as `show()`'s second argument to skip its own scroll handling, then restore the page position with a single `window.scrollTo(0, pageY)`. No call sites or other functions were changed.

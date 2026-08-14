@@ -1,0 +1,5 @@
+All edits applied. Summary of changes:
+
+- `system/styles.css`: added `--today-line: #ff0000;` to both the `:root` and `html[data-theme="dark"]` "brand + status" groups, and added the `.gantt-today-line` rule (absolute, 3px-wide, `z-index: 3`, `pointer-events: none`) directly after `.gantt-stage-separator`.
+- `system/app.js`: in `buildLiveGanttSection()`, computed `todayPct` and `showTodayLine` once right after `pctForDate()`, then rendered a fresh `.gantt-today-line` element in the header track (with a `Today (…)` tooltip) and in each project row's track, all positioned with the same `left: todayPct + '%'` scale.
+- Left `_buildSvgGantt()` untouched, and did not alter `pctForDate()`, `minT`/`maxT`/`spanMs` computation, or any other code.

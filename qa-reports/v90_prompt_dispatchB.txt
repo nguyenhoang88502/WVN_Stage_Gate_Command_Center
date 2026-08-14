@@ -1,0 +1,128 @@
+You are a DeepSeek Worker implementing a 9.0 Open Beta feature for the WVN Stage Gate Command Center (vanilla-JS SPA + PowerShell backend). Work in these two files ONLY:
+
+  system/app.js
+  system/styles.css
+
+Do not touch any other file. Preserve the existing code style exactly: 2-space indent, single quotes, UTF-8 no-BOM for app.js. Make MINIMAL, surgical edits — do not rewrite, reformat, or reorganize anything outside what's described below.
+
+============================================================
+FEATURE — bold red "today" line on the live Gantt chart
+============================================================
+
+The Dashboard tab's live Gantt chart is built by `function buildLiveGanttSection()`
+in system/app.js. It lays out a single shared date→horizontal-position
+mapping and reuses it for every row:
+
+  var allStarts = pairs.map(function(x) { return x.startDate.getTime(); });
+  var allEnds = pairs.map(function(x) { return x.endDate.getTime(); });
+  var pad = 7 * 86400000;
+  var minT = Math.min.apply(null, allStarts) - pad;
+  var maxT = Math.max.apply(null, allEnds) + pad;
+  var spanMs = maxT - minT;
+  ...
+  function pctForDate(d) { return (d.getTime() - minT) / spanMs * 100; }
+
+Two elements get positioned with this exact `pctForDate()` function today:
+week labels in the header track, and (later, inside the per-project loop) a
+`.gantt-stage-separator` div marking the boundary between gated steps:
+
+  if (idx > 0) {
+    var sep = el('div', 'gantt-stage-separator');
+    sep.style.left = segLeft + '%';
+    track.appendChild(sep);
+  }
+
+There is currently no visual marker for TODAY anywhere on this chart — a
+project manager looking at the Gantt has no quick way to see where "now" falls
+relative to a project's planned/actual timeline. Add one, using the exact same
+positioning technique as `.gantt-stage-separator` above (it's already proven
+correct for this chart), rendered as a bold red vertical line.
+
+STEP 1 — system/styles.css: add a new CSS variable and a new class
+
+In the `:root { ... }` block near the top of the file (the "brand + status"
+group, alongside `--bad: #b02318;` etc.), add one new token:
+
+  --today-line: #ff0000;
+
+Add the exact same declaration (same value — this marker should stay a bold,
+unambiguous red regardless of light/dark theme, unlike the softer status
+colors) to the `html[data-theme="dark"] { ... }` block right below it, in the
+same position within that block's own "brand + status" group.
+
+Then, near `.gantt-stage-separator { ... }` in the Gantt CSS section, add a
+new rule directly after it:
+
+  .gantt-today-line {
+    position: absolute; top: 0; bottom: 0; width: 3px;
+    background: var(--today-line); z-index: 3; pointer-events: none;
+  }
+
+(z-index 3 so it renders above `.gantt-stage-separator`'s z-index: 1 and above
+the stage-segment/bar fills, which don't set z-index at all.)
+
+STEP 2 — system/app.js: render the line in `buildLiveGanttSection()`
+
+Right after `function pctForDate(d) { ... }` is defined, compute today's
+position once and whether it falls inside the chart's visible date range:
+
+  var todayPct = pctForDate(new Date());
+  var showTodayLine = todayPct >= 0 && todayPct <= 100;
+
+Then add the line in TWO places so it reads as one continuous vertical line
+down the whole chart (header + every project row share the identical
+horizontal scale, so the same `left: todayPct + '%'` value lines up across
+all of them):
+
+(a) In the header track — find where week labels are appended to
+`trackHeader` and `trackHeader` is appended to `headerRow`:
+
+  var trackHeader = el('div', 'gantt-live-track gantt-live-track-header');
+  var labelInterval = Math.max(1, Math.ceil(weekEntries.length / 20));
+  weekEntries.forEach(function(entry, i) {
+    if (i % labelInterval !== 0) return;
+    var lbl = el('span', 'gantt-week-label', entry.week);
+    lbl.style.left = pctForDate(entry.date) + '%';
+    trackHeader.appendChild(lbl);
+  });
+  headerRow.appendChild(trackHeader);
+
+Add the today-line to `trackHeader` right after the week-label loop, before
+`headerRow.appendChild(trackHeader)`:
+
+  if (showTodayLine) {
+    var todayLineHeader = el('div', 'gantt-today-line');
+    todayLineHeader.style.left = todayPct + '%';
+    todayLineHeader.title = 'Today (' + isoWeek(new Date()) + ')';
+    trackHeader.appendChild(todayLineHeader);
+  }
+
+(b) In each project row's own track — find the stage-separator block inside
+the `gatedSteps.forEach(...)` loop (shown above) which runs inside
+`pairs.forEach(function(pair) { ... var track = el('div', 'gantt-live-track'); ... })`.
+Right after that `gatedSteps.forEach(...)` loop finishes (i.e. after its
+closing `});`, still before `track.title = ...`), add:
+
+  if (showTodayLine) {
+    var todayLineRow = el('div', 'gantt-today-line');
+    todayLineRow.style.left = todayPct + '%';
+    track.appendChild(todayLineRow);
+  }
+
+Use a fresh `el('div', 'gantt-today-line')` call at each of the two
+insertion points (don't try to reuse/clone a single DOM node across the
+header and every row — each row needs its own element, exactly like
+`.gantt-stage-separator` already does per-row).
+
+Do not add a today-line to `_buildSvgGantt()` (the separate SVG-based Gantt
+used for the printed/PDF export) — that's a static, backward-looking
+snapshot for a physical page, not the interactive live chart this feature is
+about; leave it untouched. Do not change `pctForDate()`'s own definition, and
+do not change how `minT`/`maxT`/`spanMs` are computed.
+
+============================================================
+OUTPUT
+============================================================
+Make all edits directly to system/app.js and system/styles.css using your
+file-editing tools. When done, print a short plain-text summary of exactly
+what you changed (3-4 sentences) — no other commentary.

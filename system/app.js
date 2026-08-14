@@ -201,7 +201,13 @@ function show(id, preserveScroll) {
     window.scrollTo(0, 0);
   }
 }
-async function redrawAfterWrite() { await refresh(); populateWhoSelect(); show(current); }
+async function redrawAfterWrite() {
+  const pageY = window.scrollY;
+  await refresh();
+  populateWhoSelect();
+  show(current, true);
+  window.scrollTo(0, pageY);
+}
 async function refreshSilently() {
   const d = await API.data();
   CFG = d.config; TRK = d.tracking; PATHS = d.paths || {};
@@ -2502,6 +2508,9 @@ function buildLiveGanttSection() {
 
   function pctForDate(d) { return (d.getTime() - minT) / spanMs * 100; }
 
+  var todayPct = pctForDate(new Date());
+  var showTodayLine = todayPct >= 0 && todayPct <= 100;
+
   var grid = el('div', 'gantt-live-grid');
   body.appendChild(grid);
 
@@ -2517,6 +2526,12 @@ function buildLiveGanttSection() {
     lbl.style.left = pctForDate(entry.date) + '%';
     trackHeader.appendChild(lbl);
   });
+  if (showTodayLine) {
+    var todayLineHeader = el('div', 'gantt-today-line');
+    todayLineHeader.style.left = todayPct + '%';
+    todayLineHeader.title = 'Today (' + isoWeek(new Date()) + ')';
+    trackHeader.appendChild(todayLineHeader);
+  }
   headerRow.appendChild(trackHeader);
   grid.appendChild(headerRow);
 
@@ -2574,6 +2589,11 @@ function buildLiveGanttSection() {
         track.appendChild(sep);
       }
     });
+    if (showTodayLine) {
+      var todayLineRow = el('div', 'gantt-today-line');
+      todayLineRow.style.left = todayPct + '%';
+      track.appendChild(todayLineRow);
+    }
 
     track.title = p.project_id + ' (' + proc + ')\n' +
       'Planned: ' + toWeek(pair.startDate) + ' → ' + toWeek(pair.endDate) + '\n' +

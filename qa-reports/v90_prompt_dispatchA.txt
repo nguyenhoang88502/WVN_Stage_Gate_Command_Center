@@ -1,0 +1,81 @@
+You are a DeepSeek Worker implementing a 9.0 Open Beta fix for the WVN Stage Gate Command Center (vanilla-JS SPA + PowerShell backend). Work ONLY in this file:
+
+  system/app.js
+
+Do not touch any other file. Preserve the existing code style exactly: 2-space indent, single quotes, UTF-8 no-BOM. Make a MINIMAL, surgical edit — do not rewrite, reformat, or reorganize anything outside what's described below.
+
+============================================================
+BUG — the page scrolls to the top every time a user completes/updates a task
+============================================================
+
+Near the top of the file there is:
+
+  async function redrawAfterWrite() { await refresh(); populateWhoSelect(); show(current); }
+
+`redrawAfterWrite()` is called from roughly two dozen places across the file
+— claiming/unclaiming/completing a task, editing an assignment, removing an
+owner or supporter, deleting a task, saving Settings CRUD (families,
+doctypes), importing a batch CSV, and more. Every one of those actions
+currently yanks the user back to the top of the page, because `show(current)`
+(defined a little further down) unconditionally does `window.scrollTo(0, 0)`
+unless it's told not to:
+
+  function show(id, preserveScroll) {
+    current = id; buildTabs();
+    closeDrawer();
+    const v = $('#views'); v.innerHTML = '';
+    const loaderTimer = setTimeout(showLoader, 150);
+    ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
+    clearTimeout(loaderTimer);
+    hideLoader();
+    if (preserveScroll) {
+      // caller owns scroll restoration for this call
+    } else if (justPickedTree) {
+      justPickedTree = false;
+      requestAnimationFrame(() => {
+        const detail = $('#npiActiveHead') || $('#ecnActiveHead');
+        if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+
+That `preserveScroll` parameter already exists (added in an earlier patch) and
+is already used by the periodic background auto-reload path
+(`restoreUiState()` calls `show(state.tab, true)`). `redrawAfterWrite()` was
+never updated to use it, which is why every foreground task-completion/update
+action still snaps to the top even though the background auto-reload no
+longer does.
+
+FIX: change `redrawAfterWrite()` to capture the page's scroll position before
+the redraw, pass `true` as `show()`'s second argument so `show()` skips its
+own scroll handling, then restore the scroll position afterward — the same
+capture-then-restore shape already used elsewhere in this file for
+post-write redraws (e.g. the sidebar dropzone's `dz.ondrop` handler does
+`const pageY = window.scrollY; ... await refreshSilently(); ... window.scrollTo(0, pageY);`).
+A single `window.scrollTo(0, pageY)` call right after the redraw is
+sufficient — no `requestAnimationFrame` polling loop is needed here (that
+loop exists elsewhere only to handle the sidebar drawer's own internal
+`scrollTop`, which `redrawAfterWrite()` does not touch).
+
+  async function redrawAfterWrite() {
+    const pageY = window.scrollY;
+    await refresh();
+    populateWhoSelect();
+    show(current, true);
+    window.scrollTo(0, pageY);
+  }
+
+Do not change any of `redrawAfterWrite()`'s ~23 call sites, do not change
+`show()` itself (it already supports this correctly), and do not touch
+`reloadPreservingState()`, `restoreUiState()`, `captureUiState()`, or the
+sidebar drawer's own ad-hoc pageY/drawerScroll capture-restore blocks — none
+of those are part of this bug or this fix.
+
+============================================================
+OUTPUT
+============================================================
+Make the edit directly to system/app.js using your file-editing tools. When
+done, print a short plain-text summary of exactly what you changed (2-3
+sentences) — no other commentary.
