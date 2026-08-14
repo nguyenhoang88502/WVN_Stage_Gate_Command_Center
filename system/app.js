@@ -227,6 +227,11 @@ function wireReloadButton() {
    drag stops — a drop, or the cursor leaving the window with no drop event. */
 let dragActive = false;
 let dragActiveTimer = null;
+// Set true for the duration of any evidence/CSV upload POST (uploadEvidence,
+// resolveWithFile, the batch CSV importer, the batch evidence "File all"
+// loop) so a 15s background reload can never tear down the view while bytes
+// are still in flight over the network.
+window._isUploadingEvidence = false;
 document.addEventListener('dragover', function(e) {
   dragActive = true;
   clearTimeout(dragActiveTimer);
@@ -369,8 +374,20 @@ function userIsMidAction() {
   if (document.querySelector('.modal-backdrop, .modal-scrim')) return true;
   if (dragActive) return true;
   var el = document.activeElement;
-  return !!(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
-             el.contentEditable === 'true' || el.isContentEditable));
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
+             el.contentEditable === 'true' || el.isContentEditable)) return true;
+  // A Batch Project CSV is staged (picked, not yet imported) — .batch-file
+  // only loses .hide once a file has been chosen; see setBatFile() in
+  // viewInput()'s registration card.
+  if (document.querySelector('.batch-file:not(.hide)')) return true;
+  // Batch Evidence rows are staged (dropped, not yet filed) — #bRows is the
+  // <tbody> the per-file rows render into in viewInput()'s uploader.
+  var bRows = document.getElementById('bRows');
+  if (bRows && bRows.children.length > 0) return true;
+  // An upload POST is actively in flight (sidebar dropzone, issue-resolution
+  // dropzone, batch CSV import, or the batch evidence "File all" loop).
+  if (window._isUploadingEvidence) return true;
+  return false;
 }
 
 function startAutoReload() {
@@ -966,36 +983,41 @@ function issueResolveDropzone(project, onAfterResolve, issueRow) {
   dz.innerHTML = '<b>Resolve this issue</b><br><span class="note">Drop resolution evidence or click to browse</span>';
 
   async function resolveWithFile(file) {
-    const who = requireName(); if (!who) return;
-    const reader = new FileReader();
-    const dataUrl = await new Promise((resolve, reject) => {
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const b64 = dataUrl.split(',')[1];
+    window._isUploadingEvidence = true;
     try {
-      const up = await API.upload({
-        fileName: file.name, contentBase64: b64, docType: 'ISSUE-RESOLUTION',
-        family: project.family, wvnId: project.family, wnbId: project.customer_number || '',
-        description: 'Issue Resolution', partId: ''
+      const who = requireName(); if (!who) return;
+      const reader = new FileReader();
+      const dataUrl = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
       });
-      const rowData = Object.assign({}, issueRow);
-      rowData.evidence_path = up.path;
-      rowData.status = 'Closed';
-      rowData.resolution = 'Resolved via uploaded evidence';
-      rowData.closed_utc = new Date().toISOString();
-      await API.action('lb_issues', rowData, {
-        upsertKeys: ['issue_id'],
-        audit: { user: who, action: 'Issue_Resolve', projectId: project.project_id, objType: 'Issue',
-          objId: issueRow.issue_id, from: 'Open', to: 'Closed', detail: up.fileName }
-      });
-      // The ⚠ N badge on matrix cells counts lb_issues rows with
-      // status !== 'Closed' — refreshing TRK before the redraw is what
-      // actually makes it disappear, same as every other write in this file.
-      await refreshSilently();
-      if (onAfterResolve) onAfterResolve();
-    } catch (err) { alert('Could not resolve the issue: ' + err.message); }
+      const b64 = dataUrl.split(',')[1];
+      try {
+        const up = await API.upload({
+          fileName: file.name, contentBase64: b64, docType: 'ISSUE-RESOLUTION',
+          family: project.family, wvnId: project.family, wnbId: project.customer_number || '',
+          description: 'Issue Resolution', partId: ''
+        });
+        const rowData = Object.assign({}, issueRow);
+        rowData.evidence_path = up.path;
+        rowData.status = 'Closed';
+        rowData.resolution = 'Resolved via uploaded evidence';
+        rowData.closed_utc = new Date().toISOString();
+        await API.action('lb_issues', rowData, {
+          upsertKeys: ['issue_id'],
+          audit: { user: who, action: 'Issue_Resolve', projectId: project.project_id, objType: 'Issue',
+            objId: issueRow.issue_id, from: 'Open', to: 'Closed', detail: up.fileName }
+        });
+        // The ⚠ N badge on matrix cells counts lb_issues rows with
+        // status !== 'Closed' — refreshing TRK before the redraw is what
+        // actually makes it disappear, same as every other write in this file.
+        await refreshSilently();
+        if (onAfterResolve) onAfterResolve();
+      } catch (err) { alert('Could not resolve the issue: ' + err.message); }
+    } finally {
+      window._isUploadingEvidence = false;
+    }
   }
 
   dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--good)'; dz.style.background = 'var(--good2)'; };
@@ -1072,6 +1094,21 @@ function normaliseDoctypeInput(val) {
   if (byNameCI) return byNameCI.doctype_id;
   const byIdCI = CFG.document_types.find(d => d.doctype_id.toLowerCase() === lower);
   if (byIdCI) return byIdCI.doctype_id;
+  return s;
+}
+function normaliseChangeTypeInput(val) {
+  const s = (val || '').trim();
+  if (!s) return '';
+  if (changeTypes().some(t => t.type_id === s)) return s;
+  // Datalist options read "Type <id> — <name> (…)" — the same "Type " prefix
+  // the user is free to type themselves, e.g. "Type E - ECN".
+  const m = s.match(/^Type\s+([A-Za-z0-9_-]+)\b/i);
+  if (m && changeTypes().some(t => t.type_id === m[1])) return m[1];
+  const lower = s.toLowerCase();
+  const byName = changeTypes().find(t => t.name.toLowerCase() === lower);
+  if (byName) return byName.type_id;
+  const byIdCI = changeTypes().find(t => t.type_id.toLowerCase() === lower);
+  if (byIdCI) return byIdCI.type_id;
   return s;
 }
 function resolveStepInput(val, project) {
@@ -2975,28 +3012,33 @@ function _buildSvgGantt(projects) {
 
 /* ---- sidebar evidence upload helper ------------------------------------ */
 async function uploadEvidence(project, stepKey, docCode, file) {
-  const who = requireName() || '(unnamed)';
-  const reader = new FileReader();
-  const dataUrl = await new Promise((resolve, reject) => {
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  const b64 = dataUrl.split(',')[1];
-  const up = await API.upload({
-    fileName: file.name, contentBase64: b64, docType: docCode,
-    family: project.family,
-    wvnId: project.family, wnbId: project.customer_number || '',
-    description: docCode, partId: ''
-  });
-  await API.action('lb_deliverables', {
-    project_id: project.project_id, step_key: stepKey, doc_code: docCode,
-    file_name: up.fileName, file_path: up.path, sha256: up.sha256, status: 'Filed',
-    approved: '', suspect_template: '', uploaded_by: who,
-    uploaded_utc: new Date().toISOString(), notes: '', kind: 'file',
-    original_name: up.originalName, wvn_id: project.family || '',
-    wnb_id: project.customer_number || '', description: docCode, link_url: ''
-  }, { audit: { user: who, action: 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: 'MISSING', to: 'Filed', detail: docCode } });
+  window._isUploadingEvidence = true;
+  try {
+    const who = requireName() || '(unnamed)';
+    const reader = new FileReader();
+    const dataUrl = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const b64 = dataUrl.split(',')[1];
+    const up = await API.upload({
+      fileName: file.name, contentBase64: b64, docType: docCode,
+      family: project.family,
+      wvnId: project.family, wnbId: project.customer_number || '',
+      description: docCode, partId: ''
+    });
+    await API.action('lb_deliverables', {
+      project_id: project.project_id, step_key: stepKey, doc_code: docCode,
+      file_name: up.fileName, file_path: up.path, sha256: up.sha256, status: 'Filed',
+      approved: '', suspect_template: '', uploaded_by: who,
+      uploaded_utc: new Date().toISOString(), notes: '', kind: 'file',
+      original_name: up.originalName, wvn_id: project.family || '',
+      wnb_id: project.customer_number || '', description: docCode, link_url: ''
+    }, { audit: { user: who, action: 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: 'MISSING', to: 'Filed', detail: docCode } });
+  } finally {
+    window._isUploadingEvidence = false;
+  }
 }
 
 /* Renders a filed document's location two ways: a link that streams it from
@@ -3790,7 +3832,8 @@ function viewClaimed(root) {
       project: prj || null,
       owner: p.owner,
       supporter: p.supporter,
-      assignedBy: p.assignedBy
+      assignedBy: p.assignedBy,
+      issueDate: (i.raised_utc || '').slice(0, 10)
     });
   });
 
@@ -3821,7 +3864,8 @@ function viewClaimed(root) {
       project: prj || null,
       owner: p.owner,
       supporter: p.supporter,
-      assignedBy: p.assignedBy
+      assignedBy: p.assignedBy,
+      issueDate: (i.raised_utc || '').slice(0, 10)
     });
   });
 
@@ -3882,12 +3926,12 @@ function viewClaimed(root) {
   // Build table
   var t = el('table');
   t.innerHTML = privileged
-    ? '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Primary owner</th><th>Supporter</th><th>Assigned by</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>'
-    : '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>';
+    ? '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Primary owner</th><th>Supporter</th><th>Assigned by</th><th>Issue Date</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>'
+    : '<thead><tr><th>Project</th><th>What</th><th>Item</th><th>Issue Date</th><th>Target week</th><th>Priority</th><th>Status</th></tr></thead>';
   var tb = el('tbody');
   if (!shown.length) {
     var emptyTr = el('tr');
-    emptyTr.innerHTML = '<td colspan="' + (privileged ? 9 : 6) + '" class="note">Nothing claimed or assigned for ' + esc(claimedUserSel) + '.</td>';
+    emptyTr.innerHTML = '<td colspan="' + (privileged ? 10 : 7) + '" class="note">Nothing claimed or assigned for ' + esc(claimedUserSel) + '.</td>';
     tb.appendChild(emptyTr);
   }
   shown.forEach(function(item) {
@@ -3903,10 +3947,13 @@ function viewClaimed(root) {
         '<td>' + (item.assignedBy ? esc(item.assignedBy) : '<span class="note">self-claimed</span>') + '</td>'
       : '';
 
+    var issueDateCell = '<td>' + (item.issueDate ? esc(item.issueDate) : '<span class="note">—</span>') + '</td>';
+
     tr.innerHTML = '<td><b>' + esc(item.projectId) + '</b></td>' +
       '<td><span class="note">' + esc(item.type) + '</span></td>' +
       '<td>' + esc(item.label) + (item.assignedBy ? ' <span class="badge bg-primary" style="font-size:10px">Assigned by Admin</span>' : '') + '</td>' +
       partyCells +
+      issueDateCell +
       '<td class="' + (overdue ? 'claimed-overdue' : '') + '">' + esc(twDisplay) + '</td>' +
       '<td>' + esc(item.priority) + '</td>' +
       '<td><span class="' + badgeClass(item.status) + '">' + esc(item.status.replace(/_/g, ' ')) + '</span></td>';
@@ -3953,13 +4000,16 @@ function viewInput(root) {
   // every FG number we already know about, offered as suggestions but not enforced
   const known = [];
   CFG.prod_families.forEach(f => (f.sample_fg_ids || []).forEach(x => known.indexOf(x) < 0 && known.push(x)));
-  const ctOpts = changeTypes().map(t => '<option value="' + esc(t.type_id) + '">Type ' + esc(t.type_id) + ' — ' + esc(t.name) +
-    (t.cycle_time_days == null ? ' (cycle TBD)' : ' (' + t.cycle_time_days + ' d)') + '</option>').join('');
+  // combobox: datalist shows "Type <id> — <name> (<cycle>)", normalised back
+  // to type_id at submit via normaliseChangeTypeInput.
+  const classDlOpts = changeTypes().map(t => '<option value="Type ' + esc(t.type_id) + ' — ' + esc(t.name) +
+    (t.cycle_time_days == null ? ' (cycle TBD)' : ' (' + t.cycle_time_days + ' d)') + '">').join('');
 
   g.appendChild(fld('Process', '<select id="npProc"><option>NPI</option><option>ECN</option></select>'));
   g.appendChild(fld('Family ID *', '<input id="npFamId" list="fgList" placeholder="9649LP, 5612, …">' +
     '<datalist id="fgList">' + known.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'));
-  g.appendChild(fld('Change / project type *', '<select id="npClass"><option value="">— pick —</option>' + ctOpts + '</select>'));
+  g.appendChild(fld('Change / project type *', '<input id="npClass" list="classList" placeholder="— type or pick —">' +
+    '<datalist id="classList">' + classDlOpts + '</datalist>'));
   g.appendChild(fld('Product family', '<input id="npFam" list="famList" placeholder="— optional, groups the evidence folder —" style="width:100%">' +
     '<datalist id="famList">' + famDlOpts + '</datalist>'));
   g.appendChild(fld('Customer number', '<input id="npCust">'));
@@ -3990,7 +4040,7 @@ function viewInput(root) {
 
   let _npFamEdited = false, _npClassEdited = false;
   const upd = () => {
-    const t = changeTypeById($('#npClass').value);
+    const t = changeTypeById(normaliseChangeTypeInput($('#npClass').value));
     const proc = $('#npProc').value;
     if (!t) { ctNote.style.display = 'none'; return; }
     const override = $('#npTargetDate').value;
@@ -4009,7 +4059,11 @@ function viewInput(root) {
       (fam ? '<br>Family: <b>' + esc(fam.prod_family_name) + '</b> (' + esc(fam.prod_family_id) + ')' +
         (fam.typical_lead_time_days ? ' · typical lead time <b>' + fam.typical_lead_time_days + ' days</b>' : '') : '');
   };
-  $('#npClass', reg).onchange = (e) => { _npClassEdited = true; upd(); };
+  // oninput so the type-in combobox reacts as the user types, not just on
+  // blur; onchange too, since picking a suggestion from the native datalist
+  // popup fires change but not always input in every browser.
+  $('#npClass', reg).oninput = () => { _npClassEdited = true; upd(); };
+  $('#npClass', reg).onchange = () => { _npClassEdited = true; upd(); };
   $('#npProc', reg).onchange = upd;
   $('#npPrf', reg).onchange = upd;
   $('#npTargetDate', reg).onchange = upd;
@@ -4029,7 +4083,7 @@ function viewInput(root) {
       if (!_npFamEdited) $('#npFam').value = fam.prod_family_name + ' (' + fam.prod_family_id + ')';
       if (!_npClassEdited && fam.complexity_class) {
         const ct = changeTypes().find(t => t.type_id === fam.complexity_class);
-        if (ct) $('#npClass').value = ct.type_id;
+        if (ct) $('#npClass').value = 'Type ' + ct.type_id + ' — ' + ct.name;
       }
     }
     // Redraw the banner either way — it names the resolved family, so it has to
@@ -4042,9 +4096,18 @@ function viewInput(root) {
   regBtn.onclick = async () => {
     const who = requireName(); if (!who) return;
     const famId = $('#npFamId').value.trim();
-    const cls = $('#npClass').value;
+    const clsRaw = $('#npClass').value;
+    const cls = normaliseChangeTypeInput(clsRaw);
     if (!famId) { alert('Family ID is required — it forms the project ID.'); return; }
     if (!cls) { alert('Pick a change / project type. It decides the cycle time and which steps apply.'); return; }
+    // The old <select> could only ever hold a valid type_id or ''; the type-in
+    // combobox can hold arbitrary text, so unlike the empty check above this
+    // has to be checked explicitly now — silently registering a project with
+    // a class_abcde that matches nothing would leave it with no workflow steps.
+    if (!changeTypeById(cls)) {
+      alert('Change / project type "' + clsRaw.trim() + '" wasn\'t recognised — pick one from the list.');
+      return;
+    }
     const ov = $('#npTargetDate').value;
     if (ov && $('#npPrf').value && ov < $('#npPrf').value) {
       if (!confirm('Target finish is before the request date — register anyway?')) return;
@@ -4177,6 +4240,7 @@ function viewInput(root) {
     if (!batFile || batBusy) return;          // guards a double-click
     const who = requireName(); if (!who) return;
     batBusy = true;
+    window._isUploadingEvidence = true;
     batImport.disabled = true; batImport.textContent = 'Importing…';
     batResult.className = 'import-result hide';
     try {
@@ -4193,6 +4257,7 @@ function viewInput(root) {
       batResult.innerHTML = '<b>Import failed.</b><p class="note">' + esc(e.message) + '</p>';
     } finally {
       batBusy = false;
+      window._isUploadingEvidence = false;
       batImport.disabled = !batFile; batImport.textContent = 'Import Batch CSV';
     }
   };
@@ -4529,35 +4594,40 @@ function viewInput(root) {
       const log = $('#bLog', form);
       const todo = state.filter(s => !s.skip);
       let ok = 0, dup = 0, bad = 0;
-      for (const st of todo) {
-        btn.textContent = 'Filing ' + (ok + dup + bad + 1) + ' of ' + todo.length + '…';
-        try {
-          const step = stepsOf(p.process, p).find(s => s.step_id === Number(st.step));
-          const b64 = await new Promise((resolve, reject) => {
-            const rd = new FileReader();
-            rd.onload = () => resolve(rd.result.split(',')[1]);
-            rd.onerror = reject;
-            rd.readAsDataURL(st.file);
-          });
-          const up = await API.upload({
-            docType: st.doc, family: p.family, partId: $('#bPart', form).value.trim(),
-            wvnId: $('#bWvn', form).value.trim(), wnbId: $('#bWnb', form).value.trim(), description: st.desc,
-            fileName: st.file.name, contentBase64: b64
-          });
-          await API.action('lb_deliverables', {
-            project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: st.doc,
-            file_name: up.fileName, file_path: up.path, sha256: up.sha256,
-            status: up.duplicate ? 'Already filed' : 'Filed', approved: 'NO', suspect_template: 'NO',
-            uploaded_by: who, uploaded_utc: new Date().toISOString(),
-            notes: up.duplicate ? 'byte-identical file already present, no copy written' : '',
-            kind: 'file', original_name: up.originalName || st.file.name,
-            wvn_id: $('#bWvn', form).value.trim(), wnb_id: $('#bWnb', form).value.trim(), description: st.desc, link_url: ''
-          }, { audit: { user: who, action: 'File_Evidence', projectId: p.project_id, objType: 'Deliverable', objId: up.fileName, from: st.file.name, to: up.duplicate ? 'Already filed' : 'Filed', detail: up.path } });
-          if (up.duplicate) dup++; else ok++;
-        } catch (e) {
-          bad++;
-          log.innerHTML += '<br><b style="color:var(--bad)">' + esc(st.file.name) + '</b>: ' + esc(e.message);
+      window._isUploadingEvidence = true;
+      try {
+        for (const st of todo) {
+          btn.textContent = 'Filing ' + (ok + dup + bad + 1) + ' of ' + todo.length + '…';
+          try {
+            const step = stepsOf(p.process, p).find(s => s.step_id === Number(st.step));
+            const b64 = await new Promise((resolve, reject) => {
+              const rd = new FileReader();
+              rd.onload = () => resolve(rd.result.split(',')[1]);
+              rd.onerror = reject;
+              rd.readAsDataURL(st.file);
+            });
+            const up = await API.upload({
+              docType: st.doc, family: p.family, partId: $('#bPart', form).value.trim(),
+              wvnId: $('#bWvn', form).value.trim(), wnbId: $('#bWnb', form).value.trim(), description: st.desc,
+              fileName: st.file.name, contentBase64: b64
+            });
+            await API.action('lb_deliverables', {
+              project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: st.doc,
+              file_name: up.fileName, file_path: up.path, sha256: up.sha256,
+              status: up.duplicate ? 'Already filed' : 'Filed', approved: 'NO', suspect_template: 'NO',
+              uploaded_by: who, uploaded_utc: new Date().toISOString(),
+              notes: up.duplicate ? 'byte-identical file already present, no copy written' : '',
+              kind: 'file', original_name: up.originalName || st.file.name,
+              wvn_id: $('#bWvn', form).value.trim(), wnb_id: $('#bWnb', form).value.trim(), description: st.desc, link_url: ''
+            }, { audit: { user: who, action: 'File_Evidence', projectId: p.project_id, objType: 'Deliverable', objId: up.fileName, from: st.file.name, to: up.duplicate ? 'Already filed' : 'Filed', detail: up.path } });
+            if (up.duplicate) dup++; else ok++;
+          } catch (e) {
+            bad++;
+            log.innerHTML += '<br><b style="color:var(--bad)">' + esc(st.file.name) + '</b>: ' + esc(e.message);
+          }
         }
+      } finally {
+        window._isUploadingEvidence = false;
       }
       btn.textContent = 'File all';
       alert(ok + ' filed, ' + dup + ' already present, ' + bad + ' failed.');
