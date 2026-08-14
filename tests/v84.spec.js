@@ -77,21 +77,38 @@ test.describe('v8.4 gate approval Cancel bug fix', () => {
     await openNotStartedProjectDrawer(page);
     const btn = await findAndEnableApproveButton(page);
 
-    const approvalsBefore = await page.evaluate(() => TRK.lb_approvals.length);
+    /* Assert on the intercepted request rather than letting the approval
+       persist. Signing a gate is irreversible through the UI — there is no
+       un-approve action — so the original version permanently consumed one
+       NOT STARTED project per suite run. Over six runs it approved step 1 of
+       every NPI project in the sample data, leaving zero NOT STARTED
+       fixtures and breaking eleven unrelated dropzone/gate tests that select
+       one. Intercepting proves the same thing (Cancel posts nothing, OK
+       posts an lb_approvals row carrying the typed comment) and is
+       repeatable. */
+    const posted = [];
+    await page.route('**/api/action', async (route) => {
+      const body = route.request().postDataJSON();
+      posted.push(body);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true }),
+      });
+    });
+
     page.once('dialog', (d) => d.accept('v8.4 regression test approval'));
-    const [resp] = await Promise.all([
-      // The handler fires lb_approvals then lb_gates then redraw()'s own
-      // refreshSilently() — matching the first /api/action POST only proves
-      // the approve call started, not that TRK has caught up yet, so the
-      // count check below polls rather than racing a fixed timeout.
-      page.waitForResponse((r) => r.url().includes('/api/action') && r.request().method() === 'POST'),
-      btn.click(),
-    ]);
-    expect(resp.status()).toBe(200);
-    await expect.poll(() => page.evaluate(() => TRK.lb_approvals.length), {
+    await btn.click();
+    await expect.poll(() => posted.length, {
       timeout: 5000,
-      message: 'lb_approvals grew by exactly one after OK',
-    }).toBe(approvalsBefore + 1);
+      message: 'clicking OK posts the approval',
+    }).toBeGreaterThan(0);
+
+    const approval = posted.find((b) => b && b.store === 'lb_approvals');
+    expect(approval, 'an lb_approvals write was posted').toBeTruthy();
+    expect(approval.row.comments, 'the typed comment reached the payload')
+      .toBe('v8.4 regression test approval');
+    await page.unroute('**/api/action');
   });
 });
 

@@ -1,0 +1,6 @@
+The cleanup is complete. All `header.navbar`-scoped rules are gone from the stylesheet, and the section banner now reads "TOPBAR AND COMMAND BAR."
+
+Summary of changes:
+- Re-homed `#whoInput`/`#whoSelect` to `.topbar` scoped rules using tokens (`--input`, `--line-strong`, `--ink`, `--r1`, `--ctl-h-sm`, `--focus`, `--focus-ring`, `--muted`), removed the `!important` flags, and added a `:focus-visible` state plus a token-based placeholder.
+- Deleted the dead `header.navbar` rule block (banner comment, container, brand, brand-sub, navbar-text/#stamp, cmdbar) and the four `header.navbar` rules in the responsive block, keeping `nav.tabs` and all non-navbar rules intact.
+- Removed the stale `header.navbar` selector from the print `position: static` list while preserving `nav.tabs`, `.matrix`, and the `.app-sidebar, .topbar`/`.page-wrapper { margin-left: 0 }` lines.

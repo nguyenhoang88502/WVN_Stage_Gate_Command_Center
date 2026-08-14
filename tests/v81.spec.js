@@ -74,8 +74,25 @@ test.describe('v8.1 centered loader', () => {
 test.describe('v8.1 Gantt target-week-driven positioning + tooltip', () => {
   test('editing a gate target week re-renders its Gantt segment with the new Start/End tooltip', async ({ page }) => {
     await boot(page);
+
+    /* Pick a project that is actually PLOTTED on the Gantt, not just the
+       first "NOT STARTED" row. A project only gets a Gantt row when it has
+       both a PRF week and a target week (see buildLiveGanttSection's `pairs`),
+       and the old `.first()` selector kept landing on projects registered by
+       other specs, which have neither — so the segment lookup below found
+       nothing. Reading the charted ids off the Dashboard first makes this
+       test independent of whatever else the suite has written. */
+    await expect(page.locator('.gantt-live-wrap')).toBeVisible();
+    const charted = await page.evaluate(() =>
+      [...document.querySelectorAll('.gantt-live-row:not(.gantt-live-header) .gantt-live-meta-cell:first-child')]
+        .map((c) => c.textContent.trim())
+        .filter((id) => id.startsWith('NPI-')));
+    expect(charted.length, 'at least one NPI project is charted').toBeGreaterThan(0);
+
     await page.locator('#tabs button', { hasText: /^NPI ·/ }).click();
-    await page.locator('#views .card.project-list-row', { hasText: 'NOT STARTED' }).first().locator('b').click();
+    const row = page.locator('#views .card.project-list-row')
+      .filter({ hasText: new RegExp('^\\s*' + charted[0] + '\\b') }).first();
+    await row.locator('b').click();
     await expect(page.locator('#drawer')).toBeVisible();
 
     const h2 = ((await page.locator('#drawer h2').textContent()) || '').trim();
@@ -90,7 +107,22 @@ test.describe('v8.1 Gantt target-week-driven positioning + tooltip', () => {
     const editor = page.locator('#drawer .target-week-editor').first();
     await editor.locator('input[type="week"]').fill(newWeek);
     await editor.locator('button', { hasText: 'Save' }).click();
-    await expect(editor.locator('input[type="week"]')).toHaveValue(newWeek);
+
+    /* Wait on the PERSISTED value, not the input. Asserting toHaveValue() here
+       proves nothing — the box already holds the typed text before Save is
+       even clicked, so the assertion passed instantly and the test raced on to
+       the Dashboard while the save round-trip and refreshSilently() were still
+       in flight. The Gantt then rendered from a stale TRK and the tooltip
+       looked "wrong" when the app was in fact correct. Polling TRK is the real
+       barrier. */
+    const stepKey = 'NPI-' + stepId;
+    await expect.poll(async () => page.evaluate(([pid, sk]) => {
+      const g = (TRK.lb_gates || []).find((x) => x.project_id === pid && x.step_key === sk);
+      return g ? g.target_week : null;
+    }, [pid, stepKey]), {
+      timeout: 10000,
+      message: 'target week persisted to TRK before navigating away',
+    }).toBe(newWeek);
 
     // The drawer's own scrim intercepts clicks on the tab bar behind it —
     // close it explicitly first, same as a real user would.

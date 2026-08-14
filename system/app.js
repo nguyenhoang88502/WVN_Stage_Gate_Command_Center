@@ -4,6 +4,23 @@ const $$ = (s, r) => [...(r || document).querySelectorAll(s)];
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/* Renders one sprite icon. Returns an <svg> element; use iconHtml() when
+   building a string. The sprite is inlined in index.html, so <use> resolves
+   with no network request (the app runs air-gapped). */
+function icon(name, cls) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'icon' + (cls ? ' ' + cls : ''));
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.appendChild(use);
+  return svg;
+}
+function iconHtml(name, cls) {
+  return '<svg class="icon' + (cls ? ' ' + cls : '') + '" aria-hidden="true">' +
+    '<use href="#i-' + name + '"/></svg>';
+}
+
 function showLoader() {
   let l = document.getElementById('globalLoader');
   if (!l) {
@@ -155,6 +172,22 @@ async function boot() {
     buildTabs(); show(current);
     hideLoader();
     wireReloadButton();
+    (function wireSidebarToggle() {
+      const btn = $('#sidebarToggle'); if (!btn) return;
+      const KEY = 'wvn_sidebar_collapsed';
+      const apply = (collapsed) => {
+        document.body.classList.toggle('sidebar-collapsed', collapsed);
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      };
+      let collapsed = false;
+      try { collapsed = localStorage.getItem(KEY) === '1'; } catch (e) { }
+      apply(collapsed);
+      btn.onclick = () => {
+        collapsed = !collapsed;
+        apply(collapsed);
+        try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) { }
+      };
+    })();
     // Auto-reload checkbox — read persisted state, start timer if it was enabled
     (function() {
       var chk = $('#autoReloadChk'); if (!chk) return;
@@ -172,15 +205,25 @@ async function boot() {
   }
 }
 
-const TABS = [['dash', 'Dashboard'], ['claimed', 'Claimed Work'], ['input', 'Input'], ['npi', 'NPI · 7 steps'], ['ecn', 'ECN · 12 steps + PPAP'],
-              ['settings', 'Settings']];
+const TABS = [['dash', 'Dashboard', 'layout-dashboard'], ['claimed', 'Claimed Work', 'checklist'], ['input', 'Input', 'file-import'], ['npi', 'NPI · 7 steps', 'rocket'], ['ecn', 'ECN · 12 steps + PPAP', 'git-branch'],
+              ['settings', 'Settings', 'settings']];
 let current = 'dash';
 function buildTabs() {
   const n = $('#tabs'); n.innerHTML = '';
-  TABS.forEach(([id, label]) => { const b = el('button', id === current ? 'on' : '', label); b.onclick = () => show(id); n.appendChild(b); });
+  TABS.forEach(([id, label, iconName]) => {
+    const b = el('button', id === current ? 'on' : '');
+    b.type = 'button';
+    b.title = label;
+    b.appendChild(icon(iconName));
+    b.appendChild(el('span', 'tab-label', label));
+    b.onclick = () => show(id);
+    n.appendChild(b);
+  });
 }
 function show(id, preserveScroll) {
   current = id; buildTabs();
+  const pt = $('#pageTitle');
+  if (pt) pt.textContent = (TABS.find(t => t[0] === id) || [null, ''])[1];
   closeDrawer();
   const v = $('#views'); v.innerHTML = '';
   // Reveal the loader only if the view build exceeds ~150ms — near-instant
@@ -201,6 +244,23 @@ function show(id, preserveScroll) {
     window.scrollTo(0, 0);
   }
 }
+
+/* Standard band at the top of a view: title, optional one-line subtitle,
+   and an actions slot on the right. Returns the node; callers append their
+   own buttons/controls into `.page-header-actions` via the returned
+   `actions` reference. */
+function pageHeader(title, subtitle) {
+  const wrap = el('div', 'page-header');
+  const left = el('div');
+  left.appendChild(el('h2', 'page-header-title', title));
+  if (subtitle) left.appendChild(el('div', 'page-header-sub', subtitle));
+  const actions = el('div', 'page-header-actions');
+  wrap.appendChild(left);
+  wrap.appendChild(actions);
+  wrap.actions = actions;
+  return wrap;
+}
+
 async function redrawAfterWrite() {
   const pageY = window.scrollY;
   await refresh();
@@ -943,7 +1003,7 @@ function makeDeleteTaskButton(objType, store, row, upsertKeys, onAfterDelete) {
     const newStatus = store === 'lb_issues' ? 'Closed' : 'Removed';
     confirmModal('Delete Task',
       'This removes the task from active tracking. It stays in history.<br><br>' +
-      'Status: <b>' + esc(oldStatus || 'not set') + '</b> → <b>' + esc(newStatus) + '</b>',
+      'Status: <b>' + esc(oldStatus || 'not set') + '</b> ' + iconHtml('arrow-right') + ' <b>' + esc(newStatus) + '</b>',
       'Delete', async () => {
         btn.disabled = true;
         try {
@@ -1603,7 +1663,7 @@ function matrixCell(project, step) {
   if (!c.done.length && !c.filed.length && !c.missing.length && !c.removed.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
   if (c.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
   const nc = cellNoteCount(project, stepKeyOf(project.process, step));
-  if (nc) bits.push('<span class="matrix-note-indicator" title="' + nc + ' note(s)">💬 ' + nc + '</span>');
+  if (nc) bits.push('<span class="matrix-note-indicator" title="' + nc + ' note(s)">' + iconHtml('message-circle') + ' ' + nc + '</span>');
   // Overdue = a target_week is set, is in the past, and the thing it's on
   // still isn't done — a signed gate or a filed/approved doc clears it.
   var sk2 = stepKeyOf(project.process, step);
@@ -1674,6 +1734,7 @@ function groupCellStateFor(project, group) {
 }
 
 function viewDashboard(root) {
+  root.appendChild(pageHeader('Executive Dashboard', 'Portfolio health, stage matrix and schedule'));
   const b = el('div', 'banner');
   b.innerHTML = '<b>Executive summary.</b> Gate completion by process step and product family, with click-through to the full project detail.';
   root.appendChild(b);
@@ -1970,7 +2031,7 @@ function viewDashboard(root) {
         if (projIssues.length) {
           headHTML += ' <span class="matrix-issue-badge" title="' +
             projIssues.map(i => esc(i.title || i.issue_title || '(untitled)')).join('&#10;') +
-            '">⚠ ' + projIssues.length + '</span>';
+            '">' + iconHtml('alert-triangle') + ' ' + projIssues.length + '</span>';
         }
         head.innerHTML = headHTML;
         tr.appendChild(head);
@@ -1991,7 +2052,9 @@ function viewDashboard(root) {
             const stepIssues = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
               .filter(i => i.project_id === project.project_id && i.step_key === sk && i.status !== 'Closed');
             if (stepIssues.length) {
-              const badge = el('span', 'matrix-issue-badge', '⚠ ' + stepIssues.length);
+              const badge = el('span', 'matrix-issue-badge');
+              badge.appendChild(icon('alert-triangle'));
+              badge.appendChild(document.createTextNode(' ' + stepIssues.length));
               badge.title = stepIssues.map(i => esc(i.title || i.issue_title || '(untitled)')).join('\n');
               td.appendChild(el('br'));
               td.appendChild(badge);
@@ -2083,7 +2146,7 @@ function viewDashboard(root) {
         if (projIssues.length) {
           headHTML += ' <span class="matrix-issue-badge" title="' +
             projIssues.map(i => esc(i.title || i.issue_title || '(untitled)')).join('&#10;') +
-            '">⚠ ' + projIssues.length + '</span>';
+            '">' + iconHtml('alert-triangle') + ' ' + projIssues.length + '</span>';
         }
         head.innerHTML = headHTML;
         tr.appendChild(head);
@@ -2124,7 +2187,7 @@ function viewDashboard(root) {
                   groupNoteCount += cellNoteCount(project, stepKeyOf(proc, gs));
                 }
               });
-              if (groupNoteCount) bits.push('<span class="matrix-note-indicator" title="' + groupNoteCount + ' note(s)">💬 ' + groupNoteCount + '</span>');
+              if (groupNoteCount) bits.push('<span class="matrix-note-indicator" title="' + groupNoteCount + ' note(s)">' + iconHtml('message-circle') + ' ' + groupNoteCount + '</span>');
               let groupOverdueCount = 0;
               group.steps.forEach(function(gs) {
                 if (on.indexOf(gs) < 0) return;
@@ -2155,7 +2218,9 @@ function viewDashboard(root) {
               }
             });
             if (groupIssueCount) {
-              const badge = el('span', 'matrix-issue-badge', '⚠ ' + groupIssueCount);
+              const badge = el('span', 'matrix-issue-badge');
+              badge.appendChild(icon('alert-triangle'));
+              badge.appendChild(document.createTextNode(' ' + groupIssueCount));
               badge.title = groupIssueTitles.map(esc).join('\n');
               td.appendChild(el('br'));
               td.appendChild(badge);
@@ -2586,10 +2651,10 @@ function buildLiveGanttSection() {
     row.appendChild(el('div', 'gantt-live-meta-cell', proc));
     row.appendChild(el('div', 'gantt-live-meta-cell', p.market_manager || '—'));
     var issuesCell = el('div', 'gantt-live-meta-cell');
-    if (openCount) issuesCell.innerHTML = '<span class="matrix-issue-badge">⚠ ' + openCount + '</span>';
+    if (openCount) issuesCell.innerHTML = '<span class="matrix-issue-badge">' + iconHtml('alert-triangle') + ' ' + openCount + '</span>';
     row.appendChild(issuesCell);
     var commentsCell = el('div', 'gantt-live-meta-cell');
-    if (commentCount) commentsCell.innerHTML = '<span class="matrix-note-indicator">💬 ' + commentCount + '</span>';
+    if (commentCount) commentsCell.innerHTML = '<span class="matrix-note-indicator">' + iconHtml('message-circle') + ' ' + commentCount + '</span>';
     row.appendChild(commentsCell);
 
     var track = el('div', 'gantt-live-track');
@@ -3270,7 +3335,7 @@ function openDrawer(project, step, focusDocCode) {
       const dcEl = '<a class="doc-link" style="cursor:pointer;font-weight:700;color:var(--blue)" title="Click to focus — ' + esc(x.doc_code) + '">' + esc(x.doc_code) + '</a>';
       const pathHtml = path
         ? (isLink ? '<a href="' + esc(path) + '" target="_blank" class="note">' + esc(path) + '</a>'
-                  : '<span class="note">' + esc(x.file_name) + '</span><br><a href="file:///' + esc(path.replace(/\\/g, '/')) + '" class="note" style="font-size:10px;word-break:break-all">📂 ' + esc(path) + '</a>')
+                  : '<span class="note">' + esc(x.file_name) + '</span><br><a href="file:///' + esc(path.replace(/\\/g, '/')) + '" class="note" style="font-size:10px;word-break:break-all">' + iconHtml('folder-open') + ' ' + esc(path) + '</a>')
         : '<span class="note">—</span>';
       var removedMark = isDelRemoved ? ' <span class="badge bg-secondary" style="text-decoration:line-through;opacity:0.7">Removed</span>' : '';
       tr.innerHTML = '<td>' + dcEl + removedMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
@@ -3716,6 +3781,7 @@ var PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 var claimedUserSel = '';
 
 function viewClaimed(root) {
+  root.appendChild(pageHeader('Claimed Work', 'Tasks claimed by or assigned to a person'));
   var who = getUser();
   var b = el('div', 'banner');
   if (!who) {
@@ -3939,7 +4005,7 @@ function viewClaimed(root) {
     tr.style.cursor = 'pointer';
     var overdue = item.targetWeek && item.targetWeek < nw;
     var twDisplay = item.targetWeek || '—';
-    if (overdue) twDisplay = '⚠ Overdue: ' + twDisplay;
+    if (overdue) twDisplay = 'Overdue: ' + twDisplay;
 
     var partyCells = privileged
       ? '<td>' + (item.owner ? esc(item.owner) : '<span class="note">—</span>') + '</td>' +
@@ -3954,7 +4020,7 @@ function viewClaimed(root) {
       '<td>' + esc(item.label) + (item.assignedBy ? ' <span class="badge bg-primary" style="font-size:10px">Assigned by Admin</span>' : '') + '</td>' +
       partyCells +
       issueDateCell +
-      '<td class="' + (overdue ? 'claimed-overdue' : '') + '">' + esc(twDisplay) + '</td>' +
+      '<td class="' + (overdue ? 'claimed-overdue' : '') + '">' + (overdue ? iconHtml('alert-triangle') + ' ' : '') + esc(twDisplay) + '</td>' +
       '<td>' + esc(item.priority) + '</td>' +
       '<td><span class="' + badgeClass(item.status) + '">' + esc(item.status.replace(/_/g, ' ')) + '</span></td>';
 
@@ -3980,6 +4046,7 @@ function viewClaimed(root) {
 /* TAB — INPUT                                                           */
 /* ===================================================================== */
 function viewInput(root) {
+  root.appendChild(pageHeader('Data Input', 'Register projects and file evidence'));
   const b = el('div', 'banner');
   b.innerHTML = '<b>What this tool is.</b> It tracks the NPI and ECN stage-gate workflow defined in ' +
     esc(CFG.system_info.compiled_from.slice(0, 2).join(' and ')) + ' so a team can see whether a project is really ready ' +
@@ -4052,7 +4119,7 @@ function viewInput(root) {
     ctNote.style.display = '';
     ctNote.innerHTML = '<b>Type ' + esc(t.type_id) + ' — ' + esc(t.name) + '.</b> ' + esc(t.description) +
       '<br>Cycle time: ' + (t.cycle_time_days == null ? '<b>TBD</b> — ' + esc(t.cycle_time_note) + ' No target date will be set.'
-        : '<b>' + t.cycle_time_days + ' days</b> → target finish <b>' + esc(tgt || '—') + '</b>' + (override ? ' <span class="note">(manual override)</span>' : '')) +
+        : '<b>' + t.cycle_time_days + ' days</b> ' + iconHtml('arrow-right') + ' target finish <b>' + esc(tgt || '—') + '</b>' + (override ? ' <span class="note">(manual override)</span>' : '')) +
       '<br>Runs ' + (runs || all.map(s => s.step_id)).length + ' of ' + all.length + ' ' + esc(proc) + ' steps.' +
       (skipped.length ? ' Not applicable: ' + skipped.map(s => 'step ' + s.step_id + ' ' + esc(s.step_name)).join(', ') +
         (t.excluded_step_reason ? ' — ' + esc(t.excluded_step_reason) : '') : '') +
@@ -5081,7 +5148,8 @@ function gateCommentSection(project, stepKey) {
     addWrap.appendChild(save);
     thread.appendChild(addWrap);
     noteWrap.appendChild(thread);
-    cb.textContent = 'Gate Notes (' + notes.length + ') ▲';
+    cb.textContent = 'Gate Notes (' + notes.length + ') ';
+    cb.appendChild(icon('chevron-down'));
   };
   return wrap;
 }
@@ -5257,7 +5325,8 @@ function evidenceTable(g, project, step, redraw) {
         addWrap.appendChild(save);
         thread.appendChild(addWrap);
         noteWrap.appendChild(thread);
-        cb.textContent = 'Notes (' + notes.length + ') ▲';
+        cb.textContent = 'Notes (' + notes.length + ') ';
+        cb.appendChild(icon('chevron-down'));
       };
       act.appendChild(cb);
       act.appendChild(noteWrap);
@@ -5421,7 +5490,7 @@ function stepCard(project, proc, step, redraw) {
     : '';
   h.innerHTML = '<div><b>Step ' + step.step_id + ' — ' + esc(step.step_name) + '</b>' +
     '<div class="note">' + esc(step.description || '') + ' · approver: ' + esc(step.mandatory_approver || step.responsible_dept || '') + '</div></div>' +
-    '<div><span class="step-toggle-arrow">&#9660;</span> ' + priorBadge +
+    '<div><span class="step-toggle-arrow">' + iconHtml('chevron-down') + '</span> ' + priorBadge +
     '<span class="' + badgeClass(g.gated ? g.status : 'TRACK') + '">' + (g.gated ? g.status.replace(/_/g, ' ') : 'tracked') + '</span></div>';
   card.appendChild(h);
 
@@ -5470,7 +5539,7 @@ function stepCard(project, proc, step, redraw) {
   h.onclick = () => {
     body.classList.toggle('collapsed');
     const arrow = h.querySelector('.step-toggle-arrow');
-    if (arrow) arrow.innerHTML = body.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+    if (arrow) arrow.innerHTML = body.classList.contains('collapsed') ? iconHtml('chevron-right') : iconHtml('chevron-down');
   };
 
   card.appendChild(body);
@@ -5570,6 +5639,7 @@ function projectListRow(project, proc) {
 }
 
 function viewNpi(root) {
+  root.appendChild(pageHeader('NPI Projects', '7-step new product introduction workflow'));
   const b = el('div', 'banner');
   b.innerHTML = '<b>NPI gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
     'and a named person signs. Click a project to open its detail — gate approval, filing, and Authorise bypass all live in that sidebar now.';
@@ -5634,6 +5704,7 @@ function scopeNote(project, proc) {
 /* TAB — ECN (12 steps, lighter gates) + PPAP sub-section                */
 /* ===================================================================== */
 function viewEcn(root) {
+  root.appendChild(pageHeader('ECN Projects', '12-step engineering change workflow + PPAP'));
   const seg = el('div', 'seg');
   [['steps', 'Process steps'], ['ppap', 'PPAP package']].forEach(([k, l]) => {
     const bt = el('button', ecnMode === k ? 'on' : '', l); bt.onclick = () => { ecnMode = k; show('ecn'); }; seg.appendChild(bt);
@@ -5784,6 +5855,7 @@ function ppapSection(project) {
 /* TAB — SETTINGS (add / delete product families & document types)      */
 /* ===================================================================== */
 function viewSettings(root) {
+  root.appendChild(pageHeader('Settings', 'Master data, personnel and system configuration'));
   const b = el('div', 'banner');
   b.innerHTML = '<b>Settings edit system\\config.json directly.</b> Changes apply immediately for every user of this tool — ' +
     'nothing is regenerated from a workbook.';
@@ -5856,7 +5928,8 @@ function viewSettings(root) {
   CFG.prod_families.forEach(f => {
     const t = el('div', 'tagrow');
     t.innerHTML = '<span><b>' + esc(f.prod_family_id) + '</b> — ' + esc(f.prod_family_name) + ' (class ' + esc(f.complexity_class) + ')</span>';
-    const edit = el('button', null, '✎');
+    const edit = el('button', null);
+    edit.appendChild(icon('pencil'));
     edit.title = 'Edit this family';
     edit.style.color = 'var(--blue)';
     edit.onclick = () => {
@@ -5949,7 +6022,8 @@ function viewSettings(root) {
     const bottom = el('div', 'doctype-card-bottom');
     bottom.appendChild(el('span', 'badge bg-secondary-lt', d.stage_required || 'not gated'));
     const actsWrap = el('span', 'doctype-card-acts');
-    const edit = el('button', null, '✎');
+    const edit = el('button', null);
+    edit.appendChild(icon('pencil'));
     edit.title = 'Edit this document type';
     edit.style.color = 'var(--blue)';
     edit.onclick = () => {
@@ -6437,7 +6511,7 @@ function lfiSection(project, step) {
 
   var wrap = el('div', 'lfi-wrap');
   var toggle = el('button', 'lfi-expand-btn');
-  toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">&#9660;</span>';
+  toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">' + iconHtml('chevron-right') + '</span>';
   wrap.appendChild(toggle);
 
   var box = el('div', 'lfi-sidebar-container');
@@ -6453,7 +6527,7 @@ function lfiSection(project, step) {
   toggle.onclick = function() {
     expanded = !expanded;
     box.style.display = expanded ? 'block' : 'none';
-    toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">' + (expanded ? '&#9650;' : '&#9660;') + '</span>';
+    toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">' + (expanded ? iconHtml('chevron-down') : iconHtml('chevron-right')) + '</span>';
     toggle.classList.toggle('on', expanded);
     if (expanded) {
       var t = box.querySelector('#lfiTitle');
@@ -6528,7 +6602,7 @@ function lfiSection(project, step) {
   var collapse = function() {
     expanded = false;
     box.style.display = 'none';
-    toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">&#9660;</span>';
+    toggle.innerHTML = '+ Late Found Issue (LFI) <span class="lfi-caret">' + iconHtml('chevron-right') + '</span>';
     toggle.classList.remove('on');
   };
 
@@ -6684,6 +6758,7 @@ function setTheme(t) {
   if (btn) {
     btn.setAttribute('aria-pressed', String(v === 'dark'));
     btn.title = (v === 'dark') ? 'Switch to light theme' : 'Switch to dark theme';
+    btn.innerHTML = iconHtml(v === 'dark' ? 'sun' : 'moon');
   }
   try { localStorage.setItem(TK, v); } catch (e) { }
 }

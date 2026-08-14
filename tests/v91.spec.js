@@ -99,7 +99,7 @@ test.describe('v9.1 type-in combobox for Change / project type', () => {
     await expect(page.locator('#classList option')).not.toHaveCount(0);
   });
 
-  test('typing a bare type_id ("A") registers with the correct change type', async ({ page }) => {
+  test('typing a bare type_id ("A") submits class_abcde "A"', async ({ page }) => {
     await boot(page);
     await loginAsAdmin(page);
     await page.locator('#tabs button', { hasText: /^Input$/ }).click();
@@ -110,11 +110,31 @@ test.describe('v9.1 type-in combobox for Change / project type', () => {
     await page.locator('#npClass').dispatchEvent('change');
     await expect(page.locator('.banner', { hasText: 'Packaging-Only Change' })).toBeVisible();
 
-    let dialogMsg = '';
-    page.once('dialog', (d) => { dialogMsg = d.message(); d.accept(); });
+    /* The point of this test is that normaliseChangeTypeInput() feeds the
+       right type_id into the POST body — not that a row lands on disk. The
+       original version let the request through, and since there is no
+       delete-project endpoint every suite run permanently accreted a junk
+       NPI-V91A* project. Those projects are NOT STARTED and carry no
+       PRF/target week, so they are never charted on the Gantt — which is
+       exactly what broke v81.spec.js's `.first()` "NOT STARTED" selector.
+       Intercepting the call proves the same thing and leaves no residue. */
+    let posted = null;
+    await page.route('**/api/projects', async (route) => {
+      posted = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ project_id: 'NPI-' + famId }),
+      });
+    });
+
+    page.once('dialog', (d) => d.accept());
     await page.locator('button', { hasText: 'Register project' }).click();
-    await page.waitForTimeout(500);
-    expect(dialogMsg, 'success alert names the new project id').toContain('Registered as NPI-' + famId);
+    await expect.poll(() => posted, { timeout: 5000 }).not.toBeNull();
+
+    expect(posted.class_abcde, 'typed "A" resolved to type_id A').toBe('A');
+    expect(posted.family).toBe(famId);
+    await page.unroute('**/api/projects');
   });
 
   test('typing "Type E - ECN" resolves to type_id E', async ({ page }) => {

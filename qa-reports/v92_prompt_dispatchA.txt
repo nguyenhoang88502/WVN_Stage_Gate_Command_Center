@@ -1,0 +1,214 @@
+You are a DeepSeek Worker implementing the v9.2 ERP UI shell for the WAHL
+Vietnam Stage Gate Command Center (vanilla-JS SPA, air-gapped, no CDN).
+
+Work ONLY in these two files:
+  system/index.html
+  system/styles.css
+
+Do NOT touch system/app.js — a separate task handles it. Preserve existing
+style: 2-space indent, the existing CSS custom-property token system, and the
+numbered section banners in styles.css.
+
+============================================================
+GOAL
+============================================================
+Convert the app from a horizontal tab-bar page into a proper ERP console
+shell: fixed left sidebar navigation, a slim top command bar over the content
+area, and a page-header band. The app already vendors Tabler v1.4.0
+(system/vendor/tabler/) and now also vendors an icon sprite at
+system/vendor/tabler-icons/sprite.svg (48 <symbol> elements, ids "i-<name>").
+
+============================================================
+HARD CONSTRAINT — DO NOT BREAK THESE SELECTORS
+============================================================
+A 70-test Playwright suite targets the DOM directly. These must all keep
+working exactly as they do now:
+
+  #tabs          — nav container; MUST still contain <button> children,
+                   because tests do `#tabs button` with hasText filters on
+                   the label text ("Dashboard", "Claimed Work", "Input",
+                   "NPI · 7 steps", "ECN · 12 steps + PPAP", "Settings").
+                   app.js appends those buttons; you are only restyling the
+                   container and its buttons. DO NOT convert them to <a>.
+  #views         — the content host app.js renders every view into.
+  #srvState      — connection badge; text stays "connected"/"offline".
+  #whoSelect     — identity <select>, injected by app.js after #srvState
+                   (app.js does `$('#srvState').insertAdjacentElement('afterend', who)`),
+                   so #srvState MUST stay in a container that can hold it.
+  #reloadBtn, #autoReloadChk, #themeBtn, #stamp — keep all four, same ids.
+  #drawer, #scrim, #globalLoader — do not change their positioning rules.
+  .card, .banner, .sub, table, .dz, .gantt-*, .claimed-row,
+  .project-list-row, .modal-scrim, .modal — leave all of these alone.
+
+If a rule you write would change the box model of .card/.dz/table, keep the
+change to spacing/typography only — no display or position changes.
+
+============================================================
+1. system/index.html — shell skeleton
+============================================================
+Restructure <body> to this shape. Keep the existing <head> exactly as-is
+except for adding nothing (the sprite is inlined in the body, not the head).
+
+<body>
+  <!-- Icon sprite, inlined so <use href="#i-..."> resolves with zero network
+       requests. The app is air-gapped; an external sprite reference would
+       not load. -->
+  ...PASTE THE ENTIRE CONTENTS OF system/vendor/tabler-icons/sprite.svg HERE...
+
+  <div class="page">
+    <aside class="app-sidebar" id="appSidebar">
+      <div class="sidebar-brand">
+        <svg class="icon sidebar-brand-icon"><use href="#i-building-factory-2"/></svg>
+        <div class="sidebar-brand-text">
+          <b>WAHL Vietnam</b>
+          <span>NPI &amp; ECN Command Center</span>
+        </div>
+      </div>
+      <nav class="tabs" id="tabs" role="tablist" aria-label="Workspace"></nav>
+      <div class="sidebar-foot">
+        <span id="stamp">loading…</span>
+      </div>
+    </aside>
+
+    <div class="page-wrapper">
+      <header class="topbar d-print-none">
+        <button id="sidebarToggle" class="btn btn-icon btn-sm topbar-burger" type="button"
+                aria-label="Toggle navigation" aria-expanded="true">
+          <svg class="icon"><use href="#i-menu-2"/></svg>
+        </button>
+        <div class="topbar-title" id="pageTitle"></div>
+        <div class="cmdbar">
+          <span id="srvState" class="badge bg-secondary" role="status" aria-live="polite">connecting…</span>
+          <button id="reloadBtn" class="btn btn-icon btn-sm" type="button" title="Reload data">
+            <svg class="icon"><use href="#i-refresh"/></svg>
+          </button>
+          <label class="auto-reload"><input type="checkbox" id="autoReloadChk"> auto</label>
+          <button id="themeBtn" class="btn btn-icon btn-sm" type="button"
+                  aria-pressed="false" title="Switch to dark theme">
+            <svg class="icon"><use href="#i-moon"/></svg>
+          </button>
+        </div>
+      </header>
+      <main class="page-body">
+        <div id="views">
+          <div class="loader">Loading…</div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <div id="dashPrintPackage" class="hide"></div>
+  <script src="./vendor/tabler/js/tabler.min.js" defer></script>
+  <script src="./app.js"></script>
+</body>
+
+Notes:
+- #stamp moves into the sidebar foot. It still exists with the same id, and
+  app.js still writes the app name + version + timestamp into it. Style it
+  small and muted; allow it to wrap onto 2-3 lines.
+- #themeBtn keeps its ◐-era behaviour; app.js toggles it. Just give it the
+  moon icon markup shown. (app.js may later swap the <use> target; do not
+  add JS for that here.)
+- #sidebarToggle is NEW. Wire its behaviour in CSS only via a body class that
+  app.js will toggle — do NOT add a <script> block to index.html. Define the
+  collapsed state as `body.sidebar-collapsed`.
+
+============================================================
+2. system/styles.css — shell styles
+============================================================
+Replace the contents of section "== 5. APPLICATION LAYOUT" `.app` rule and
+section "== 7. WORKSPACE NAVIGATION" wholesale. Keep every other section.
+
+Add these tokens to :root (and mirror sensible dark values in
+html[data-theme="dark"]):
+  --sidebar-w: 232px;
+  --sidebar-w-collapsed: 60px;
+  --topbar-h: 52px;
+  --sidebar-bg: #0f2438;      /* dark rail in BOTH themes — ERP convention */
+  --sidebar-ink: #dce7f2;
+  --sidebar-muted: #8ba1b8;
+  --sidebar-active: #1d4e7f;
+
+Layout requirements:
+- `.page` is `display:flex; min-height:100vh`.
+- `.app-sidebar` is fixed to the left, width var(--sidebar-w), full height,
+  background var(--sidebar-bg), color var(--sidebar-ink), scrolls internally
+  if it overflows, z-index above content but BELOW #drawer and .modal-scrim
+  (check their z-index values in the file and stay under them — the drawer
+  must still cover the sidebar).
+- `.page-wrapper` gets `margin-left: var(--sidebar-w)` and
+  `flex: 1; min-width: 0` (min-width:0 matters — without it wide tables blow
+  out the flex child instead of scrolling inside their own container).
+- `.topbar` is sticky at top:0, height var(--topbar-h), background
+  var(--panel), bottom border var(--line), display:flex, align-items:center,
+  gap var(--s2), padding-inline var(--s4), z-index just under the sidebar.
+  `.cmdbar` inside it is `margin-left:auto`.
+- `.page-body` gets padding var(--s4) and `padding-bottom: 60px`.
+- `.topbar-title` shows the current view name; app.js fills #pageTitle.
+  Style it 14px/600 weight, colour var(--ink).
+
+Sidebar nav (`nav.tabs` — same element, now vertical):
+- `display:flex; flex-direction:column; gap:2px; padding: var(--s2)`.
+- Remove the old sticky/horizontal-scroll/border-bottom rules entirely.
+- `nav.tabs button`: full width, `display:flex; align-items:center;
+  gap:10px; justify-content:flex-start`, transparent background, colour
+  var(--sidebar-muted), padding 9px 12px, border-radius var(--r1),
+  font-size 13px, text-align left, border:none, cursor:pointer,
+  white-space:nowrap.
+- `nav.tabs button:hover:not(.on)` → background rgba(255,255,255,.06),
+  colour var(--sidebar-ink).
+- `nav.tabs button.on` → background var(--sidebar-active), colour #fff,
+  font-weight 600.
+- `nav.tabs button .icon` → flex:none, width 18px, height 18px, opacity .9.
+
+Collapsed state (`body.sidebar-collapsed`):
+- `.app-sidebar` width var(--sidebar-w-collapsed);
+  `.page-wrapper` margin-left var(--sidebar-w-collapsed).
+- Hide `.sidebar-brand-text`, `.sidebar-foot`, and the button label text.
+  Give each nav button's label a wrapper class `.tab-label` (app.js will
+  emit it) and hide that; centre the icon.
+- Add a `transition: width var(--t-med), margin-left var(--t-med)` so it
+  animates.
+
+Icon class (NEW, put it near the top of the components area):
+  .icon {
+    width: 18px; height: 18px;
+    display: inline-block; vertical-align: -0.15em;
+    flex: none;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .icon-sm { width: 15px; height: 15px }
+  .icon-lg { width: 22px; height: 22px }
+Icons inherit colour from the parent, so never hard-code a stroke colour.
+
+Page header band (NEW component, app.js will emit the markup):
+  .page-header { display:flex; align-items:flex-start; gap:var(--s3);
+    margin-bottom:var(--s4); padding-bottom:var(--s3);
+    border-bottom:1px solid var(--line) }
+  .page-header-title { font-size:19px; font-weight:650; margin:0;
+    color:var(--ink); line-height:1.25 }
+  .page-header-sub { font-size:12px; color:var(--muted); margin-top:2px }
+  .page-header-actions { margin-left:auto; display:flex; gap:var(--s2);
+    align-items:center; flex-wrap:wrap }
+
+Density pass (ERP tables are tighter than Bootstrap defaults):
+- `table th` → font-size 10.5px, letter-spacing .04em, text-transform
+  uppercase, colour var(--muted), font-weight 700, padding 7px 10px.
+- `table td` → padding 6px 10px, font-size 12.2px.
+- Keep existing border/hover colours; only change spacing and type.
+
+Responsive + print:
+- Under 900px viewport width: sidebar becomes an overlay
+  (`position:fixed; transform:translateX(-100%)`) and `.page-wrapper` gets
+  `margin-left:0`; `body.sidebar-open .app-sidebar { transform:none }`.
+- In the existing print section: `.app-sidebar, .topbar { display:none }`
+  and `.page-wrapper { margin-left:0 }`. The printed report must be
+  unchanged from today.
+- Respect the existing prefers-reduced-motion block — add the new
+  transitions to it if that block enumerates properties.
+
+============================================================
+OUTPUT
+============================================================
+Apply both edits directly. Then print a short plain-text summary (4-6
+sentences) of exactly what you changed. Do not restate this brief.

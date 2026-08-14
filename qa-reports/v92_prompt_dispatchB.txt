@@ -1,0 +1,219 @@
+You are a DeepSeek Worker implementing the v9.2 ERP UI shell for the WAHL
+Vietnam Stage Gate Command Center (vanilla-JS SPA, air-gapped, no CDN).
+
+Work ONLY in this file:
+  system/app.js
+
+Preserve existing style exactly: 2-space indent, single quotes, UTF-8 no-BOM.
+Make surgical edits — do not reformat or reorganize anything not described here.
+
+============================================================
+CONTEXT
+============================================================
+system/index.html and system/styles.css have already been converted to an ERP
+console shell: a fixed dark left sidebar (<aside class="app-sidebar">) whose
+nav container is still `<nav class="tabs" id="tabs">`, plus a sticky
+`<header class="topbar">` containing #srvState / #reloadBtn / #autoReloadChk /
+#themeBtn and an empty `<div class="topbar-title" id="pageTitle">`.
+
+An icon sprite is inlined at the top of <body> with 48 <symbol> elements whose
+ids are "i-<name>". Render one as:
+  <svg class="icon"><use href="#i-refresh"/></svg>
+The CSS class `.icon` already sets size/stroke/fill and inherits colour from
+its parent, so never hard-code a colour.
+
+Available icon names (id = "i-" + name):
+  layout-dashboard checklist file-import rocket git-branch settings
+  refresh moon sun menu-2 plug-connected plug-connected-x
+  alert-triangle alert-circle info-circle circle-check circle-x clock lock
+  shield-lock message-circle folder-open pencil star arrow-right check x
+  upload download trash plus search filter external-link printer paperclip
+  dots-vertical chevron-down chevron-right file-text files user users
+  calendar-event table chart-bar clipboard-check building-factory-2
+
+============================================================
+HARD CONSTRAINT — DO NOT BREAK THESE
+============================================================
+A 70-test Playwright suite targets the DOM directly.
+
+  * `#tabs` MUST keep receiving <button> children, one per workspace, and
+    each button's TEXT CONTENT must still match these exactly, because tests
+    filter with hasText regexes anchored on them:
+        Dashboard | Claimed Work | Input | NPI · 7 steps |
+        ECN · 12 steps + PPAP | Settings
+    Adding an <svg> icon INSIDE the button is fine — textContent is
+    unaffected by it. Wrap the label text in `<span class="tab-label">` so
+    the collapsed-sidebar CSS can hide it. Do NOT change the button to <a>,
+    and do NOT change the label strings.
+  * Do not rename or remove: #views, #srvState, #whoSelect, #reloadBtn,
+    #autoReloadChk, #themeBtn, #stamp, #drawer, #scrim, #globalLoader,
+    #dashPrintPackage, #dashReportSelect, #lfi* ids, #np* ids, #b* ids.
+  * Do not change these class names anywhere: card, card-body, card-header,
+    card-title, banner, sub, dz, dz-locked, dz-issue-resolve, dz-note-input,
+    dz-note-add, dz-template-btn, claim-row, claim-badge, claim-issue-row,
+    claimed-row, claimed-overdue, project-list-row, comment-thread,
+    comment-item, comment-add, target-week-editor, doctype-card*,
+    dashboard-slicers, ms-wrapper, gantt-* (all), modal, modal-scrim,
+    admin-pin-card, batch-file, import-result, matrix-*, stepcard, stephead,
+    stepbody, filters, grid2, fld, note, scroll, hide, err, acts, empty.
+  * Keep every existing aria-*, role and title attribute already present.
+
+============================================================
+1. Icon helper (NEW)
+============================================================
+Add near the top of the file, next to the existing `el` / `esc` helpers:
+
+  /* Renders one sprite icon. Returns an <svg> element; use iconHtml() when
+     building a string. The sprite is inlined in index.html, so <use> resolves
+     with no network request (the app runs air-gapped). */
+  function icon(name, cls) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'icon' + (cls ? ' ' + cls : ''));
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#i-' + name);
+    svg.appendChild(use);
+    return svg;
+  }
+  function iconHtml(name, cls) {
+    return '<svg class="icon' + (cls ? ' ' + cls : '') + '" aria-hidden="true">' +
+      '<use href="#i-' + name + '"/></svg>';
+  }
+
+Note: icons must be created with createElementNS — document.createElement('svg')
+produces an HTML element that will not render.
+
+============================================================
+2. buildTabs() — sidebar items with icons
+============================================================
+Current:
+  const TABS = [['dash','Dashboard'],['claimed','Claimed Work'],['input','Input'],
+                ['npi','NPI · 7 steps'],['ecn','ECN · 12 steps + PPAP'],
+                ['settings','Settings']];
+  function buildTabs() {
+    const n = $('#tabs'); n.innerHTML = '';
+    TABS.forEach(([id, label]) => { const b = el('button', id === current ? 'on' : '', label); b.onclick = () => show(id); n.appendChild(b); });
+  }
+
+Extend TABS to a third element, the icon name:
+  dash → layout-dashboard
+  claimed → checklist
+  input → file-import
+  npi → rocket
+  ecn → git-branch
+  settings → settings
+
+Rewrite buildTabs() so each button contains the icon followed by
+`<span class="tab-label">LABEL</span>`. Build it with DOM nodes (not
+innerHTML) so the label text is inserted as a text node and stays
+exactly equal to the current label string. Keep `b.onclick = () => show(id)`
+and the `on` class logic unchanged. Add `b.type = 'button'` and
+`b.title = label` (the title makes the collapsed rail usable).
+
+============================================================
+3. show() — page title + page header
+============================================================
+`show(id, preserveScroll)` currently sets `current`, calls buildTabs(),
+closeDrawer(), clears #views, runs the view builder, and handles scroll.
+Do not change any of that logic or the preserveScroll behaviour.
+
+Add ONE thing: after buildTabs(), write the current workspace's label into
+the topbar title element:
+  const pt = $('#pageTitle');
+  if (pt) pt.textContent = (TABS.find(t => t[0] === id) || [null, ''])[1];
+
+Also add a reusable page-header builder others can call:
+
+  /* Standard band at the top of a view: title, optional one-line subtitle,
+     and an actions slot on the right. Returns the node; callers append their
+     own buttons/controls into `.page-header-actions` via the returned
+     `actions` reference. */
+  function pageHeader(title, subtitle) {
+    const wrap = el('div', 'page-header');
+    const left = el('div');
+    left.appendChild(el('h2', 'page-header-title', title));
+    if (subtitle) left.appendChild(el('div', 'page-header-sub', subtitle));
+    const actions = el('div', 'page-header-actions');
+    wrap.appendChild(left);
+    wrap.appendChild(actions);
+    wrap.actions = actions;
+    return wrap;
+  }
+
+Then, in EACH of the six view builders (viewDashboard, viewClaimed,
+viewInput, viewNpi, viewEcn, viewSettings), insert a pageHeader(...) as the
+FIRST node appended to `root`, with these titles/subtitles:
+  viewDashboard  'Executive Dashboard'  'Portfolio health, stage matrix and schedule'
+  viewClaimed    'Claimed Work'         'Tasks claimed by or assigned to a person'
+  viewInput      'Data Input'           'Register projects and file evidence'
+  viewNpi        'NPI Projects'         '7-step new product introduction workflow'
+  viewEcn        'ECN Projects'         '12-step engineering change workflow + PPAP'
+  viewSettings   'Settings'             'Master data, personnel and system configuration'
+Leave every existing `.banner` element exactly where it is — the page header
+goes ABOVE the banner, it does not replace it.
+
+============================================================
+4. Sidebar collapse toggle
+============================================================
+In boot(), after wireReloadButton(), wire the burger button that index.html
+now provides:
+
+  (function wireSidebarToggle() {
+    const btn = $('#sidebarToggle'); if (!btn) return;
+    const KEY = 'wvn_sidebar_collapsed';
+    const apply = (collapsed) => {
+      document.body.classList.toggle('sidebar-collapsed', collapsed);
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    };
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(KEY) === '1'; } catch (e) { }
+    apply(collapsed);
+    btn.onclick = () => {
+      collapsed = !collapsed;
+      apply(collapsed);
+      try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) { }
+    };
+  })();
+
+============================================================
+5. Replace emoji/unicode glyphs with sprite icons
+============================================================
+Find and replace every one of these UI glyphs. They appear inside string
+concatenations that build innerHTML, so use iconHtml() there; where a DOM
+node is being built, prefer icon().
+
+  '⚠'  (issue-count badges, overdue markers)  → alert-triangle
+  '💬' (comment / note indicators)            → message-circle
+  '📂' (open-in-Explorer link)                → folder-open
+  '✎'  (edit affordance)                      → pencil
+  '★'  (highlight/priority marker)            → star
+  '→'  (planned → actual, transitions)        → arrow-right
+  '▲' / '▼' / '&#9660;' / '&#9654;'
+        (step-card expand/collapse arrows)    → chevron-down / chevron-right
+  '◦'  (bullet in issue lists)                → keep as text, do not convert
+
+Rules while doing this:
+- Where the glyph sits inside a `title="..."` attribute or an alert()/prompt()
+  string, LEAVE IT AS TEXT — an <svg> cannot render there. Only convert
+  glyphs that end up as rendered element content.
+- The step-card toggle currently swaps innerHTML between '&#9660;' and
+  '&#9654;' inside `.step-toggle-arrow`. Convert both branches to
+  iconHtml('chevron-down') / iconHtml('chevron-right') respectively, keeping
+  the same `.step-toggle-arrow` wrapper class and the same toggle logic.
+- Do not introduce icons anywhere a glyph did not already exist, EXCEPT the
+  six sidebar buttons (section 2) — this task is a like-for-like swap plus
+  the shell, not a redesign of individual views.
+
+============================================================
+6. Theme button icon
+============================================================
+Wherever the theme toggle updates its own label/state, make it show
+iconHtml('sun') when the current theme is dark and iconHtml('moon') when it
+is light, replacing the button's innerHTML. Keep the existing aria-pressed
+and title updates exactly as they are.
+
+============================================================
+OUTPUT
+============================================================
+Apply all edits directly to system/app.js. Then print a short plain-text
+summary (5-8 sentences) of exactly what you changed. Do not restate this brief.

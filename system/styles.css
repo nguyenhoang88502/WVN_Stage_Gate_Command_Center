@@ -91,6 +91,15 @@
   --t-med: .18s ease-out;
 
   --row-hover: #f2f6fa;
+
+  /* shell chrome (fixed left rail + slim top command bar) */
+  --sidebar-w: 232px;
+  --sidebar-w-collapsed: 60px;
+  --topbar-h: 52px;
+  --sidebar-bg: #0f2438;   /* dark rail in BOTH themes — ERP convention */
+  --sidebar-ink: #dce7f2;
+  --sidebar-muted: #8ba1b8;
+  --sidebar-active: #1d4e7f;
 }
 
 
@@ -136,6 +145,16 @@ html[data-theme="dark"] {
   --sh3: 0 12px 34px rgba(0, 0, 0, .6);
 
   --row-hover: #1d2b3a;
+
+  /* shell chrome — sidebar stays the same dark rail in both themes */
+  --sidebar-w: 232px;
+  --sidebar-w-collapsed: 60px;
+  --topbar-h: 52px;
+  --sidebar-bg: #0f2438;
+  --sidebar-ink: #dce7f2;
+  --sidebar-muted: #8ba1b8;
+  --sidebar-active: #1d4e7f;
+
   color-scheme: dark;
 }
 
@@ -205,7 +224,90 @@ code {
 }
 
 /* == 5. APPLICATION LAYOUT =============================================== */
-.app { max-width: 1560px; margin: auto; padding: 0 var(--s4) 60px }
+/* Icon sprite host — Tabler glyphs inherit colour from the parent, so a
+   stroke colour is never hard-coded here. */
+.icon {
+  width: 18px; height: 18px;
+  display: inline-block; vertical-align: -0.15em;
+  flex: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.icon-sm { width: 15px; height: 15px }
+.icon-lg { width: 22px; height: 22px }
+
+/* Fixed left rail + slim top command bar over the content column. The old
+   centred .app wrapper is gone: .page is a full-height flex shell whose only
+   in-flow child is .page-wrapper; the sidebar is fixed and overlays nothing. */
+.page { display: flex; min-height: 100vh }
+
+.app-sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-ink);
+  z-index: 60; /* above content, below .scrim(90)/.drawer(91)/.modal-scrim(200) */
+  display: flex; flex-direction: column;
+  overflow-y: auto; overflow-x: hidden;
+  transition: width var(--t-med), transform var(--t-med);
+}
+
+.page-wrapper {
+  margin-left: var(--sidebar-w);
+  flex: 1; min-width: 0;
+  transition: margin-left var(--t-med);
+}
+
+.topbar {
+  position: sticky; top: 0; z-index: 55;
+  height: var(--topbar-h);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: var(--s2);
+  padding-inline: var(--s4);
+}
+
+.page-body { padding: var(--s4); padding-bottom: 60px }
+
+.topbar-title { font-size: 14px; font-weight: 600; color: var(--ink) }
+.cmdbar { display: flex; align-items: center; gap: var(--s2); margin-left: auto }
+
+.topbar-burger { flex: none; color: var(--ink2); background: transparent; border-color: transparent }
+.topbar-burger:hover { background: var(--soft); color: var(--ink) }
+
+/* Sidebar brand block */
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: var(--s4) var(--s3);
+  border-bottom: 1px solid var(--header-line);
+  flex: none;
+}
+.sidebar-brand-icon { width: 24px; height: 24px; color: var(--sidebar-ink) }
+.sidebar-brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+.sidebar-brand-text b { font-size: 14px; color: var(--sidebar-ink); letter-spacing: -.01em; white-space: nowrap }
+.sidebar-brand-text span { font-size: 10.5px; color: var(--sidebar-muted); white-space: nowrap }
+
+/* Sidebar footer — app name + version + timestamp, small and muted */
+.sidebar-foot {
+  flex: none; margin-top: auto;
+  padding: var(--s3);
+  border-top: 1px solid var(--header-line);
+}
+.sidebar-foot #stamp {
+  display: block; color: var(--sidebar-muted);
+  font-size: 10.5px; line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Page header band — app.js emits the markup */
+.page-header {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  margin-bottom: var(--s4); padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+.page-header-title { font-size: 19px; font-weight: 650; margin: 0; color: var(--ink); line-height: 1.25 }
+.page-header-sub { font-size: 12px; color: var(--muted); margin-top: 2px }
+.page-header-actions { margin-left: auto; display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap }
 
 .banner {
   background: var(--blue2);
@@ -235,69 +337,49 @@ code {
   text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
 }
 
-/* == 6. HEADER AND COMMAND BAR =========================================== */
-/* Deep navy in BOTH themes. It anchors the page as a command bar rather than a
-   web-app toolbar, and it keeps the brand block identical whichever theme the
-   user picked — an operations tool should look the same to everyone. */
-header.navbar {
-  background: var(--header-bg);
-  border-bottom: 1px solid var(--header-line);
-  box-shadow: var(--sh2);
-  position: sticky; top: 0; z-index: 50;
-  padding: 0; min-height: 56px;
-  margin-bottom: var(--s3);
-}
-header.navbar .container-xl {
-  display: flex; align-items: center; gap: var(--s3);
-  flex-wrap: wrap; padding: var(--s2) var(--s4); max-width: 1560px;
-}
-header.navbar .navbar-brand {
-  color: var(--header-ink); font-weight: 700; font-size: 15px;
-  letter-spacing: -.01em; padding: 0; margin: 0; display: flex;
-  align-items: baseline; gap: var(--s2); white-space: nowrap;
-}
-header.navbar .navbar-brand .brand-sub {
-  color: var(--header-muted); font-weight: 500; font-size: 12px; letter-spacing: 0;
-}
-header.navbar .navbar-text,
-header.navbar #stamp {
-  color: var(--header-muted); font-size: 11.5px; padding: 0;
-  font-variant-numeric: tabular-nums;
-}
-header.navbar .cmdbar { display: flex; align-items: center; gap: var(--s2); margin-left: auto }
+/* == 6. TOPBAR AND COMMAND BAR =========================================== */
+
+/* v9.2: the command bar moved off the navy header onto the light .topbar, so
+   every control here is token-based rather than translucent-white-on-navy.
+   The old rgba(255,255,255,.08) surfaces and --header-ink text rendered
+   near-invisible once the backdrop became var(--panel). Tokens flip with the
+   theme, so one set of rules now reads correctly in both. */
 
 /* live server-status pill: dot + text, so state is never colour-only */
 #srvState {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 600; letter-spacing: .02em;
   padding: 4px 10px; border-radius: 999px;
-  background: rgba(255, 255, 255, .09); color: var(--header-ink);
-  border: 1px solid rgba(255, 255, 255, .16);
+  background: var(--neutral2); color: var(--ink2);
+  border: 1px solid var(--line);
 }
 #srvState::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%;
   background: currentColor; flex: none;
 }
-#srvState.bg-success { background: rgba(79, 209, 136, .16); color: #7ee2a8; border-color: rgba(79, 209, 136, .4) }
-#srvState.bg-danger { background: rgba(255, 138, 126, .16); color: #ff9c92; border-color: rgba(255, 138, 126, .42) }
-#srvState.bg-warning { background: rgba(232, 184, 95, .16); color: #f0c777; border-color: rgba(232, 184, 95, .42) }
+#srvState.bg-success { background: var(--good2); color: var(--good); border-color: var(--good) }
+#srvState.bg-danger { background: var(--bad2); color: var(--bad); border-color: var(--bad) }
+#srvState.bg-warning { background: var(--warn2); color: var(--warn); border-color: var(--warn) }
 
 #whoInput, #whoSelect {
   height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
-  background: rgba(255, 255, 255, .08); color: var(--header-ink);
-  border: 1px solid rgba(255, 255, 255, .18); border-radius: var(--r1);
-  padding: 0 var(--s2); font-size: 12px; width: 140px;
+  background: var(--input); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  padding: 0 var(--s2); font-size: 12.5px; max-width: 190px;
 }
-#whoInput::placeholder { color: var(--header-muted) }
-#whoInput:focus, #whoSelect:focus { border-color: var(--focus); background: rgba(255, 255, 255, .14); outline: none }
+#whoInput::placeholder { color: var(--muted) }
+#whoInput:focus-visible, #whoSelect:focus-visible {
+  border-color: var(--focus); box-shadow: var(--focus-ring); outline: none;
+}
 
 #themeBtn {
   height: var(--ctl-h-sm); min-width: var(--ctl-h-sm);
-  background: rgba(255, 255, 255, .08); color: var(--header-ink);
-  border: 1px solid rgba(255, 255, 255, .18); border-radius: var(--r1);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--soft); color: var(--ink2);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
   cursor: pointer; font-size: 14px; line-height: 1;
 }
-#themeBtn:hover { background: rgba(255, 255, 255, .16) }
+#themeBtn:hover { background: var(--grey2); color: var(--ink) }
 
 /* The in-app Stop Server button was removed in v4.1 - stopping the server now
    goes through Stop_Server.cmd, so the #stopBtn rules that lived here were
@@ -307,11 +389,12 @@ header.navbar .cmdbar { display: flex; align-items: center; gap: var(--s2); marg
    shape so the two read as one pair of header controls. */
 #reloadBtn {
   height: var(--ctl-h-sm); min-width: var(--ctl-h-sm);
-  background: rgba(255, 255, 255, .08); color: var(--header-ink);
-  border: 1px solid rgba(255, 255, 255, .18); border-radius: var(--r1);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--soft); color: var(--ink2);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
   cursor: pointer; font-size: 14px; line-height: 1;
 }
-#reloadBtn:hover:not(:disabled) { background: rgba(255, 255, 255, .16) }
+#reloadBtn:hover:not(:disabled) { background: var(--grey2); color: var(--ink) }
 #reloadBtn:disabled { opacity: .55; cursor: progress }
 /* The glyph spins only while a reload is actually in flight, so a reload that
    silently failed and left the button dead is visible rather than just inert. */
@@ -325,52 +408,45 @@ header.navbar .cmdbar { display: flex; align-items: center; gap: var(--s2); marg
 
 .auto-reload {
   display: inline-flex; align-items: center; gap: 4px;
-  color: var(--header-muted); font-size: 11.5px; cursor: pointer;
+  color: var(--muted); font-size: 11.5px; cursor: pointer;
   user-select: none; white-space: nowrap;
 }
 .auto-reload input { margin: 0; cursor: pointer }
 
-/* Light-theme command bar refinement: the base #whoInput above is tuned for
-   the navy header; these scoped rules guarantee a crisp white field surface
-   with an always-white caret and a soft placeholder in both themes. */
-header.navbar #whoInput, header.navbar #whoSelect {
-  background: rgba(255, 255, 255, 0.1) !important;
-  border: 1px solid rgba(255, 255, 255, 0.25) !important;
-  color: #ffffff !important;
-  border-radius: 4px;
-  padding: 0.25rem 0.5rem;
-}
-header.navbar #whoInput::placeholder { color: #94a3b8; }
 
 /* == 7. WORKSPACE NAVIGATION ============================================= */
-/* One row, always. Overflows to a horizontal scroll on narrow screens rather
-   than wrapping to a second line, which broke the tab-strip metaphor. */
+/* Vertical rail inside the fixed sidebar — the old horizontal tab strip is
+   gone. #tabs is the same element; only its layout and the button chrome
+   changed (app.js still appends one <button> per view). */
 nav.tabs {
-  display: flex; gap: 2px; flex-wrap: nowrap;
-  overflow-x: auto; overflow-y: hidden;
-  margin-bottom: var(--s4);
-  border-bottom: 1px solid var(--line);
-  scrollbar-width: thin;
-  position: sticky; top: 56px; z-index: 40;
-  background: var(--bg);
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--s2);
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
 }
-nav.tabs::-webkit-scrollbar { height: 5px }
-nav.tabs::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px }
 nav.tabs button {
-  flex: none;
-  border: 1px solid transparent; border-bottom: 2px solid transparent;
-  border-radius: var(--r1) var(--r1) 0 0;
-  background: transparent; color: var(--ink2);
-  padding: 10px 18px; font-size: 13px; font-weight: 500;
-  white-space: nowrap; cursor: pointer;
-  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
-  min-height: 40px;
+  display: flex; align-items: center; gap: 10px; justify-content: flex-start;
+  width: 100%;
+  background: transparent; color: var(--sidebar-muted);
+  padding: 9px 12px; border-radius: var(--r1);
+  font-size: 13px; text-align: left; border: none; cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t-fast), color var(--t-fast);
 }
-nav.tabs button:hover:not(.on) { background: var(--soft); color: var(--ink) }
-nav.tabs button.on {
-  color: var(--blue); font-weight: 650;
-  border-bottom-color: var(--blue); background: var(--panel);
-}
+nav.tabs button:hover:not(.on) { background: rgba(255, 255, 255, .06); color: var(--sidebar-ink) }
+nav.tabs button.on { background: var(--sidebar-active); color: #fff; font-weight: 600 }
+nav.tabs button .icon { flex: none; width: 18px; height: 18px; opacity: .9 }
+
+/* Collapsed rail: app.js toggles body.sidebar-collapsed. The label wrapper
+   (.tab-label, emitted by app.js) and the non-icon chrome hide; the icon
+   centres itself in the slim rail. */
+body.sidebar-collapsed .app-sidebar { width: var(--sidebar-w-collapsed) }
+body.sidebar-collapsed .page-wrapper { margin-left: var(--sidebar-w-collapsed) }
+body.sidebar-collapsed .sidebar-brand-text,
+body.sidebar-collapsed .sidebar-foot,
+body.sidebar-collapsed .tab-label { display: none }
+body.sidebar-collapsed nav.tabs button { justify-content: center; padding: 9px 0 }
+body.sidebar-collapsed .sidebar-brand { justify-content: center }
 
 /* == 8. CARDS AND SECTIONS =============================================== */
 .card {
@@ -574,13 +650,15 @@ button.claimed-btn:hover:not(:disabled) {
 /* == 12. TABLES AND MATRICES ============================================= */
 table { border-collapse: collapse; width: 100%; font-size: 12.2px }
 th, td {
-  text-align: left; padding: 7px 10px;
+  text-align: left; padding: 6px 10px;
   border-bottom: 1px solid var(--line); vertical-align: top;
+  font-size: 12.2px;
 }
 th {
-  background: var(--soft); color: var(--ink2);
-  font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
+  background: var(--soft); color: var(--muted);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
   text-transform: uppercase; white-space: nowrap;
+  padding: 7px 10px;
 }
 tbody tr:hover { background: var(--row-hover) }
 tbody tr:nth-child(even) { background: rgba(127, 150, 173, .045) }
@@ -1159,6 +1237,20 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 .drawer * { max-width: 100%; box-sizing: border-box; }
 .drawer table { width: 100%; table-layout: fixed; }
 .drawer table td, .drawer table th { word-break: break-word; }
+/* table-layout:fixed above is what stops a long vault path from widening the
+   drawer — but with no column widths declared it divides the width EQUALLY,
+   so the filed-documents table gave "Type" (holds "BOM") the same 134px as
+   "File" (holds a 40-char filename AND a full C:\… path). Filenames then
+   wrapped one character per line.
+   Column 2 is the wide one in both drawer tables ("File" in the documents
+   table, "Documents" in "Who did what"), and column 4 holds the Open in
+   Explorer / Remove buttons — starve it and those buttons clip against the
+   drawer edge. The three-column table simply ignores the :nth-child(4) rule
+   and shares out the remainder. */
+.drawer table th:nth-child(1), .drawer table td:nth-child(1) { width: 13% }
+.drawer table th:nth-child(2), .drawer table td:nth-child(2) { width: 42% }
+.drawer table th:nth-child(3), .drawer table td:nth-child(3) { width: 15% }
+.drawer table th:nth-child(4), .drawer table td:nth-child(4) { width: 30% }
 .drawer h2 { margin: 0 0 var(--s1); font-size: 16px }
 
 .modal-scrim {
@@ -1366,16 +1458,19 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   .famchart-row { grid-template-columns: 160px minmax(80px, 1fr) 240px }
   .step-grid { grid-template-columns: repeat(2, 1fr) }
 }
+/* Under 900px the fixed rail becomes an overlay drawer: hidden off-canvas
+   until app.js adds body.sidebar-open. */
+@media (max-width: 900px) {
+  .app-sidebar { transform: translateX(-100%) }
+  .page-wrapper { margin-left: 0 }
+  body.sidebar-open .app-sidebar { transform: none }
+}
 @media (max-width: 768px) {
   .step-grid { grid-template-columns: 1fr }
   .app { padding: 0 var(--s3) 48px }
   /* same reasoning as .stepcard: any wide table in a card scrolls inside the
      card rather than dragging the document width out with it */
   .card-body { overflow-x: auto }
-  header.navbar .container-xl { padding: var(--s2) var(--s3); gap: var(--s2) }
-  header.navbar .navbar-brand { font-size: 14px; width: 100%; }
-  header.navbar .cmdbar { margin-left: 0; width: 100%; justify-content: flex-start }
-  header.navbar #stamp { order: 3 }
   nav.tabs { top: 0; position: static }
   .grid2 { grid-template-columns: 1fr }
   .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) }
@@ -1421,6 +1516,9 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   }
   body { background: #fff; color: #000; font-size: 11pt }
 
+  .app-sidebar, .topbar { display: none !important }
+  .page-wrapper { margin-left: 0 }
+
   .card, .kpi-card, .stepcard, .scroll {
     box-shadow: none !important; border-color: #999 !important;
     break-inside: avoid; page-break-inside: avoid;
@@ -1428,7 +1526,7 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   .scroll { max-height: none !important; overflow: visible !important }
 
   /* nothing sticky in a printed page — it lands on top of the content */
-  header.navbar, nav.tabs, .matrix th, .matrix th:first-child, .matrix td:first-child {
+  nav.tabs, .matrix th, .matrix th:first-child, .matrix td:first-child {
     position: static !important;
   }
   thead { display: table-header-group }

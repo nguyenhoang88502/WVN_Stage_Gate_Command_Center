@@ -1,0 +1,124 @@
+You are a DeepSeek Worker doing a follow-up CSS cleanup for the WAHL Vietnam
+Stage Gate Command Center v9.2 ERP shell.
+
+Work ONLY in this file:
+  system/styles.css
+
+Do NOT touch system/index.html or system/app.js. Preserve the existing style:
+2-space indent, the CSS custom-property token system, and the numbered section
+banners.
+
+============================================================
+CONTEXT — WHAT JUST CHANGED
+============================================================
+system/index.html was restructured from a top navbar layout into an ERP shell.
+The old markup was:
+
+    <header class="navbar navbar-expand-md navbar-dark">
+      <div class="container-xl">
+        <div class="navbar-brand">WAHL Vietnam <span class="brand-sub">…</span></div>
+        <div class="navbar-text" id="stamp">…</div>
+        <div class="cmdbar"> #srvState #reloadBtn #autoReloadChk #themeBtn </div>
+      </div>
+    </header>
+
+It is now:
+
+    <aside class="app-sidebar">        <- dark rail, holds the brand + #tabs + #stamp
+    <header class="topbar">           <- LIGHT surface (background: var(--panel))
+      <button id="sidebarToggle" class="topbar-burger">…</button>
+      <div class="topbar-title" id="pageTitle"></div>
+      <div class="cmdbar"> #srvState #reloadBtn #autoReloadChk #themeBtn </div>
+    </header>
+
+There is now ZERO `header.navbar` in index.html — `grep -c navbar index.html`
+returns 0.
+
+============================================================
+THE DEFECT TO FIX
+============================================================
+Every rule still scoped to `header.navbar` is dead code, and one of them was
+load-bearing:
+
+    header.navbar #whoInput, header.navbar #whoSelect {
+      background: rgba(255, 255, 255, 0.1) !important;
+      border: 1px solid rgba(255, 255, 255, 0.25) !important;
+      color: #ffffff !important;
+      border-radius: 4px;
+      padding: 0.25rem 0.5rem;
+    }
+    header.navbar #whoInput::placeholder { color: #94a3b8; }
+
+`#whoSelect` is the identity dropdown. app.js injects it at runtime with
+`$('#srvState').insertAdjacentElement('afterend', who)`, so it now lives
+inside `.cmdbar` in the LIGHT `.topbar` — but the rule above only matched
+inside the dark navbar. With that rule dead, the select falls back to
+whatever base styling exists, which was itself tuned for a navy background.
+The result is a white-on-white, effectively invisible dropdown.
+
+============================================================
+REQUIRED CHANGES
+============================================================
+
+1. Re-home `#whoSelect` / `#whoInput` for the light topbar.
+   Replace the two `header.navbar #whoInput…` rules with rules scoped to
+   `.topbar` (or `.cmdbar`) that suit a light `var(--panel)` surface:
+     - background: var(--input)
+     - border: 1px solid var(--line-strong)
+     - color: var(--ink)
+     - border-radius: var(--r1)
+     - padding: 4px 8px
+     - font-size: 12.5px
+     - height: var(--ctl-h-sm)
+     - max-width: 190px
+   Add a `:focus-visible` state using the existing `--focus` / `--focus-ring`
+   tokens, matching how other inputs in this file do it. Drop the `!important`
+   flags — they are no longer needed once the specificity war with the old
+   navbar rule is gone. Keep a placeholder rule for `#whoInput` using
+   var(--muted).
+   Make sure these read correctly in BOTH themes (the topbar uses var(--panel)
+   / var(--ink), which already flip with the theme, so token-based values are
+   enough — do not hard-code hex).
+
+2. Delete the remaining dead `header.navbar` rules:
+     - header.navbar { … }
+     - header.navbar .container-xl { … }
+     - header.navbar .navbar-brand { … }
+     - header.navbar .navbar-brand .brand-sub { … }
+     - header.navbar .navbar-text, header.navbar #stamp { … }
+     - header.navbar .cmdbar { … }
+   …and inside the responsive block near the bottom:
+     - header.navbar .container-xl { … }
+     - header.navbar .navbar-brand { … }
+     - header.navbar .cmdbar { … }
+     - header.navbar #stamp { order: 3 }
+   The `.cmdbar` and `#stamp` rules that the new shell needs already exist
+   elsewhere in the file (`.cmdbar { … margin-left: auto }` in the layout
+   section, `.sidebar-foot #stamp { … }` in the sidebar block) — do not
+   delete those, only the `header.navbar`-scoped duplicates.
+   Rename the section 6 banner from "HEADER AND COMMAND BAR" to reflect that
+   it now covers the topbar + command bar, and keep every non-navbar rule in
+   that section (#srvState, .auto-reload, the theme button, etc.) exactly as
+   it is.
+
+3. Fix the print rule.
+   The print block currently has:
+     header.navbar, nav.tabs, .matrix th, … { display: none }
+   `header.navbar` no longer matches anything. A separate line
+   `.app-sidebar, .topbar { display: none !important }` was already added.
+   Remove the stale `header.navbar` from that selector list but KEEP
+   `nav.tabs` and every other selector in it, and keep the new
+   `.app-sidebar, .topbar` line. Also confirm `.page-wrapper { margin-left: 0 }`
+   is present in the print block; add it if missing.
+
+4. Do not change anything else. In particular leave alone: `.page`,
+   `.app-sidebar`, `.page-wrapper`, `.topbar`, `.page-body`, `.icon`,
+   `.page-header*`, `nav.tabs`, the `body.sidebar-collapsed` block, all
+   `.card`/`.dz`/`.gantt-*`/`.drawer`/`.modal*` rules, and the table density
+   rules.
+
+============================================================
+OUTPUT
+============================================================
+Apply the edits directly. Then print a short plain-text summary (3-5
+sentences) of what you changed. Do not restate this brief.
