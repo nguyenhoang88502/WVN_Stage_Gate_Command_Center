@@ -1,0 +1,8 @@
+approval_id,project_id,step_key,deliverable_id,approved_by,approved_utc,approval_type,evidence_count,comments
+APR-0001,NPI-9611,NPI-1,,admin,2026-08-07T11:43:19.378Z,Evidence-Based,5,ok
+APR-0002,NPI-9611,NPI-2,,admin,2026-08-07T11:43:25.536Z,Evidence-Based,3,ok
+APR-0003,NPI-9611,NPI-3,,admin,2026-08-07T11:43:29.856Z,Evidence-Based,3,ok
+APR-0004,NPI-9611,NPI-4,,admin,2026-08-07T11:43:38.076Z,Evidence-Based,4,ok
+APR-0005,NPI-9611,NPI-5,,admin,2026-08-07T11:43:45.223Z,Evidence-Based,5,
+APR-0006,NPI-9611,NPI-6,,admin,2026-08-07T11:43:56.931Z,Evidence-Based,5,
+APR-0007,NPI-9611,NPI-7,,admin,2026-08-07T11:44:03.358Z,Evidence-Based,5,
