@@ -426,3 +426,61 @@
 [2026-08-14 15:16:38] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
 [2026-08-14 15:16:54] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
 [2026-08-14 15:17:07] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
+[2026-08-14 16:18:01] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:18:01] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:18:01] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:38:34] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:38:34] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:38:34] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:38:59] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:38:59] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:38:59] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:39:11] [INFO] Template downloaded: QA-F-GEN-0011_Engineering_Change_Request.xlsx
+[2026-08-14 16:39:58] [INFO] Report downloaded: lfi
+[2026-08-14 16:39:59] [INFO] Report downloaded: transfer
+[2026-08-14 16:40:00] [INFO] Report downloaded: kpi
+[2026-08-14 16:40:00] [INFO] Report downloaded: ll
+[2026-08-14 16:40:01] [INFO] Report downloaded: trial
+[2026-08-14 16:40:57] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
+[2026-08-14 16:41:07] [INFO] LFI created: LFI_9611_NPI-7_20260814-164107 for NPI-9611 / NPI-7
+[2026-08-14 16:41:28] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
+[2026-08-14 16:41:40] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"
+[2026-08-14 16:42:08] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:42:08] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:42:08] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:42:42] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:42:42] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:42:42] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:54:42] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:54:42] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:54:42] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:55:52] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:55:52] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:55:52] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:56:39] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:56:40] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:56:40] [INFO] Listening on http://localhost:8080/
+[2026-08-14 16:57:42] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 16:57:42] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 16:57:42] [INFO] Listening on http://localhost:8080/
+[2026-08-14 21:14:59] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-14 21:14:59] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-14 21:14:59] [INFO] Listening on http://localhost:8080/
+[2026-08-14 21:21:27] [INFO] Shutdown requested by Stop_Server.cmd — stopping cleanly.
+[2026-08-14 21:21:28] [INFO] Stopped by user request.
+[2026-08-15 15:39:50] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-15 15:39:51] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-15 15:39:51] [INFO] Listening on http://localhost:8080/
+[2026-08-15 15:41:31] [INFO] Report downloaded: lfi
+[2026-08-15 15:42:38] [INFO] Shutdown requested by Stop_Server.cmd — stopping cleanly.
+[2026-08-15 15:42:39] [INFO] Stopped by user request.
+[2026-08-18 11:44:25] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-18 11:44:25] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-18 11:44:25] [INFO] Listening on http://localhost:8080/
+[2026-08-20 09:39:17] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-20 09:39:17] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-20 09:39:17] [INFO] Listening on http://localhost:8080/
+[2026-08-25 13:10:41] [INFO] Starting. Root=C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\WVN_Stage_Gate_Command_Center
+[2026-08-25 13:10:42] [INFO] Document vault: C:\Users\nguyenhoang88502\Documents\University document\Intern\EPM_EEM_Thesis_Working\05_MVP\NPI_EPM_Documents_Control
+[2026-08-25 13:10:42] [INFO] Listening on http://localhost:8080/
+[2026-08-25 13:10:43] [ERROR] Request failed: http://localhost:8080/api/data — Exception calling "Write" with "3" argument(s): "The specified network name is no longer available"

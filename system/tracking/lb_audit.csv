@@ -373,3 +373,49 @@ LOG-0371,2026-08-14T08:16:52.5049872Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-
 LOG-0372,2026-08-14T08:16:53.9497076Z,admin,Gate_RemoveSupporter,NPI-9611,Gate,NPI-7,intern,,,Success
 LOG-0373,2026-08-14T08:17:13.3201129Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v9.1 issue-date test 1786695432766,Success
 LOG-0374,2026-08-14T08:17:14.4401538Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0375,2026-08-14T09:39:03.2192917Z,admin,Comment_Document,NPI-9622LP,Deliverable,CLASS,,,agent1 dz note 1786700342843,Success
+LOG-0376,2026-08-14T09:39:05.8520927Z,admin,Deliverable_SetTargetWeek,NPI-9622LP,Deliverable,NPI-1,,2026-W40,,Success
+LOG-0377,2026-08-14T09:39:09.3801998Z,admin,Claim_Task,NPI-9622LP,Deliverable,NPI-1,,admin,Owner claim,Success
+LOG-0378,2026-08-14T09:39:44.5002959Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Primary Owner,Success
+LOG-0379,2026-08-14T09:39:44.9179323Z,admin,Gate_RemoveOwner,NPI-9611,Gate,NPI-7,admin,,Owner removed,Success
+LOG-0380,2026-08-14T09:40:15.0123418Z,admin,Claim_Task,NPI-9611,Gate,NPI-7,,admin,Owner claim,Success
+LOG-0381,2026-08-14T09:40:28.1508244Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2027-W30,2026-W40,,Success
+LOG-0382,2026-08-14T09:40:30.4092702Z,admin,Comment_Gate,NPI-9611,Gate,NPI-7,,,v7.0 Playwright test comment 1786700430267,Success
+LOG-0383,2026-08-14T09:40:34.8367991Z,admin,Comment_Document,NPI-9622LP,Deliverable,GANTT,,,v8.0 dz note 1786700434575,Success
+LOG-0384,2026-08-14T09:40:37.9631004Z,admin,Deliverable_SetTargetWeek,NPI-9622LP,Deliverable,NPI-1,2026-W44,2026-W44,,Success
+LOG-0385,2026-08-14T09:40:40.1400914Z,admin,Deliverable_SetTargetWeek,NPI-9622LP,Deliverable,NPI-1,2026-W44,2026-W44,,Success
+LOG-0386,2026-08-14T09:40:46.9737719Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2026-W40,2027-W30,,Success
+LOG-0387,2026-08-14T09:40:55.3977190Z,admin,Config_AdminPin_Change,,Config,admin_pin,(hidden),(hidden),,Success
+LOG-0388,2026-08-14T09:40:56.3314350Z,admin,Config_AdminPin_Change,,Config,admin_pin,(hidden),(hidden),,Success
+LOG-0389,2026-08-14T09:40:59.1112697Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v8.3 resolution-dropzone test 1786700458623,Success
+LOG-0390,2026-08-14T09:41:00.0983447Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0391,2026-08-14T09:41:03.1065530Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v8.3 resolution-dropzone test 1786700462610,Success
+LOG-0392,2026-08-14T09:41:04.0959511Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0393,2026-08-14T09:41:04.9253528Z,admin,Issue_Resolve,NPI-9611,Issue,LFI-0007,Open,Closed,ISSUE-RESOLUTION_9611_9611_C-3001_Issue_Resolution.txt,Success
+LOG-0394,2026-08-14T09:41:13.5642896Z,admin,Approve_Gate,NPI-9622LP,Gate,NPI-1,Open,Approved,v8.4 regression test approval,Success
+LOG-0395,2026-08-14T09:41:15.6341610Z,admin,Upload_Evidence_Sidebar,NPI-9622LP,Deliverable,,MISSING,Filed,CLASS,Success
+LOG-0396,2026-08-14T09:41:16.0960507Z,admin,Upload_Evidence_Sidebar,NPI-9622LP,Deliverable,,MISSING,Filed,CLASS,Success
+LOG-0397,2026-08-14T09:41:26.7197829Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Supporter,Success
+LOG-0398,2026-08-14T09:41:27.6563459Z,admin,Gate_RemoveSupporter,NPI-9611,Gate,NPI-7,intern,,,Success
+LOG-0399,2026-08-14T09:41:45.7313251Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v9.1 issue-date test 1786700505218,Success
+LOG-0400,2026-08-14T09:41:46.7564735Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0401,2026-08-14T09:57:51.6518727Z,admin,Claim_Task,NPI-2905LP,Gate,NPI-1,,admin,Owner claim,Success
+LOG-0402,2026-08-14T14:15:50.0712630Z,Khoi Le,Upload_Evidence_Sidebar,NPI-5501S,Deliverable,,MISSING,Filed,GANTT,Success
+LOG-0403,2026-08-14T14:18:02.1283577Z,admin,Claim_Task,NPI-9622LP,Deliverable,NPI-2,,admin,Owner claim,Success
+LOG-0404,2026-08-14T14:18:10.2742555Z,admin,Upload_Evidence_Sidebar,NPI-9622LP,Deliverable,,MISSING,Filed,DFM,Success
+LOG-0405,2026-08-14T14:18:23.3781269Z,admin,Approve_Gate,NPI-9622LP,Gate,NPI-1,Open,Approved,,Success
+LOG-0406,2026-08-14T14:18:46.1985845Z,admin,Assign_Task_Admin,NPI-5501S,Deliverable,NPI-1,,Diem Pham,Primary Owner,Success
+LOG-0407,2026-08-14T14:21:27.7275914Z,Stop_Server.cmd,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
+LOG-0408,2026-08-15T08:41:03.1517057Z,admin,Upload_Evidence_Sidebar,NPI-5501S,Deliverable,,MISSING,Filed,CLASS,Success
+LOG-0409,2026-08-15T08:42:38.3210156Z,Stop_Server.cmd,Stop_Server,,Server,port 8080,Listening,Stopped,,Success
+LOG-0410,2026-08-20T02:39:50.2880109Z,admin,Claim_Task,NPI-9622LP,Gate,NPI-2,,admin,Owner claim,Success
+LOG-0411,2026-08-20T02:39:52.8553197Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0412,2026-08-20T02:40:47.2526598Z,admin,Claim_Task,NPI-9622LP,Deliverable,NPI-2,,admin,Owner claim,Success
+LOG-0413,2026-08-20T02:40:49.8203932Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0414,2026-08-20T02:41:28.3579487Z,admin,Claim_Task,NPI-9622LP,Deliverable,NPI-2,,admin,Owner claim,Success
+LOG-0415,2026-08-20T02:41:30.9731400Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0416,2026-08-20T02:42:12.4946286Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
+LOG-0417,2026-08-20T02:42:15.2457260Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0418,2026-08-20T02:42:47.9941309Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
+LOG-0419,2026-08-20T02:42:50.6838576Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0420,2026-08-25T06:11:07.2339344Z,(unnamed),Upload_Evidence_Sidebar,NPI-9622LP,Deliverable,,MISSING,Filed,PFMEA,Success
