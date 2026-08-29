@@ -410,6 +410,7 @@ function captureUiState() {
     ecnMode: ecnMode,
     dashMatrixOpen: dashMatrixOpen,
     npiStageOpen: npiStageOpen,
+    ganttExpanded: ganttExpanded,
     dashFamFilter: dashFamFilter.slice(),
     dashModelFilter: dashModelFilter.slice(),
     dashStartWeekFilter: dashStartWeekFilter.slice(),
@@ -448,6 +449,7 @@ function restoreUiState(state) {
   ecnMode = state.ecnMode;
   dashMatrixOpen = state.dashMatrixOpen;
   npiStageOpen = state.npiStageOpen;
+  ganttExpanded = state.ganttExpanded || {};
   dashFamFilter = state.dashFamFilter;
   dashModelFilter = state.dashModelFilter;
   dashStartWeekFilter = state.dashStartWeekFilter;
@@ -2663,6 +2665,28 @@ function segmentDateRanges(proc, project, steps, startDate, endDate) {
   return ranges;
 }
 
+/* Which department or role carries a step. The two workflows describe this
+   differently and neither carries the other's field: ECN steps name a
+   responsible_dept outright, NPI steps name the mandatory_approver whose
+   sign-off closes the gate, and fall back to the phase label. */
+function stepDeptOf(step) {
+  return step.responsible_dept || step.mandatory_approver || step.phase || '—';
+}
+
+/* Who to chase on a step, condensed to one Gantt cell. picsFor() returns
+   everyone who has touched the step with their document lists; the column is
+   ~110px, so this takes the gate owner where one exists (they are the
+   accountable party) and otherwise the first contributor, marking the rest
+   as an overflow count rather than truncating a name mid-word. */
+function ganttPicLabel(pid, stepKey) {
+  var pics = picsFor(pid, stepKey);
+  if (!pics.length) return '—';
+  var owner = pics.filter(function(x) { return x.gateRoles.indexOf('Owner') >= 0; })[0];
+  var lead = owner || pics[0];
+  var extra = pics.length - 1;
+  return lead.name + (extra > 0 ? ' +' + extra : '');
+}
+
 function buildLiveGanttSection() {
   function filteredByProcess(process) {
     // dashFamFilter et al. are multi-select arrays, not scalars — see the
@@ -2699,7 +2723,18 @@ function buildLiveGanttSection() {
     var ed = weekToDate(ew);
     if (sd && ed) {
       ed = new Date(ed); ed.setDate(ed.getDate() + 6);
-      pairs.push({ project: p, startDate: sd, endDate: ed });
+      var proc = p.process;
+      var allSteps = stepsOf(proc, p);
+      var gated = allSteps.filter(function(s) { return isGated(proc, s); });
+      pairs.push({
+        project: p, startDate: sd, endDate: ed,
+        steps: allSteps, gatedSteps: gated,
+        // Resolved here rather than at render time: the axis has to be sized
+        // against these before the first row is drawn (see below), and the
+        // rows would otherwise recompute them a second time.
+        stepRanges: segmentDateRanges(proc, p, allSteps, sd, ed),
+        gatedRanges: segmentDateRanges(proc, p, gated, sd, ed)
+      });
     }
   });
   if (!pairs.length) {
@@ -2707,11 +2742,21 @@ function buildLiveGanttSection() {
     return wrap;
   }
 
-  var allStarts = pairs.map(function(x) { return x.startDate.getTime(); });
-  var allEnds = pairs.map(function(x) { return x.endDate.getTime(); });
+  /* The axis has to span the segments, not just the projects. A gate's
+     target_week can sit past its project's own target date — that is exactly
+     what a slipped gate looks like — and sizing the axis on project dates
+     alone pushed those segments off the right edge, where they rendered as a
+     step row with no bar at all. */
+  var bounds = [];
+  pairs.forEach(function(x) {
+    bounds.push(x.startDate.getTime(), x.endDate.getTime());
+    x.stepRanges.concat(x.gatedRanges).forEach(function(r) {
+      bounds.push(r.start.getTime(), r.end.getTime());
+    });
+  });
   var pad = 7 * 86400000;
-  var minT = Math.min.apply(null, allStarts) - pad;
-  var maxT = Math.max.apply(null, allEnds) + pad;
+  var minT = Math.min.apply(null, bounds) - pad;
+  var maxT = Math.max.apply(null, bounds) + pad;
   var spanMs = maxT - minT;
 
   var weekSet = new Map();
@@ -2729,26 +2774,99 @@ function buildLiveGanttSection() {
 
   var todayPct = pctForDate(new Date());
   var showTodayLine = todayPct >= 0 && todayPct <= 100;
+  function todayLine() {
+    var l = el('div', 'gantt-today-line');
+    l.style.left = todayPct + '%';
+    return l;
+  }
+  // A meta cell whose full text survives as a tooltip — every one of these
+  // columns is narrower than its longest possible value and ellipsises.
+  function meta(text, cls) {
+    var c = el('div', 'gantt-live-meta-cell' + (cls ? ' ' + cls : ''), text);
+    if (text && text !== '—') c.title = text;
+    return c;
+  }
+
+  // Time maps linearly onto the track, so every ISO week is the same width.
+  var weekPct = 7 * 86400000 / spanMs * 100;
+  var firstWeekPct = weekEntries.length ? pctForDate(weekEntries[0].date) : 0;
 
   var grid = el('div', 'gantt-live-grid');
   body.appendChild(grid);
 
+  /* Vertical week rules, so a bar's end can be read off against a week
+     without tracing back up to the header. Drawn as one repeating-gradient
+     layer per track (see .gantt-live-track::before) rather than a div per
+     week per row: a 60-week portfolio with a dozen projects expanded would
+     otherwise allocate well over a thousand nodes, rebuilt from scratch on
+     every 15s auto-reload. The gradient box starts at the first week
+     boundary rather than at 0, so its period has to be re-expressed as a
+     fraction of that shortened box, not of the track. */
+  var ruleStep = Math.max(1, Math.ceil(1.7 / weekPct));   // keep rules ~1.7%+ apart
+  var ruleSpan = 100 - firstWeekPct;
+  grid.style.setProperty('--gantt-rule-offset', firstWeekPct + '%');
+  grid.style.setProperty('--gantt-rule-period',
+    (ruleSpan > 0 ? weekPct * ruleStep / ruleSpan * 100 : 100) + '%');
+
+  /* Upper axis tier: month bands. The single-tier header wrote a full
+     "2026-W28" at every tick, and past ~15 weeks those collided into an
+     unreadable smear. Splitting the year out of the repeated part leaves the
+     lower tier only "W28" to fit. */
+  var headTop = el('div', 'gantt-live-row gantt-live-header gantt-live-header-top');
+  ['Timeline', '', '', '', ''].forEach(function(h) { headTop.appendChild(meta(h)); });
+  var trackBand = el('div', 'gantt-live-track gantt-live-track-band');
+  var bands = [];
+  weekEntries.forEach(function(entry) {
+    var y = entry.date.getFullYear(), m = entry.date.getMonth();
+    var last = bands[bands.length - 1];
+    if (last && last.year === y && last.month === m) last.last = entry;
+    else bands.push({ year: y, month: m, first: entry, last: entry });
+  });
+  bands.forEach(function(g, i) {
+    var left = pctForDate(g.first.date);
+    var width = pctForDate(g.last.date) + weekPct - left;
+    var band = el('div', 'gantt-band');
+    band.style.left = left + '%';
+    band.style.width = Math.max(0, width) + '%';
+    /* The year is a change-marker, not a repeated label — printing it on all
+       twelve bands both wastes the width and buries the one place it
+       actually tells you something. Clipping a month name to a glyph or two
+       reads as noise, so a band too narrow even for the short form keeps its
+       rule and drops its label; its tooltip still carries the full date. */
+    var showYear = i === 0 || g.month === 0;
+    band.textContent = width < 3.2 ? ''
+      : showYear ? MONTH_NAMES_SHORT[g.month] + ' ' + g.year
+      : MONTH_NAMES_SHORT[g.month];
+    band.title = MONTH_NAMES_SHORT[g.month] + ' ' + g.year;
+    trackBand.appendChild(band);
+  });
+  if (showTodayLine) trackBand.appendChild(todayLine());
+  headTop.appendChild(trackBand);
+  grid.appendChild(headTop);
+
+  /* Lower axis tier: bare week numbers, centred in their own column rather
+     than pinned to the week's Monday, so a label sits over the span it
+     names. */
   var headerRow = el('div', 'gantt-live-row gantt-live-header');
-  ['Project', 'Process', 'Owner PIC', 'Issues', 'Comments'].forEach(function(h) {
-    headerRow.appendChild(el('div', 'gantt-live-meta-cell', h));
+  ['Project', 'Process / Dept', 'Owner PIC', 'Issues', 'Notes'].forEach(function(h) {
+    headerRow.appendChild(meta(h));
   });
   var trackHeader = el('div', 'gantt-live-track gantt-live-track-header');
-  var labelInterval = Math.max(1, Math.ceil(weekEntries.length / 20));
+  /* 4.6% is the narrowest slot a "W28" fits in with a readable gap at the
+     track's own minimum width (440px, from the grid template): 4.6% of that
+     is ~20px against a ~17.5px label. Anything tighter and the labels touch
+     on a 1280px screen, which is what the single-tier header did. */
+  var labelInterval = Math.max(1, Math.ceil(4.6 / weekPct));
   weekEntries.forEach(function(entry, i) {
     if (i % labelInterval !== 0) return;
-    var lbl = el('span', 'gantt-week-label', entry.week);
-    lbl.style.left = pctForDate(entry.date) + '%';
+    var lbl = el('span', 'gantt-week-label', 'W' + entry.week.slice(-2));
+    lbl.style.left = (pctForDate(entry.date) + weekPct / 2) + '%';
+    lbl.title = entry.week;
     trackHeader.appendChild(lbl);
   });
   if (showTodayLine) {
-    var todayLineHeader = el('div', 'gantt-today-line');
-    todayLineHeader.style.left = todayPct + '%';
-    todayLineHeader.title = 'Today (' + isoWeek(new Date()) + ')';
+    var todayLineHeader = todayLine();
+    todayLineHeader.title = i18n('today') + ' (' + isoWeek(new Date()) + ')';
     trackHeader.appendChild(todayLineHeader);
   }
   headerRow.appendChild(trackHeader);
@@ -2762,11 +2880,36 @@ function buildLiveGanttSection() {
       .filter(function(i) { return i.project_id === p.project_id && i.status !== 'Closed'; }).length;
     var commentCount = stepsOf(proc, p).reduce(function(sum, s) { return sum + cellNoteCount(p, stepKeyOf(proc, s)); }, 0);
 
+    var expanded = !!ganttExpanded[p.project_id];
+
     var row = el('div', 'gantt-live-row');
     row.style.cursor = 'pointer';
-    row.appendChild(el('div', 'gantt-live-meta-cell', p.project_id));
-    row.appendChild(el('div', 'gantt-live-meta-cell', proc));
-    row.appendChild(el('div', 'gantt-live-meta-cell', p.market_manager || '—'));
+    /* The project id stays the cell's only text — the toggle is icon-only so
+       that reading a row's identity off .gantt-live-meta-cell:first-child
+       still yields a bare project id. */
+    var projCell = el('div', 'gantt-live-meta-cell gantt-proj-cell');
+    var toggle = el('button', 'gantt-expand');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = (expanded ? 'Hide' : 'Show') + ' the step breakdown for ' + p.project_id;
+    toggle.appendChild(icon(expanded ? 'chevron-down' : 'chevron-right'));
+    toggle.onclick = function(e) {
+      // The row opens the drawer; without this the toggle would do both.
+      e.stopPropagation();
+      if (ganttExpanded[p.project_id]) delete ganttExpanded[p.project_id];
+      else ganttExpanded[p.project_id] = true;
+      // Swap just this section rather than re-running show(): a full
+      // dashboard rebuild for a disclosure triangle throws away the user's
+      // scroll position and every other slicer-driven node on the page.
+      var host = wrap.parentNode;
+      if (host) host.replaceChild(buildLiveGanttSection(), wrap);
+      else show(current, true);
+    };
+    projCell.appendChild(toggle);
+    projCell.appendChild(el('span', 'gantt-proj-id', p.project_id));
+    row.appendChild(projCell);
+    row.appendChild(meta(proc));
+    row.appendChild(meta(p.market_manager || '—'));
     var issuesCell = el('div', 'gantt-live-meta-cell');
     if (openCount) issuesCell.innerHTML = '<span class="matrix-issue-badge">' + iconHtml('alert-triangle') + ' ' + openCount + '</span>';
     row.appendChild(issuesCell);
@@ -2784,8 +2927,8 @@ function buildLiveGanttSection() {
 
     // One coloured block per gated step, positioned by per-gate target weeks
     // (see segmentDateRanges) instead of equal-width division.
-    var gatedSteps = stepsOf(proc, p).filter(function(s) { return isGated(proc, s); });
-    var ranges = segmentDateRanges(proc, p, gatedSteps, pair.startDate, pair.endDate);
+    var gatedSteps = pair.gatedSteps;
+    var ranges = pair.gatedRanges;
     gatedSteps.forEach(function(s, idx) {
       var gs = gateState(p, proc, s);
       var segStatus = gs.status;
@@ -2808,11 +2951,7 @@ function buildLiveGanttSection() {
         track.appendChild(sep);
       }
     });
-    if (showTodayLine) {
-      var todayLineRow = el('div', 'gantt-today-line');
-      todayLineRow.style.left = todayPct + '%';
-      track.appendChild(todayLineRow);
-    }
+    if (showTodayLine) track.appendChild(todayLine());
 
     track.title = p.project_id + ' (' + proc + ')\n' +
       'Planned: ' + toWeek(pair.startDate) + ' → ' + toWeek(pair.endDate) + '\n' +
@@ -2826,6 +2965,64 @@ function buildLiveGanttSection() {
       if (target) openDrawer(p, target, null);
     };
     grid.appendChild(row);
+
+    if (!expanded) return;
+
+    /* One sub-row per step, each drawing its own bar on the shared time axis
+       instead of sharing the parent's single strip. Every applicable step,
+       not just the gated ones the parent segments: an ECN's non-gate steps
+       still have a schedule and a department, and dropping them would show a
+       12-step change as four rows. segmentDateRanges takes any step list —
+       steps with a target week anchor to it, the rest interpolate. */
+    var subSteps = pair.steps;
+    var subRanges = pair.stepRanges;
+    subSteps.forEach(function(s, idx) {
+      var sk = stepKeyOf(proc, s);
+      var gs = gateState(p, proc, s);
+      var st = gs.status;
+      if (st !== 'COMPLETE' && st !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) st = 'LATE';
+      var r = subRanges[idx];
+      var stepIssues = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
+        .filter(function(i) { return i.project_id === p.project_id && i.step_key === sk && i.status !== 'Closed'; }).length;
+      var stepNotes = cellNoteCount(p, sk);
+
+      var sub = el('div', 'gantt-sub-row');
+      sub.style.cursor = 'pointer';
+      sub.appendChild(meta('Step ' + s.step_id + ': ' + s.step_name, 'gantt-sub-name'));
+      sub.appendChild(meta(stepDeptOf(s)));
+      sub.appendChild(meta(ganttPicLabel(p.project_id, sk)));
+      var subIssues = el('div', 'gantt-live-meta-cell');
+      if (stepIssues) subIssues.innerHTML = '<span class="matrix-issue-badge">' + iconHtml('alert-triangle') + ' ' + stepIssues + '</span>';
+      sub.appendChild(subIssues);
+      var subNotes = el('div', 'gantt-live-meta-cell');
+      if (stepNotes) subNotes.innerHTML = '<span class="matrix-note-indicator">' + iconHtml('message-circle') + ' ' + stepNotes + '</span>';
+      sub.appendChild(subNotes);
+
+      var subTrack = el('div', 'gantt-live-track gantt-sub-track');
+      var subLeft = pctForDate(r.start);
+      /* Colour comes from the same .gantt-stage-seg-<status> classes the
+         parent segments use, but the geometry class differs — the parent's
+         .gantt-stage-seg is what the segmentation tests count, and a sub-row
+         bar is not one of those segments. */
+      var bar = el('div', 'gantt-bar gantt-sub-bar gantt-stage-seg-' + st.toLowerCase());
+      bar.style.left = subLeft + '%';
+      bar.style.width = Math.max(0.4, pctForDate(r.end) - subLeft) + '%';
+      bar.appendChild(el('span', 'gantt-stage-label', 'S' + s.step_id));
+      var tw = gs.gate && gs.gate.target_week;
+      bar.title = p.project_id + ' — Step ' + s.step_id + ': ' + s.step_name + '\n' +
+        'Start: ' + isoWeek(r.start) + ' | End: ' + isoWeek(r.end) +
+        (tw ? ' (target ' + tw + ')' : ' (no target week set — interpolated)') + '\n' +
+        'Status: ' + st.replace(/_/g, ' ') +
+        ' (' + (gs.req.length - gs.missing.length) + '/' + gs.req.length + ' docs filed)' +
+        (stepIssues ? '\nOpen issues: ' + stepIssues : '') +
+        (isGated(proc, s) ? '' : '\nNo gate clearance required on this step');
+      bar.onclick = function(e) { e.stopPropagation(); openDrawer(p, s, null); };
+      subTrack.appendChild(bar);
+      if (showTodayLine) subTrack.appendChild(todayLine());
+      sub.appendChild(subTrack);
+      sub.onclick = function() { openDrawer(p, s, null); };
+      grid.appendChild(sub);
+    });
   });
 
   return wrap;
@@ -4848,6 +5045,10 @@ let dashMatrixOpen = true;
 // default; the flag lives at module scope so the choice survives the filter
 // re-renders inside viewDashboard and the 15s auto-reload.
 let npiStageOpen = false;
+// v10: which Gantt rows have their per-step sub-rows expanded, keyed by
+// project_id. A set rather than a single id because comparing two projects'
+// step schedules side by side is the whole reason the drill-down exists.
+let ganttExpanded = {};
 let dashFamFilter = [];
 let dashModelFilter = [];
 let dashStartWeekFilter = [];

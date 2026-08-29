@@ -419,3 +419,81 @@ LOG-0417,2026-08-20T02:42:15.2457260Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,
 LOG-0418,2026-08-20T02:42:47.9941309Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
 LOG-0419,2026-08-20T02:42:50.6838576Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
 LOG-0420,2026-08-25T06:11:07.2339344Z,(unnamed),Upload_Evidence_Sidebar,NPI-9622LP,Deliverable,,MISSING,Filed,PFMEA,Success
+LOG-0421,2026-08-29T01:25:39.9929010Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
+LOG-0422,2026-08-29T01:25:42.6055691Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0423,2026-08-29T01:25:49.2725191Z,admin,Comment_Document,NPI-2905LP,Deliverable,QUOTE,,,agent1 dz note 1787966748994,Success
+LOG-0424,2026-08-29T01:25:51.8830058Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,,2026-W40,,Success
+LOG-0425,2026-08-29T01:25:56.0244059Z,admin,Claim_Task,NPI-2905LP,Deliverable,NPI-1,,admin,Owner claim,Success
+LOG-0426,2026-08-29T01:26:35.5008798Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Primary Owner,Success
+LOG-0427,2026-08-29T01:26:36.1064120Z,admin,Gate_RemoveOwner,NPI-9611,Gate,NPI-7,admin,,Owner removed,Success
+LOG-0428,2026-08-29T01:27:10.8145524Z,admin,Claim_Task,NPI-9611,Gate,NPI-7,,admin,Owner claim,Success
+LOG-0429,2026-08-29T01:27:37.0979798Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2027-W30,2026-W40,,Success
+LOG-0430,2026-08-29T01:27:39.6548754Z,admin,Comment_Gate,NPI-9611,Gate,NPI-7,,,v7.0 Playwright test comment 1787966859468,Success
+LOG-0431,2026-08-29T01:27:44.4111197Z,admin,Comment_Document,NPI-2905LP,Deliverable,QUOTE,,,v8.0 dz note 1787966864112,Success
+LOG-0432,2026-08-29T01:27:47.7623555Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,2026-W40,2026-W40,,Success
+LOG-0433,2026-08-29T01:27:50.2858623Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,2026-W40,2026-W44,,Success
+LOG-0434,2026-08-29T01:27:57.7724000Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2026-W40,2027-W30,,Success
+LOG-0435,2026-08-29T01:28:07.7662787Z,admin,Config_AdminPin_Change,,Config,admin_pin,(hidden),(hidden),,Success
+LOG-0436,2026-08-29T01:28:08.8608913Z,admin,Config_AdminPin_Change,,Config,admin_pin,(hidden),(hidden),,Success
+LOG-0437,2026-08-29T01:28:12.0487646Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v8.3 resolution-dropzone test 1787966891512,Success
+LOG-0438,2026-08-29T01:28:13.3160602Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0439,2026-08-29T01:28:16.4358421Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v8.3 resolution-dropzone test 1787966895880,Success
+LOG-0440,2026-08-29T01:28:17.6580229Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0441,2026-08-29T01:28:18.8923456Z,admin,Issue_Resolve,NPI-9611,Issue,LFI-0017,Open,Closed,ISSUE-RESOLUTION_9611_9611_C-3001_Issue_Resolution.txt,Success
+LOG-0442,2026-08-29T01:28:31.0641085Z,admin,Upload_Evidence_Sidebar,NPI-2905LP,Deliverable,,MISSING,Filed,QUOTE,Success
+LOG-0443,2026-08-29T01:28:31.7214584Z,admin,Upload_Evidence_Sidebar,NPI-2905LP,Deliverable,,MISSING,Filed,QUOTE,Success
+LOG-0444,2026-08-29T01:28:43.4222753Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Supporter,Success
+LOG-0445,2026-08-29T01:28:44.8737367Z,admin,Gate_RemoveSupporter,NPI-9611,Gate,NPI-7,intern,,,Success
+LOG-0446,2026-08-29T01:29:04.5330967Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v9.1 issue-date test 1787966943994,Success
+LOG-0447,2026-08-29T01:29:05.7997087Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0448,2026-08-29T01:29:15.6104756Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
+LOG-0449,2026-08-29T01:31:51.5929206Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2027-W30,2026-W40,,Success
+LOG-0450,2026-08-29T01:31:54.0840107Z,admin,Comment_Gate,NPI-9611,Gate,NPI-7,,,v7.0 Playwright test comment 1787967113876,Success
+LOG-0451,2026-08-29T01:31:58.7136485Z,admin,Comment_Document,NPI-2905LP,Deliverable,GANTT,,,v8.0 dz note 1787967118416,Success
+LOG-0452,2026-08-29T01:32:02.0359573Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,,,,Success
+LOG-0453,2026-08-29T01:32:04.4947155Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,,2026-W44,,Success
+LOG-0454,2026-08-29T01:32:11.0924909Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Supporter,Success
+LOG-0455,2026-08-29T01:32:12.5336996Z,admin,Gate_RemoveSupporter,NPI-9611,Gate,NPI-7,intern,,,Success
+LOG-0456,2026-08-29T01:34:42.5165722Z,playwright,Gate_SetTargetWeek,NPI-9622LP,Gate,NPI-1,2027-W30,,clearing v8.1 regression-test residue,Success
+LOG-0457,2026-08-29T01:34:43.0264935Z,playwright,Gate_SetTargetWeek,NPI-9944,Gate,NPI-1,2027-W30,,clearing v8.1 regression-test residue,Success
+LOG-0458,2026-08-29T01:34:43.4649318Z,playwright,Gate_SetTargetWeek,NPI-5501S,Gate,NPI-1,2027-W30,,clearing v8.1 regression-test residue,Success
+LOG-0459,2026-08-29T01:34:43.9112254Z,playwright,Gate_SetTargetWeek,NPI-3390,Gate,NPI-1,2027-W30,,clearing v8.1 regression-test residue,Success
+LOG-0460,2026-08-29T01:35:14.4148361Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
+LOG-0461,2026-08-29T01:35:17.0856189Z,admin,Raise_Issue,NPI-9622LP,Issue,NPI-2,,Open,UI/UX audit sample issue for handover screenshot capture,Success
+LOG-0462,2026-08-29T01:35:23.8029508Z,admin,Comment_Document,NPI-2905LP,Deliverable,GANTT,,,agent1 dz note 1787967323523,Success
+LOG-0463,2026-08-29T01:35:26.4113180Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,2026-W44,2026-W40,,Success
+LOG-0464,2026-08-29T01:35:30.6614264Z,admin,Claim_Task,NPI-2905LP,Deliverable,NPI-1,,admin,Owner claim,Success
+LOG-0465,2026-08-29T01:36:10.9577465Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Primary Owner,Success
+LOG-0466,2026-08-29T01:36:11.6473239Z,admin,Gate_RemoveOwner,NPI-9611,Gate,NPI-7,admin,,Owner removed,Success
+LOG-0467,2026-08-29T01:36:47.3051656Z,admin,Claim_Task,NPI-9611,Gate,NPI-7,,admin,Owner claim,Success
+LOG-0468,2026-08-29T01:37:12.0569677Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2026-W40,2026-W40,,Success
+LOG-0469,2026-08-29T01:37:14.7950896Z,admin,Comment_Gate,NPI-9611,Gate,NPI-7,,,v7.0 Playwright test comment 1787967434578,Success
+LOG-0470,2026-08-29T01:37:19.6410618Z,admin,Comment_Document,NPI-2905LP,Deliverable,GANTT,,,v8.0 dz note 1787967439373,Success
+LOG-0471,2026-08-29T01:37:23.0830569Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,2026-W40,2026-W40,,Success
+LOG-0472,2026-08-29T01:37:25.5988917Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,2026-W40,2026-W44,,Success
+LOG-0473,2026-08-29T01:37:33.2995650Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2026-W40,2027-W30,,Success
+LOG-0474,2026-08-29T01:37:35.5007934Z,playwright,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2027-W30,2026-W40,v8.1 spec cleanup â€” restoring pre-test value,Success
+LOG-0475,2026-08-29T01:37:44.2616353Z,admin,Config_AdminPin_Change,,Config,admin_pin,(hidden),(hidden),,Success
+LOG-0476,2026-08-29T01:37:45.4509050Z,admin,Config_AdminPin_Change,,Config,admin_pin,(hidden),(hidden),,Success
+LOG-0477,2026-08-29T01:37:48.7456003Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v8.3 resolution-dropzone test 1787967468184,Success
+LOG-0478,2026-08-29T01:37:50.2869067Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0479,2026-08-29T01:37:53.4312010Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v8.3 resolution-dropzone test 1787967472887,Success
+LOG-0480,2026-08-29T01:37:54.9796876Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0481,2026-08-29T01:37:56.1184534Z,admin,Issue_Resolve,NPI-9611,Issue,LFI-0022,Open,Closed,ISSUE-RESOLUTION_9611_9611_C-3001_Issue_Resolution.txt,Success
+LOG-0482,2026-08-29T01:38:06.2865505Z,admin,Approve_Gate,NPI-2905LP,Gate,NPI-1,Open,Approved,v8.4 regression test approval,Success
+LOG-0483,2026-08-29T01:38:08.7407986Z,admin,Upload_Evidence_Sidebar,NPI-2905LP,Deliverable,,MISSING,Filed,GANTT,Success
+LOG-0484,2026-08-29T01:38:09.3907206Z,admin,Upload_Evidence_Sidebar,NPI-2905LP,Deliverable,,MISSING,Filed,GANTT,Success
+LOG-0485,2026-08-29T01:38:21.9269849Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Supporter,Success
+LOG-0486,2026-08-29T01:38:23.3669358Z,admin,Gate_RemoveSupporter,NPI-9611,Gate,NPI-7,intern,,,Success
+LOG-0487,2026-08-29T01:38:44.0848261Z,admin,Raise_Issue,NPI-9611,Issue,NPI-7,,Open,v9.1 issue-date test 1787967523534,Success
+LOG-0488,2026-08-29T01:38:45.6427379Z,admin,Claim_Task,NPI-9611,Issue,NPI-7,,admin,Owner claim,Success
+LOG-0489,2026-08-29T01:38:55.3210250Z,admin,Claim_Task,NPI-9622LP,Issue,NPI-2,,admin,Owner claim,Success
+LOG-0490,2026-08-29T01:41:22.4952523Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2026-W40,2026-W40,,Success
+LOG-0491,2026-08-29T01:41:24.9830913Z,admin,Comment_Gate,NPI-9611,Gate,NPI-7,,,v7.0 Playwright test comment 1787967684800,Success
+LOG-0492,2026-08-29T01:41:29.7382439Z,admin,Comment_Document,NPI-2905LP,Deliverable,IR,,,v8.0 dz note 1787967689446,Success
+LOG-0493,2026-08-29T01:41:33.1842789Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,,,,Success
+LOG-0494,2026-08-29T01:41:35.7347871Z,admin,Deliverable_SetTargetWeek,NPI-2905LP,Deliverable,NPI-1,,2026-W44,,Success
+LOG-0495,2026-08-29T01:41:43.4166968Z,admin,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2026-W40,2027-W30,,Success
+LOG-0496,2026-08-29T01:41:45.6634255Z,playwright,Gate_SetTargetWeek,NPI-9611,Gate,NPI-7,2027-W30,2026-W40,v8.1 spec cleanup â€” restoring pre-test value,Success
+LOG-0497,2026-08-29T01:41:51.1551174Z,admin,Assign_Task_Admin,NPI-9611,Gate,NPI-7,,intern,Supporter,Success
+LOG-0498,2026-08-29T01:41:52.6299241Z,admin,Gate_RemoveSupporter,NPI-9611,Gate,NPI-7,intern,,,Success

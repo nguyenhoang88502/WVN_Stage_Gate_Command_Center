@@ -1,7 +1,7 @@
 # SOP — WVN NPI & ECN Stage Gate Command Center
 
 **Document:** SOP-EPM-001
-**Applies to:** WVN Stage Gate Command Center v9.2.1
+**Applies to:** WVN Stage Gate Command Center v10
 **Owner:** Early Product Management (EPM) — WOS Pillar 09
 **Audience:** NPI/ECN project members, moderators, and the system admin
 
@@ -36,7 +36,7 @@ made and on what evidence.
 The tool runs **entirely offline** on a local machine. No internet, no CDN, no
 server infrastructure.
 
-1. Unzip `WVN_Stage_Gate_Command_Center_ModelOnly_v9.2.1.zip` to a local folder.
+1. Unzip `WVN_Stage_Gate_Command_Center_ModelOnly_v10.zip` to a local folder.
    Avoid OneDrive-synced folders — file locking causes intermittent write errors.
 2. If Windows flagged the download, run `WVN_Unblock_Files.cmd` once.
 3. Double-click **`Open_WVN_NPI_Command_Center.cmd`**. A PowerShell window opens
@@ -200,6 +200,22 @@ files them together.
 **The bold red vertical line is today.** It appears on the on-screen Gantt and
 on the exported PDF. If a project's bars sit left of it, that project is behind.
 
+**Reading the timeline.** The axis runs in two tiers: months across the top,
+ISO week numbers below. Faint vertical rules mark the weeks so a bar's end can
+be read off without tracing back up to the header.
+
+**Drilling into a project.** The chevron beside a project id opens one row per
+step, each drawing its own bar rather than sharing the project's summary
+strip — with the responsible department, the PIC, and that step's issue and
+note counts alongside. Hover a bar for its start week, target week, and
+document count; click it to open that step in the drawer. Rows stay expanded
+across the auto-reload, and more than one project can be open at a time for
+comparison.
+
+A step bar whose tooltip says *no target week set* has been interpolated
+between the steps either side of it — it is a placeholder, not a plan. Set the
+target week on the gate to place it properly.
+
 **Auto-reload:** tick `auto` for a 15-second refresh. It preserves scroll,
 open drawer, filters and typed text, and skips entirely while you are typing,
 dragging, mid-upload, or have files staged.
@@ -274,4 +290,4 @@ files and your changes will be lost.
 ---
 
 *Prepared for WAHL Vietnam Early Product Management. Screens shown in the
-accompanying deck are from v9.2.1.*
+accompanying deck are from v10.*

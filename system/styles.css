@@ -1199,9 +1199,13 @@ select option { color: #14202c; background: #ffffff; }
    the metadata columns and the week-axis track stay aligned across rows. */
 .gantt-live-wrap { margin-top: var(--s5) }
 .gantt-live-grid { overflow-x: auto }
-.gantt-live-row {
+/* Column 1 carries either a project id or "Step 4: Pilot Run Validation",
+   so it is sized for the step name; the two count columns hold a badge at
+   most. Repeated identically on the sub-rows so a step's cells stay aligned
+   under its parent's. */
+.gantt-live-row, .gantt-sub-row {
   display: grid;
-  grid-template-columns: 90px 64px 110px 64px 90px minmax(480px, 1fr);
+  grid-template-columns: 184px 100px 108px 52px 52px minmax(440px, 1fr);
   align-items: center; gap: 4px;
   border-bottom: 1px solid var(--line); padding: 4px 0;
 }
@@ -1211,6 +1215,62 @@ select option { color: #14202c; background: #ffffff; }
 .gantt-live-track { position: relative; height: 24px }
 .gantt-live-track-header { height: 16px }
 .gantt-week-label { position: absolute; top: 0; font-size: 8.5px; color: var(--muted); transform: translateX(-50%); white-space: nowrap }
+
+/* -- two-tier week axis (v10) -------------------------------------------
+   A single tier wrote the full "2026-W28" at every tick and the labels
+   overlapped into a smear past ~15 weeks. Months band the upper tier, bare
+   week numbers sit below, and the year survives in the band. */
+.gantt-live-header-top {
+  border-bottom: 1px solid var(--line);
+  font-weight: 700; font-size: 10px; color: var(--muted);
+}
+.gantt-live-track-band { height: 15px }
+.gantt-band {
+  position: absolute; top: 0; bottom: 0;
+  border-left: 1px solid var(--line-strong);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9.5px; font-weight: 700; color: var(--ink2);
+  letter-spacing: .2px; overflow: hidden; white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Vertical week rules through the header and every row, so a bar's end can
+   be read against a week without tracing back up to the axis. One gradient
+   layer per track rather than a div per week per row — see the comment in
+   buildLiveGanttSection for why. The custom properties are set on
+   .gantt-live-grid and inherit down; the fallbacks make the rules vanish
+   rather than mis-draw if that ever stops happening. */
+.gantt-live-track::before {
+  content: ''; position: absolute; top: 0; bottom: 0;
+  left: var(--gantt-rule-offset, 0); right: 0;
+  background-image: repeating-linear-gradient(to right,
+    var(--line) 0, var(--line) 1px,
+    transparent 1px, transparent var(--gantt-rule-period, 100%));
+  pointer-events: none; z-index: 0;
+}
+
+/* -- per-step drill-down (v10) ------------------------------------------ */
+.gantt-proj-cell { display: flex; align-items: center; gap: 5px; min-width: 0 }
+.gantt-proj-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.gantt-expand {
+  flex: none; width: 17px; height: 17px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  background: var(--panel); color: var(--ink2); cursor: pointer;
+}
+.gantt-expand:hover { background: var(--blue); border-color: var(--blue); color: #fff }
+.gantt-expand:focus-visible { outline: none; box-shadow: var(--focus-ring) }
+.gantt-expand .icon { width: 12px; height: 12px }
+.gantt-sub-row { background: var(--soft) }
+.gantt-sub-row:hover { background: var(--row-hover) }
+.gantt-sub-row .gantt-live-track { height: 20px }
+.gantt-sub-name { padding-left: 22px; color: var(--ink2) }
+.gantt-sub-bar {
+  top: 4px; height: 12px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: pointer;
+}
+.gantt-sub-bar:hover { filter: brightness(1.15); outline: 1px solid var(--ink) }
 .gantt-bar {
   position: absolute; top: 4px; height: 10px; border-radius: 3px;
   min-width: 3px;

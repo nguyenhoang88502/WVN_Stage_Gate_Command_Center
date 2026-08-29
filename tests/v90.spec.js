@@ -98,7 +98,10 @@ test.describe('v9.0 Gantt current-week indicator', () => {
 
     const info = await page.evaluate(() => {
       const lines = Array.from(document.querySelectorAll('.gantt-today-line'));
-      const rows = document.querySelectorAll('.gantt-live-row').length;
+      // v10 added expandable per-step sub-rows, which carry the line too so it
+      // still reads as one continuous rule down an expanded chart. They are
+      // collapsed on load, so this counts the same as it did before.
+      const rows = document.querySelectorAll('.gantt-live-row, .gantt-sub-row').length;
       const cs = lines.length ? getComputedStyle(lines[0]) : null;
       return {
         count: lines.length,

@@ -108,6 +108,12 @@ test.describe('v8.1 Gantt target-week-driven positioning + tooltip', () => {
     // Pick a target week that is unlikely to collide with any pre-seeded
     // sample data (far future), so the segment's new position is unambiguous.
     const newWeek = '2027-W30';
+    const stepKey = 'NPI-' + stepId;
+    // Kept so the run can put it back — see the cleanup at the end.
+    const originalWeek = await page.evaluate(([p, sk]) => {
+      const g = (TRK.lb_gates || []).find((x) => x.project_id === p && x.step_key === sk);
+      return g ? (g.target_week || '') : '';
+    }, [pid, stepKey]);
     const editor = page.locator('#drawer .target-week-editor').first();
     await editor.locator('input[type="week"]').fill(newWeek);
     await editor.locator('button', { hasText: 'Save' }).click();
@@ -119,7 +125,6 @@ test.describe('v8.1 Gantt target-week-driven positioning + tooltip', () => {
        in flight. The Gantt then rendered from a stale TRK and the tooltip
        looked "wrong" when the app was in fact correct. Polling TRK is the real
        barrier. */
-    const stepKey = 'NPI-' + stepId;
     await expect.poll(async () => page.evaluate(([pid, sk]) => {
       const g = (TRK.lb_gates || []).find((x) => x.project_id === pid && x.step_key === sk);
       return g ? g.target_week : null;
@@ -155,5 +160,34 @@ test.describe('v8.1 Gantt target-week-driven positioning + tooltip', () => {
     expect(title, 'tooltip End matches the newly saved target week').toContain('End: ' + newWeek);
     expect(title, 'tooltip includes an X/Y docs-filed count').toMatch(/\(\d+\/\d+ docs filed\)/);
     expect(title, 'tooltip status is human-readable (space, not underscore)').not.toMatch(/[A-Z]_[A-Z]/);
+
+    /* Put the gate back. The suite shares one CSV store with no reset between
+       runs, so this spec was quietly stamping a step-1 gate with a target week
+       a year past its own step 7 on every execution. Four projects had
+       accumulated one, and because the Gantt axis must span every bar those
+       outliers squeezed the real schedules into a sliver at the left edge.
+       Restoring it through API.action uses the same write path and upsert keys
+       as the editor under test (app.js makeTargetWeekEditor call site). */
+    await page.evaluate(async ([p, sk, week, from]) => {
+      const g = (TRK.lb_gates || []).find((x) => x.project_id === p && x.step_key === sk);
+      if (!g) return;
+      const row = Object.assign({}, g, { target_week: week, updated_utc: new Date().toISOString() });
+      await API.action('lb_gates', row, {
+        upsertKeys: ['project_id', 'step_key'],
+        audit: {
+          user: 'playwright', action: 'Gate_SetTargetWeek', projectId: p, objType: 'Gate',
+          objId: sk, from: from, to: week, detail: 'v8.1 spec cleanup — restoring pre-test value',
+        },
+      });
+      // API.action writes the CSV; TRK is the in-memory copy and does not
+      // follow until something reloads it.
+      await refreshSilently();
+    }, [pid, stepKey, originalWeek, newWeek]);
+
+    await expect.poll(async () => page.evaluate(([p, sk]) => {
+      const g = (TRK.lb_gates || []).find((x) => x.project_id === p && x.step_key === sk);
+      return g ? (g.target_week || '') : null;
+    }, [pid, stepKey]), { message: 'the gate was restored to its pre-test target week' })
+      .toBe(originalWeek);
   });
 });

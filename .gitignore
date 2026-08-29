@@ -3,3 +3,7 @@ node_modules/
 playwright-report/
 test-results/
 
+gantt-shots/
+presentation-shots/
+ui-shots/
+handover_assets/
