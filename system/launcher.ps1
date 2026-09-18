@@ -17,7 +17,9 @@
 [CmdletBinding()]
 param(
   [int]$Port = 8080,
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  # v11: overrides the COMPUTERNAME_USERNAME journal identity (tests only).
+  [string]$WriterId = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,7 +48,12 @@ $TrackingDir  = Join-Path $SystemDir 'tracking'
 $TemplatesDir = Join-Path $SystemDir 'templates'
 $StagingDir   = Join-Path $SystemDir 'tmp_staging'
 $LogDir       = Join-Path $SystemDir 'logs'
-$LogPath      = Join-Path $LogDir 'launcher.log'
+# v11: one writer identity per PC + user (see "v11 journal storage"). The log
+# is per writer too - on a OneDrive-synced folder one shared log file would
+# itself be a conflict generator.
+if (-not $WriterId) { $WriterId = [string]$env:COMPUTERNAME + '_' + [string]$env:USERNAME }
+$WriterId = ($WriterId -replace '[^A-Za-z0-9_-]', '_')
+$LogPath      = Join-Path $LogDir ('launcher_' + $WriterId + '.log')
 # Every location the document vault has previously lived in, so a tool folder
 # upgraded in place carries its evidence forward instead of stranding it.
 $LegacyEvidenceDir       = Join-Path $SystemDir 'evidence'                                   # v2.0
@@ -118,7 +125,7 @@ function Invoke-Locked {
         Write-Log ("Lock failed after $Retries retries on $Path : " + $_.Exception.Message) 'ERROR'
         throw
       }
-      Start-Sleep -Milliseconds $DelayMs
+      Start-Sleep -Milliseconds ($DelayMs + (Get-Random -Maximum ($DelayMs + 1)))
     } finally {
       if ($stream) { try { $stream.Close() } catch { } }
     }
@@ -148,30 +155,13 @@ function Save-Config { param($ConfigObj)
   Invoke-Locked -Path $ConfigPath -Action { param($s) Write-AllText $s $json }.GetNewClosure() | Out-Null
 }
 
-# ---- first-launch / self-healing deployment path --------------------------
-try {
-  $cfg = Get-Config
-  $actualRoot = $RootDir
-  $changed = $false
-  if (-not $cfg.system_info.deployment_path) {
-    Add-Type -AssemblyName System.Windows.Forms | Out-Null
-    $picker = New-Object System.Windows.Forms.FolderBrowserDialog
-    $picker.Description = 'Choose the folder this tool was deployed into (cancel to use the current location).'
-    $picker.SelectedPath = $actualRoot
-    $chosen = $actualRoot
-    try { if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $picker.SelectedPath) { $chosen = $picker.SelectedPath } } catch { }
-    $cfg.system_info.deployment_path = $chosen
-    $changed = $true
-    Write-Log ('First-launch deployment_path set to ' + $chosen)
-  } elseif ($cfg.system_info.deployment_path -ne $actualRoot) {
-    Write-Log ('deployment_path stale (' + $cfg.system_info.deployment_path + ') — self-healing to ' + $actualRoot)
-    $cfg.system_info.deployment_path = $actualRoot
-    $changed = $true
-  }
-  if ($changed) { Save-Config $cfg }
-} catch {
-  Write-Log ('Startup config check failed: ' + $_.Exception.Message) 'ERROR'
-}
+# ---- deployment path (v11: runtime only) ----------------------------------
+# Before v11 this was written back into config.json whenever the tool ran from
+# a new location (with a folder picker on first launch). With one app folder
+# synced to several PCs, every replica sits at a different path, so each
+# launch rewrote the shared config.json - a guaranteed OneDrive conflict. The
+# path is now simply where this copy runs: /api/data reports it, nothing stores it.
+Write-Log ('Deployment path (runtime): ' + $RootDir + '  writer: ' + $WriterId)
 
 # ---- document vault (v2.1) ------------------------------------------------
 # Evidence no longer lives under system\. It sits in a sibling folder of the
@@ -185,24 +175,17 @@ try {
   $relative   = if ($dd.evidence_vault_relative_to_root) { [string]$dd.evidence_vault_relative_to_root } else { '..' }
   $defaultVault = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $RootDir $relative) $folderName))
 
-  $vault = [string]$dd.evidence_vault_path
-  # evidence_vault_root records which app folder that vault path was resolved
-  # FOR. If this copy of the tool is running from somewhere else — moved,
-  # copied, or a second deployment on the same machine — the stored path
-  # belongs to a different install and must not be reused, or two deployments
-  # quietly share one vault. Only a vault resolved for THIS root, whose parent
-  # still exists, is honoured; that keeps a deliberately customised path.
-  $vaultRoot = [string]$dd.evidence_vault_root
-  $reason = ''
-  if (-not $vault) { $reason = 'no vault configured' }
-  elseif ($vaultRoot -ne $RootDir) { $reason = "configured for a different install ($vaultRoot)" }
-  elseif (-not (Test-Path -LiteralPath (Split-Path -Parent $vault))) { $reason = 'parent folder is gone' }
-  if ($reason) {
-    if ($vault) { Write-Log ("Vault path " + $vault + " not used — " + $reason + ". Using " + $defaultVault) 'WARN' }
-    $vault = $defaultVault
-    $cfg.deployment_defaults.evidence_vault_path = $vault
-    $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_vault_root -NotePropertyValue $RootDir -Force
-    Save-Config $cfg
+  # v11: resolved per PC and never written back. The folder name + relative
+  # location in config.json are what every PC shares. An absolute
+  # evidence_vault_path is honoured only by the one install it was recorded for
+  # (pre-v11 single-PC setups); it is never persisted again, because on a
+  # synced app folder each PC would overwrite the shared config.json with its
+  # own path.
+  $vault = $defaultVault
+  $configured = [string]$dd.evidence_vault_path
+  if ($configured) {
+    if (([string]$dd.evidence_vault_root) -eq $RootDir -and (Test-Path -LiteralPath (Split-Path -Parent $configured))) { $vault = $configured }
+    else { Write-Log ('Configured vault path ' + $configured + ' belongs to another install - using ' + $defaultVault) 'WARN' }
   }
   if (-not (Test-Path -LiteralPath $vault)) { New-Item -ItemType Directory -Path $vault -Force | Out-Null }
   $EvidenceDir = $vault
@@ -286,7 +269,10 @@ $Stores = [ordered]@{
   lb_gates        = @('gate_id','project_id','process','step_key','step_num','step_name','status','complexity','batch_1','batch_2','batch_3','batch_override','batch_justification','approved_by','approved_utc','evidence_cited','notes','updated_utc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week')
   # v2.2 appended kind..link_url. `kind` is 'file' for an uploaded document and
   # 'link' for a UNC path or URL that lives somewhere else and is only cited.
-  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week')
+  # v11 appended revision_no, is_active, change_reason, superseded_utc. Only
+  # change_reason is authored; the other three are DERIVED on every read (see
+  # Set-DerivedRevisions) and written to the base file only by the backfill.
+  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week','revision_no','is_active','change_reason','superseded_utc')
   lb_doc_comments = @('comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc')
   # v2.3 — shared with the standalone WVN_Ticketing_Center, which points at
   # this same tracking folder. lb_ticket_events is append-only by convention:
@@ -386,198 +372,546 @@ function ConvertFrom-CsvText { param([string]$Text)
   return ,$records
 }
 
-# Appends MANY rows under a SINGLE exclusive lock (v3.1, batch import).
+# ==================================================== v11 journal storage ==
+# WHY THIS EXISTS. v11 is deployed as ONE app folder inside a SharePoint
+# library that the OneDrive client syncs to every user's PC. Each PC runs its
+# own instance against its own local replica, so the FileShare.None lock in
+# Invoke-Locked only excludes processes on the SAME PC. Two PCs rewriting the
+# same CSV between syncs silently lose one side's rows (last writer wins, or
+# OneDrive parks one version as 'name-PCNAME.csv').
 #
-# Calling Add-StoreRow in a loop would take and release the lock once per row,
-# so a concurrent writer could interleave between rows and a failure halfway
-# through would leave a partially-imported file. This reads, assigns every ID,
-# appends every row and writes back exactly once - so the import is all-or-
-# nothing and IDs cannot collide with each other or with a concurrent submit.
+# THE RULE: no file under tracking\ ever has two writers.
+#   tracking\<store>.csv                     base snapshot (everything written
+#                                            before v11). Never written by the
+#                                            running app - only by the offline
+#                                            Invoke-V11Backfill.ps1 tool.
+#   tracking\journal\<WriterId>\<store>.csv  this PC+user's append-only log of
+#                                            row VERSIONS. Only this instance
+#                                            writes it (the machine-wide mutex
+#                                            stops a second one on the same PC).
+# Reads merge the base with every writer's journal - and with any OneDrive
+# conflict copy, so even a conflict loses nothing. Versions are applied per
+# record id in (_v_utc, _v_writer, _v_seq) order; each version sets only the
+# fields named in _v_set ('*' = the whole row), so two people editing
+# different fields of one record both keep their change.
 #
-# $Rows is an array of hashtables. Returns the assigned ID strings in order.
+# Anything the old design enforced with the lock is now either collision-proof
+# by construction (IDs carry a per-writer tag; upsert-created records get an
+# ID derived from their natural key, so two PCs creating the "same" record
+# merge instead of duplicating) or DERIVED on read (revision numbers and the
+# one active revision per document - see Set-DerivedRevisions).
+#
+# The helper signatures below (Read-Store, Add-StoreRow, Set-StoreRow,
+# Add-StoreRowsBatch) are unchanged, so no endpoint had to change with it.
+$JournalMeta  = @('_v_utc', '_v_writer', '_v_seq', '_v_set')
+$JournalRoot  = Join-Path $TrackingDir 'journal'
+$MyJournalDir = Join-Path $JournalRoot $WriterId
+$SealPath     = Join-Path $JournalRoot 'BASE_SEALED.txt'
+# Short stable tag on sequential IDs: two PCs that pick the same next number
+# inside one sync window still mint different IDs (DEL-0082-3FA vs DEL-0082-C07).
+$WriterTag = & {
+  $h = [System.Security.Cryptography.SHA1]::Create()
+  try { ([BitConverter]::ToString($h.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($WriterId)))).Replace('-', '').Substring(0, 3) }
+  finally { $h.Dispose() }
+}
+$script:VSeq = [DateTime]::UtcNow.Ticks
+$script:FileCache  = @{}
+$script:MergeCache = @{}
+$script:PathCache  = @{}
+$script:StorageWarnings = [ordered]@{}
+
+# Columns that hold a vault file path. Stored vault-RELATIVE (every PC's
+# replica of the vault lives at a different absolute path) and resolved to
+# this PC's absolute path on read, so the browser code never sees the change.
+$PathColumns = @{ lb_deliverables = @('file_path'); lb_issues = @('evidence_path') }
+
+function Add-StorageWarning { param([string]$Key, [string]$Message)
+  if (-not $script:StorageWarnings.Contains($Key)) {
+    $script:StorageWarnings[$Key] = $Message
+    Write-Log ('STORAGE: ' + $Message + ' [' + $Key + ']') 'WARN'
+  }
+}
+
+# Shared-read open: never blocks OneDrive (or another reader) and retries the
+# brief window where OneDrive itself holds the file while swapping in a newer
+# copy from another PC.
+function Read-SharedText { param([string]$Path)
+  $attempt = 0
+  while ($true) {
+    $attempt++
+    try {
+      $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+      try {
+        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)
+        return $sr.ReadToEnd()
+      } finally { $fs.Close() }
+    }
+    catch [System.IO.FileNotFoundException] { return '' }
+    catch [System.IO.DirectoryNotFoundException] { return '' }
+    catch [System.IO.IOException] {
+      if ($attempt -ge 8) { throw }
+      Start-Sleep -Milliseconds (40 * $attempt)
+    }
+  }
+}
+
+# Parsed CSV, cached on (length, last write) - a 15 s poll from five browsers
+# re-parses only the files that actually changed since the last one.
+function Get-ParsedCsv { param([string]$Path)
+  $fi = New-Object System.IO.FileInfo($Path)
+  if (-not $fi.Exists) { return $null }
+  $stamp = [string]$fi.Length + '|' + [string]$fi.LastWriteTimeUtc.Ticks
+  $hit = $script:FileCache[$Path]
+  if ($hit -and $hit.stamp -eq $stamp) { return $hit }
+  $text = Read-SharedText $Path
+  $lines = @(if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } })
+  $header = @()
+  if ($lines.Count) { $header = [string[]](ConvertFrom-CsvLine ($lines[0] -replace '^﻿', '')) }
+  $rows = New-Object System.Collections.Generic.List[object]
+  for ($i = 1; $i -lt $lines.Count; $i++) { $rows.Add([string[]](ConvertFrom-CsvLine $lines[$i])) }
+  $entry = @{ stamp = $stamp; header = $header; rows = $rows }
+  $script:FileCache[$Path] = $entry
+  return $entry
+}
+
+# Every file that contributes to a store: the base file first, then base
+# conflict copies, then each writer's journal (plus its conflict copies).
+function Get-StoreFiles { param([string]$Store)
+  $rx = '^' + [regex]::Escape($Store) + '(\.\d+)?(-.+)?\.csv$'
+  $base = New-Object System.Collections.Generic.List[string]
+  $extraBase = New-Object System.Collections.Generic.List[string]
+  $journals = New-Object System.Collections.Generic.List[string]
+  if (Test-Path -LiteralPath $TrackingDir) {
+    foreach ($f in [System.IO.Directory]::GetFiles($TrackingDir, $Store + '*.csv')) {
+      $n = [System.IO.Path]::GetFileName($f)
+      if ($n -eq ($Store + '.csv')) { $base.Add($f) }
+      elseif ($n -match $rx) {
+        $extraBase.Add($f)
+        Add-StorageWarning $f ('OneDrive conflict copy ' + $n + ' in tracking\. Its rows are merged, so nothing is lost - but it means an app older than v11 wrote to tracking\ directly. Make sure every PC runs v11.')
+      }
+    }
+  }
+  foreach ($f in $extraBase) { $base.Add($f) }
+  if (Test-Path -LiteralPath $JournalRoot) {
+    foreach ($d in [System.IO.Directory]::GetDirectories($JournalRoot)) {
+      foreach ($f in [System.IO.Directory]::GetFiles($d, $Store + '*.csv')) {
+        $n = [System.IO.Path]::GetFileName($f)
+        if ($n -match $rx) {
+          $journals.Add($f)
+          if ($Matches[2]) {
+            Add-StorageWarning $f ('OneDrive conflict copy of a journal (' + $f.Substring($JournalRoot.Length).TrimStart('\') + '). Merged - nothing lost. It usually means the same Windows user on the same PC name ran the app from two copies at once.')
+          }
+        }
+      }
+    }
+  }
+  return @{ base = $base; journals = $journals }
+}
+
+# The merged state of one store. Returns @{ list; byId; lastV; cols } where
+# list keeps record order (base rows in file order, then new records in the
+# order they were first written). Callers must treat it as read-only - it is
+# cached until any contributing file changes.
+function Get-MergedStore { param([string]$Store)
+  $cols = $Stores[$Store]
+  $idCol = $cols[0]
+  $files = Get-StoreFiles $Store
+  $sig = New-Object System.Text.StringBuilder
+  foreach ($f in @($files.base) + @($files.journals)) {
+    $fi = New-Object System.IO.FileInfo($f)
+    if ($fi.Exists) { [void]$sig.Append($f + '|' + $fi.Length + '|' + $fi.LastWriteTimeUtc.Ticks + ';') }
+  }
+  $sigText = $sig.ToString()
+  $hit = $script:MergeCache[$Store]
+  if ($hit -and $hit.sig -eq $sigText) { return $hit.merged }
+
+  $list = New-Object System.Collections.Generic.List[object]
+  $byId = @{}
+  $lastV = @{}
+  $primary = $true
+  foreach ($f in $files.base) {
+    $p = Get-ParsedCsv $f
+    if (-not $p) { $primary = $false; continue }
+    foreach ($vals in $p.rows) {
+      $o = @{}
+      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
+      $id = [string]$o[$idCol]
+      # A base conflict copy repeats most rows; only rows it alone holds count.
+      if (-not $primary -and $id -and $byId.ContainsKey($id)) { continue }
+      $list.Add($o)
+      if ($id -and -not $byId.ContainsKey($id)) { $byId[$id] = $o }
+    }
+    $primary = $false
+  }
+
+  $versions = New-Object System.Collections.Generic.List[object]
+  foreach ($f in $files.journals) {
+    $p = Get-ParsedCsv $f
+    if (-not $p -or -not $p.header.Count) { continue }
+    # Journals are read by their OWN header, not positionally: a journal
+    # written before a column was appended to $Stores still lines up.
+    $ix = @{}
+    for ($c = 0; $c -lt $p.header.Count; $c++) { $ix[$p.header[$c]] = $c }
+    if (-not $ix.ContainsKey('_v_utc') -or -not $ix.ContainsKey($idCol)) { continue }
+    foreach ($vals in $p.rows) {
+      $v = @{}
+      foreach ($k in $ix.Keys) { $i = $ix[$k]; $v[$k] = if ($i -lt $vals.Count) { $vals[$i] } else { '' } }
+      $v['__key'] = [string]$v['_v_utc'] + '|' + [string]$v['_v_writer'] + '|' + ([string]$v['_v_seq']).PadLeft(20, '0')
+      $versions.Add($v)
+    }
+  }
+  if ($versions.Count) {
+    # Sort a string[] of 'key|index' and walk the indexes. NOT
+    # [Array]::Sort($keys, $items, ...): PowerShell binds the generic
+    # Sort<TKey,TValue> overload, converts $items into a NEW typed array,
+    # sorts that copy and discards it - the keys come back sorted while the
+    # items stay in file order (verified on PS 5.1), which silently breaks
+    # last-writer-wins.
+    $arr = $versions.ToArray()
+    $keys = New-Object 'string[]' $arr.Length
+    for ($i = 0; $i -lt $arr.Length; $i++) { $keys[$i] = [string]$arr[$i]['__key'] + '|' + $i.ToString('D9') }
+    [Array]::Sort($keys, [StringComparer]::Ordinal)
+    foreach ($sk in $keys) {
+      $v = $arr[[int]$sk.Substring($sk.Length - 9)]
+      $id = [string]$v[$idCol]
+      if (-not $id) { continue }
+      $set = [string]$v['_v_set']
+      $fields = if ($set -eq '*' -or -not $set) { $cols } elseif ($set -eq '-') { @() } else { $set.Split(';') }
+      $o = $byId[$id]
+      if (-not $o) {
+        $o = @{}
+        foreach ($c in $cols) { $o[$c] = '' }
+        $o[$idCol] = $id
+        $list.Add($o); $byId[$id] = $o
+      }
+      # Unknown fields (a newer app's columns) are ignored rather than
+      # invented; the id column is identity and never rewritten.
+      foreach ($fld in $fields) {
+        if ($fld -and $fld -ne $idCol -and $v.ContainsKey($fld) -and $o.ContainsKey($fld)) { $o[$fld] = [string]$v[$fld] }
+      }
+      $lastV[$id] = [string]$v['__key']
+    }
+  }
+  $merged = @{ list = $list; byId = $byId; lastV = $lastV; cols = $cols }
+  $script:MergeCache[$Store] = @{ sig = $sigText; merged = $merged }
+  return $merged
+}
+
+# Appends versions to THIS writer's journal for a store, in one locked write.
+# The lock here is only against OneDrive briefly holding the file mid-upload
+# (nobody else ever writes it), hence the wider, jittered retry budget.
+function Add-JournalVersions { param([string]$Store, [object[]]$Versions)
+  if (-not $Versions -or -not $Versions.Count) { return }
+  if (-not (Test-Path -LiteralPath $MyJournalDir)) { New-Item -ItemType Directory -Path $MyJournalDir -Force | Out-Null }
+  $jcols = @($Stores[$Store]) + $JournalMeta
+  $headerLine = $jcols -join ','
+  # A journal started under an older $Stores layout keeps its own header;
+  # new versions go to a sibling named for the new column count, so no line
+  # is ever parsed against the wrong header.
+  $path = Join-Path $MyJournalDir ($Store + '.csv')
+  if (Test-Path -LiteralPath $path) {
+    $p = Get-ParsedCsv $path
+    if ($p -and $p.header.Count -and (($p.header -join ',') -ne $headerLine)) { $path = Join-Path $MyJournalDir ($Store + '.' + $jcols.Count + '.csv') }
+  }
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($v in $Versions) {
+    $cells = foreach ($c in $jcols) { ConvertTo-CsvCell ([string]$v[$c]) }
+    [void]$sb.Append(($cells -join ',')); [void]$sb.Append("`r`n")
+  }
+  $body = $sb.ToString()
+  Invoke-Locked -Path $path -Retries 8 -DelayMs 75 -Action {
+    param($s)
+    $prefix = ''
+    if ($s.Length -eq 0) { $prefix = $headerLine + "`r`n" }
+    else {
+      # Never glue a new line onto a torn last line.
+      $s.Seek(-1, [System.IO.SeekOrigin]::End) | Out-Null
+      if ($s.ReadByte() -ne 10) { $prefix = "`r`n" }
+    }
+    $s.Seek(0, [System.IO.SeekOrigin]::End) | Out-Null
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($prefix + $body)
+    $s.Write($bytes, 0, $bytes.Length)
+    $s.Flush()
+  }.GetNewClosure() | Out-Null
+}
+
+# The _v_set for a NEW record: only the fields it actually carries. A creation
+# has no intent to blank anything, so when two PCs create the same record
+# offline (same natural-key ID) both sides' values survive the merge instead
+# of the later one wiping the earlier one's fields with empty strings.
+function Get-InsertSet { param([hashtable]$Full, [string]$IdCol)
+  $names = @($Full.Keys | Where-Object { $_ -ne $IdCol -and [string]$Full[$_] -ne '' } | Sort-Object)
+  if (-not $names.Count) { return '-' }
+  return ($names -join ';')
+}
+
+# One version row. -After is the record's newest version key: the new
+# version's timestamp is bumped past it, so an edit made by a PC whose clock
+# runs slow still sorts after the version it was made on top of.
+function New-VersionRow { param([hashtable]$Values, [string]$Set, [string]$After)
+  $script:VSeq++
+  $now = [DateTime]::UtcNow
+  if ($After) {
+    try {
+      $prev = [DateTime]::Parse($After.Split('|')[0], [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+      if ($prev -ge $now) { $now = $prev.AddTicks(1) }
+    } catch { }
+  }
+  $v = @{}
+  foreach ($k in $Values.Keys) { $v[$k] = $Values[$k] }
+  $v['_v_utc']    = $now.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ', [System.Globalization.CultureInfo]::InvariantCulture)
+  $v['_v_writer'] = $WriterId
+  $v['_v_seq']    = [string]$script:VSeq
+  $v['_v_set']    = $Set
+  return $v
+}
+
+function ConvertTo-StoredPath { param([string]$Value)
+  if (-not $Value) { return $Value }
+  if ($Value -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $Value }
+  try {
+    if (-not [System.IO.Path]::IsPathRooted($Value)) { return $Value }
+    $full = [System.IO.Path]::GetFullPath($Value)
+    $vault = [System.IO.Path]::GetFullPath($EvidenceDir).TrimEnd('\') + '\'
+    if ($full.StartsWith($vault, [StringComparison]::OrdinalIgnoreCase)) { return $full.Substring($vault.Length) }
+  } catch { }
+  return $Value
+}
+# Relative -> this PC's vault. An absolute path from another PC's replica (or
+# from before v11) that does not exist here is re-rooted at the vault folder
+# name, so 'Open in Explorer' and the transfer ZIP work on every PC.
+function ConvertFrom-StoredPath { param([string]$Value)
+  if (-not $Value) { return $Value }
+  if ($Value -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $Value }
+  if ($script:PathCache.ContainsKey($Value)) { return $script:PathCache[$Value] }
+  $out = $Value
+  try {
+    if (-not [System.IO.Path]::IsPathRooted($Value)) { $out = Join-Path $EvidenceDir $Value }
+    elseif (-not (Test-Path -LiteralPath $Value)) {
+      $seg = '\' + (Split-Path -Leaf $EvidenceDir) + '\'
+      $i = $Value.IndexOf($seg, [StringComparison]::OrdinalIgnoreCase)
+      if ($i -ge 0) {
+        $alt = Join-Path $EvidenceDir $Value.Substring($i + $seg.Length)
+        if (Test-Path -LiteralPath $alt) { $out = $alt }
+      }
+    }
+  } catch { }
+  $script:PathCache[$Value] = $out
+  return $out
+}
+function ConvertTo-StoredRow { param([string]$Store, [hashtable]$Row)
+  $out = @{}
+  foreach ($k in $Row.Keys) { $out[$k] = $Row[$k] }
+  $pcols = $PathColumns[$Store]
+  if ($pcols) { foreach ($pc in $pcols) { if ($out.ContainsKey($pc)) { $out[$pc] = ConvertTo-StoredPath ([string]$out[$pc]) } } }
+  return $out
+}
+
+# R1 - revision history, DERIVED rather than stored-and-flipped. A revision is
+# a row that carries evidence (a file, a path or a link): exactly the test
+# evidenceFor() has always applied. Claim / custom-doc / Removed marker rows
+# are the document's task record, not revisions, and never get a number.
+# Order is record order (the order the rows were written), which is exactly
+# what evidenceFor()'s "last row wins" used, so day one shows no change.
+# Because is_active is computed, "exactly one active revision per document"
+# holds by construction however OneDrive interleaves two PCs' uploads.
+function Set-DerivedRevisions { param($Rows)
+  $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+  $order = New-Object System.Collections.Generic.List[string]
+  foreach ($r in $Rows) {
+    if (-not ($r.file_name -or $r.link_url -or $r.file_path)) {
+      $r.revision_no = ''; $r.is_active = ''; $r.superseded_utc = ''
+      continue
+    }
+    $k = [string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code
+    if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.Generic.List[object]; $order.Add($k) }
+    $groups[$k].Add($r)
+  }
+  foreach ($k in $order) {
+    $g = $groups[$k]
+    for ($i = 0; $i -lt $g.Count; $i++) {
+      $g[$i].revision_no = [string]($i + 1)
+      if ($i -eq $g.Count - 1) { $g[$i].is_active = 'YES'; $g[$i].superseded_utc = '' }
+      else { $g[$i].is_active = 'NO'; $g[$i].superseded_utc = [string]$g[$i + 1].uploaded_utc }
+    }
+  }
+}
+
+# Reads a store as the merged view (same return shape as before v11).
+function Read-Store { param([string]$Store)
+  $m = Get-MergedStore $Store
+  $cols = $m.cols
+  $pcols = $PathColumns[$Store]
+  $rows = New-Object System.Collections.Generic.List[object]
+  foreach ($o in $m.list) {
+    $x = [ordered]@{}
+    foreach ($c in $cols) { $x[$c] = $o[$c] }
+    if ($pcols) { foreach ($pc in $pcols) { $x[$pc] = ConvertFrom-StoredPath ([string]$x[$pc]) } }
+    $rows.Add([pscustomobject]$x)
+  }
+  if ($Store -eq 'lb_deliverables') { Set-DerivedRevisions $rows }
+  # Emitted element by element, exactly as the pre-v11 Read-Store's rows came
+  # out of Invoke-Locked: callers wrap in @() and a list emitted as ONE object
+  # would serialise as {"value":[...],"Count":n} under PS 5.1 ConvertTo-Json.
+  return $rows.ToArray()
+}
+
+function New-StoreId {
+  param($Merged, [string]$Store, [string]$IdField, [string]$PrefixOverride, [string]$Candidate, [hashtable]$Extra)
+  $taken = @{}
+  foreach ($o in $Merged.list) { $v = [string]$o[$IdField]; if ($v) { $taken[$v] = $true } }
+  if ($Extra) { foreach ($k in $Extra.Keys) { $taken[$k] = $true } }
+  if ($Candidate) {
+    # A human ID (NPI-9649LP). If two PCs register the same family inside one
+    # sync window they mint the same ID and their rows merge into ONE project -
+    # which is what both people meant. Locally-visible clashes still get -2.
+    $try = $Candidate; $n = 1
+    while ($taken.ContainsKey($try)) { $n++; $try = $Candidate + '-' + $n }
+    return $try
+  }
+  $prefix = if ($PrefixOverride) { $PrefixOverride } else { $IdPrefix[$Store] }
+  $max = 0
+  $rx = '^' + [regex]::Escape($prefix + '-') + '(\d+)(-[0-9A-Fa-f]{3})?$'
+  foreach ($k in $taken.Keys) { if ($k -match $rx) { $n = [int]$Matches[1]; if ($n -gt $max) { $max = $n } } }
+  return ('{0}-{1:D4}-{2}' -f $prefix, ($max + 1), $WriterTag)
+}
+
+# ID for a record Set-StoreRow creates because nothing matched its key: a hash
+# of the natural key, so two PCs that both create "the gate row for step 3"
+# inside one sync window write versions of ONE record rather than two.
+function Get-KeyId { param($Merged, [string]$Store, [string]$IdField, [string[]]$KeyFields, [hashtable]$Row)
+  $keyText = $Store + '|' + (($KeyFields | ForEach-Object { ([string]$Row[$_]).ToUpperInvariant() }) -join '|')
+  $h = [System.Security.Cryptography.SHA1]::Create()
+  try { $hex = ([BitConverter]::ToString($h.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($keyText)))).Replace('-', '').Substring(0, 10) }
+  finally { $h.Dispose() }
+  $id = $IdPrefix[$Store] + '-K' + $hex
+  # Only if that ID already belongs to a record with a DIFFERENT key (its key
+  # was later edited) fall back to an ordinary new ID.
+  if ($Merged.byId.ContainsKey($id)) { return (New-StoreId -Merged $Merged -Store $Store -IdField $IdField) }
+  return $id
+}
+
 function Add-StoreRowsBatch {
   param([string]$Store, [object[]]$Rows, [string]$IdField, [hashtable]$IdCandidates)
-  $path = CsvPath $Store
   $cols = $Stores[$Store]
-  Invoke-Locked -Path $path -Action {
-    param($s)
-    $text = Read-AllText $s
-    $lines = if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } } else { @() }
-    $existing = New-Object System.Collections.Generic.List[object]
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-      $vals = ConvertFrom-CsvLine $lines[$i]
-      $o = @{}
-      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
-      $existing.Add($o)
-    }
-    $taken = @{}
-    foreach ($r in $existing) { $taken[([string]$r[$IdField]).ToUpperInvariant()] = $true }
-
-    # plain array, not List[string] - see the note in the batch route: a
-    # generic List round-tripped through @() breaks ConvertTo-Json on PS 5.1,
-    # and this value goes straight into the JSON response.
-    $assigned = @()
-    foreach ($row in $Rows) {
-      $cand = [string]$IdCandidates[[string]$row['__key']]
-      $try = $cand; $n = 1
-      while ($taken.ContainsKey($try.ToUpperInvariant())) { $n++; $try = $cand + '-' + $n }
-      $taken[$try.ToUpperInvariant()] = $true
-      $row[$IdField] = $try
-      $assigned += $try
-      $full = @{}
-      foreach ($c in $cols) { $full[$c] = if ($row.ContainsKey($c) -and $null -ne $row[$c]) { [string]$row[$c] } else { '' } }
-      $existing.Add($full)
-    }
-
-    $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append(($cols -join ',')); [void]$sb.Append("`r`n")
-    foreach ($r in $existing) {
-      $cells = foreach ($c in $cols) { ConvertTo-CsvCell $r[$c] }
-      [void]$sb.Append(($cells -join ',')); [void]$sb.Append("`r`n")
-    }
-    Write-AllText $s $sb.ToString()
-    return ,$assigned
-  }.GetNewClosure()
-}
-
-# Reads a store; creates an empty header-only file the first time it's touched.
-function Read-Store { param([string]$Store)
-  $path = CsvPath $Store
-  $cols = $Stores[$Store]
-  if (-not (Test-Path -LiteralPath $path)) { return @() }
-  Invoke-Locked -Path $path -Action {
-    param($s)
-    $text = Read-AllText $s
-    if (-not $text) { return @() }
-    $lines = $text -split "`r?`n" | Where-Object { $_ -ne '' }
-    if ($lines.Count -le 1) { return @() }
-    $rows = New-Object System.Collections.Generic.List[object]
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-      $vals = ConvertFrom-CsvLine $lines[$i]
-      $o = [ordered]@{}
-      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
-      $rows.Add([pscustomobject]$o)
-    }
-    return ,$rows
+  $m = Get-MergedStore $Store
+  $extra = @{}
+  $assigned = @()
+  $versions = New-Object System.Collections.Generic.List[object]
+  foreach ($row in $Rows) {
+    $cand = ''
+    if ($IdCandidates) { $cand = [string]$IdCandidates[[string]$row['__key']] }
+    $id = [string]$row[$IdField]
+    if (-not $id) { $id = New-StoreId -Merged $m -Store $Store -IdField $IdField -Candidate $cand -Extra $extra }
+    $extra[$id] = $true
+    $row[$IdField] = $id
+    $assigned += $id
+    $full = @{}
+    foreach ($c in $cols) { $full[$c] = if ($row.ContainsKey($c) -and $null -ne $row[$c]) { [string]$row[$c] } else { '' } }
+    $versions.Add((New-VersionRow -Values (ConvertTo-StoredRow $Store $full) -Set (Get-InsertSet $full $cols[0])))
   }
+  Add-JournalVersions -Store $Store -Versions $versions.ToArray()
+  # Enumerated, like the pre-v11 version (it unrolled once through Invoke-Locked).
+  return $assigned
 }
 
-# Appends one row under an exclusive lock, assigning its ID inside the same
-# critical section so two concurrent submits can never collide. $IdPrefixOverride
-# lets callers key the sequence by something other than the store's fixed
-# prefix (projects are NPI-#### / ECN-#### depending on process).
-# $IdCandidate (v2.1) takes a human-meaningful ID such as NPI-9649LP and makes
-# it unique inside the lock by appending -2, -3 ... on collision.
+# Appends one record. $IdCandidate keeps a human-meaningful ID; otherwise a
+# sequential writer-tagged one is minted.
 function Add-StoreRow {
   param([string]$Store, [hashtable]$Row, [string]$IdField, [string]$IdPrefixOverride, [string]$IdCandidate)
-  $path = CsvPath $Store
   $cols = $Stores[$Store]
-  Invoke-Locked -Path $path -Action {
-    param($s)
-    $text = Read-AllText $s
-    $existed = [bool]$text
-    $lines = if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } } else { @() }
-    $rows = New-Object System.Collections.Generic.List[object]
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-      $vals = ConvertFrom-CsvLine $lines[$i]
-      $o = @{}
-      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
-      $rows.Add($o)
-    }
-    if ($IdField -and -not $Row[$IdField]) {
-      if ($IdCandidate) {
-        $taken = @{}
-        foreach ($r in $rows) { $taken[([string]$r[$IdField]).ToUpperInvariant()] = $true }
-        $try = $IdCandidate; $n = 1
-        while ($taken.ContainsKey($try.ToUpperInvariant())) { $n++; $try = $IdCandidate + '-' + $n }
-        $Row[$IdField] = $try
-      } else {
-        $prefix = if ($IdPrefixOverride) { $IdPrefixOverride } else { $IdPrefix[$Store] }
-        $max = 0
-        foreach ($r in $rows) {
-          $id = [string]$r[$IdField]
-          if ($id -match [regex]::Escape($prefix + '-') + '(\d+)$') { $n = [int]$Matches[1]; if ($n -gt $max) { $max = $n } }
-        }
-        $Row[$IdField] = '{0}-{1:D4}' -f $prefix, ($max + 1)
-      }
-    }
-    $full = @{}
-    foreach ($c in $cols) { $full[$c] = if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { [string]$Row[$c] } else { '' } }
-    $rows.Add($full)
-
-    $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append(($cols -join ','))
-    [void]$sb.Append("`r`n")
-    foreach ($r in $rows) {
-      $cells = foreach ($c in $cols) { ConvertTo-CsvCell $r[$c] }
-      [void]$sb.Append(($cells -join ','))
-      [void]$sb.Append("`r`n")
-    }
-    Write-AllText $s $sb.ToString()
-    return [pscustomobject]$full
+  $m = Get-MergedStore $Store
+  if ($IdField -and -not $Row[$IdField]) {
+    $Row[$IdField] = New-StoreId -Merged $m -Store $Store -IdField $IdField -PrefixOverride $IdPrefixOverride -Candidate $IdCandidate
   }
+  $full = @{}
+  foreach ($c in $cols) { $full[$c] = if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { [string]$Row[$c] } else { '' } }
+  Add-JournalVersions -Store $Store -Versions @(New-VersionRow -Values (ConvertTo-StoredRow $Store $full) -Set (Get-InsertSet $full $cols[0]))
+  return [pscustomobject]$full
 }
 
-# Upsert-by-key for stores where the same logical record is touched
-# repeatedly (gate status, trial quantities). Matches on $KeyFields (all
-# must be equal); replaces the row if found, else appends via Add-StoreRow.
+# Upsert by key: the FIRST record (in record order) whose key fields all match
+# gets a version carrying only the fields supplied; no match creates a record.
+# Matching stays case-insensitive, as it always was (-ne on strings).
 function Set-StoreRow {
   param([string]$Store, [hashtable]$Row, [string[]]$KeyFields, [string]$IdField)
-  $path = CsvPath $Store
   $cols = $Stores[$Store]
-  Invoke-Locked -Path $path -Action {
-    param($s)
-    $text = Read-AllText $s
-    $lines = if ($text) { $text -split "`r?`n" | Where-Object { $_ -ne '' } } else { @() }
-    $rows = New-Object System.Collections.Generic.List[object]
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-      $vals = ConvertFrom-CsvLine $lines[$i]
-      $o = @{}
-      for ($c = 0; $c -lt $cols.Count; $c++) { $o[$cols[$c]] = if ($c -lt $vals.Count) { $vals[$c] } else { '' } }
-      $rows.Add($o)
+  $idCol = $cols[0]
+  $m = Get-MergedStore $Store
+  $match = $null
+  foreach ($o in $m.list) {
+    $ok = $true
+    foreach ($k in $KeyFields) { if ([string]$o[$k] -ne [string]$Row[$k]) { $ok = $false; break } }
+    if ($ok -and [string]$o[$idCol]) { $match = $o; break }
+  }
+  if ($match) {
+    $id = [string]$match[$idCol]
+    $vals = @{}
+    $vals[$idCol] = $id
+    $set = New-Object System.Collections.Generic.List[string]
+    foreach ($c in $cols) {
+      if ($c -ne $idCol -and $Row.ContainsKey($c) -and $null -ne $Row[$c]) { $set.Add($c); $vals[$c] = [string]$Row[$c] }
     }
-    $idx = -1
-    for ($i = 0; $i -lt $rows.Count; $i++) {
-      $match = $true
-      foreach ($k in $KeyFields) { if ([string]$rows[$i][$k] -ne [string]$Row[$k]) { $match = $false; break } }
-      if ($match) { $idx = $i; break }
+    $full = @{}
+    foreach ($c in $cols) { $full[$c] = [string]$match[$c] }
+    foreach ($c in $set) { $full[$c] = $vals[$c] }
+    if ($set.Count) {
+      Add-JournalVersions -Store $Store -Versions @(New-VersionRow -Values (ConvertTo-StoredRow $Store $vals) -Set ($set -join ';') -After ([string]$m.lastV[$id]))
     }
-    if ($idx -ge 0) {
-      foreach ($c in $cols) { if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { $rows[$idx][$c] = [string]$Row[$c] } }
-      $full = $rows[$idx]
-    } else {
-      if ($IdField -and -not $Row[$IdField]) {
-        $prefix = $IdPrefix[$Store]
-        $max = 0
-        foreach ($r in $rows) {
-          $id = [string]$r[$IdField]
-          if ($id -match [regex]::Escape($prefix + '-') + '(\d+)$') { $n = [int]$Matches[1]; if ($n -gt $max) { $max = $n } }
-        }
-        $Row[$IdField] = '{0}-{1:D4}' -f $prefix, ($max + 1)
-      }
-      $full = @{}
-      foreach ($c in $cols) { $full[$c] = if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { [string]$Row[$c] } else { '' } }
-      $rows.Add($full)
-    }
-    $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append(($cols -join ','))
-    [void]$sb.Append("`r`n")
-    foreach ($r in $rows) {
-      $cells = foreach ($c in $cols) { ConvertTo-CsvCell $r[$c] }
-      [void]$sb.Append(($cells -join ','))
-      [void]$sb.Append("`r`n")
-    }
-    Write-AllText $s $sb.ToString()
+    $pcols = $PathColumns[$Store]
+    if ($pcols) { foreach ($pc in $pcols) { $full[$pc] = ConvertFrom-StoredPath ([string]$full[$pc]) } }
     return [pscustomobject]$full
   }
+  if ($IdField -and -not $Row[$IdField]) {
+    if ($KeyFields -contains $IdField) { $Row[$IdField] = New-StoreId -Merged $m -Store $Store -IdField $IdField }
+    else { $Row[$IdField] = Get-KeyId -Merged $m -Store $Store -IdField $IdField -KeyFields $KeyFields -Row $Row }
+  }
+  $full = @{}
+  foreach ($c in $cols) { $full[$c] = if ($Row.ContainsKey($c) -and $null -ne $Row[$c]) { [string]$Row[$c] } else { '' } }
+  Add-JournalVersions -Store $Store -Versions @(New-VersionRow -Values (ConvertTo-StoredRow $Store $full) -Set (Get-InsertSet $full $cols[0]))
+  return [pscustomobject]$full
 }
 
+# Startup storage checks: seal the base snapshot the first time v11 runs, and
+# warn loudly if an older app has written to tracking\ since (it would bypass
+# the journal and, on OneDrive, overwrite other PCs' base rows).
+function Test-StorageHealth {
+  try {
+    if (-not (Test-Path -LiteralPath $JournalRoot)) { New-Item -ItemType Directory -Path $JournalRoot -Force | Out-Null }
+    if (-not (Test-Path -LiteralPath $SealPath)) {
+      Set-Content -LiteralPath $SealPath -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII
+      Write-Log 'Sealed the v11 base snapshot (tracking\journal\BASE_SEALED.txt).'
+    }
+    $seal = [DateTime]::Parse((Get-Content -LiteralPath $SealPath -TotalCount 1), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+    foreach ($store in $Stores.Keys) {
+      $bp = Join-Path $TrackingDir ($store + '.csv')
+      if ((Test-Path -LiteralPath $bp) -and ((Get-Item -LiteralPath $bp).LastWriteTimeUtc -gt $seal.AddMinutes(2))) {
+        Add-StorageWarning $bp ('tracking\' + $store + '.csv was modified after the v11 upgrade. Its rows are still read, but only a pre-v11 app (or a hand edit) writes there - check every PC runs v11.')
+      }
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $SystemDir -Filter 'config-*.json' -ErrorAction SilentlyContinue)) {
+      Add-StorageWarning $f.FullName ('OneDrive conflict copy ' + $f.Name + ': two admins changed Settings at the same time. One change is in config.json, the other only in this file - compare them and re-apply the missing edit.')
+    }
+  } catch { Write-Log ('Storage health check failed: ' + $_.Exception.Message) 'WARN' }
+}
+
+Test-StorageHealth
+
 function Add-Audit { param([string]$User, [string]$Action, [string]$ProjectId, [string]$ObjType, [string]$ObjId, [string]$From, [string]$To, [string]$Detail)
-  Add-StoreRow -Store 'lb_audit' -IdField 'log_id' -Row @{
-    timestamp_utc = (Get-Date).ToUniversalTime().ToString('o'); user = $User; action = $Action
+  # v11: audit rows are append-only and nothing looks them up by number, so
+  # they skip the sequential minting (which would re-merge the whole, largest
+  # store on every action) and take a time + writer ID instead.
+  $script:VSeq++
+  $now = [DateTime]::UtcNow
+  $row = @{
+    log_id = ('LOG-' + $now.ToString('yyMMddHHmmssfff') + '-' + $WriterTag + ([string]($script:VSeq % 1000)).PadLeft(3, '0'))
+    timestamp_utc = $now.ToString('o'); user = $User; action = $Action
     project_id = $ProjectId; object_type = $ObjType; object_id = $ObjId
     change_from = $From; change_to = $To; detail = $Detail; result = 'Success'
-  } | Out-Null
+  }
+  $full = @{}
+  foreach ($c in $Stores['lb_audit']) { $full[$c] = if ($row.ContainsKey($c) -and $null -ne $row[$c]) { [string]$row[$c] } else { '' } }
+  Add-JournalVersions -Store 'lb_audit' -Versions @(New-VersionRow -Values $full -Set (Get-InsertSet $full 'log_id'))
 }
 
 # ============================================================== evidence ==
@@ -667,6 +1001,16 @@ function Save-Evidence {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   $newHash = ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant()
   $sha.Dispose()
+
+  # v11: the stored name ends in the first 8 hex of the file's SHA-256. On a
+  # OneDrive-synced vault two PCs can file the same document (same standard
+  # name) inside one sync window without seeing each other's file; without
+  # the suffix OneDrive renames one of them and that PC's row points at the
+  # other PC's bytes. Content-addressed names cannot collide, and identical
+  # bytes still land on the identical name (a duplicate, not a new file).
+  $safeFile = $base + '_' + $newHash.Substring(0, 8) + $ext
+  $base = [System.IO.Path]::GetFileNameWithoutExtension($safeFile)
+  $destPath = Join-Path $destDir $safeFile
 
   $duplicate = $false
   if (Test-Path -LiteralPath $destPath) {
@@ -1574,9 +1918,12 @@ try {
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/data') {
         $cfg = Get-Config
+        # v11: runtime value, never stored (see "deployment path" above).
+        if ($cfg.system_info) { $cfg.system_info | Add-Member -NotePropertyName deployment_path -NotePropertyValue $RootDir -Force }
         New-JsonResponse -Response $res -StatusCode 200 -Body @{
           config = $cfg; tracking = (Get-AllTracking)
           paths = @{ root = $RootDir; vault = $EvidenceDir; templates = $TemplatesDir }
+          storage = @{ mode = 'journal'; writer = $WriterId; tag = $WriterTag; warnings = @($script:StorageWarnings.Values) }
         }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/config') {
