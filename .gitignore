@@ -7,3 +7,9 @@ gantt-shots/
 presentation-shots/
 ui-shots/
 handover_assets/
+
+# v11 runtime: per-PC journals, backfill backups/reports, per-writer logs
+system/tracking/journal/*/
+system/tracking_backup_v11_*/
+system/logs/v11_backfill_*.txt
+system/logs/launcher_*.log
