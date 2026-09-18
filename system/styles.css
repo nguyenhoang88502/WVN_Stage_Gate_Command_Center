@@ -1792,3 +1792,41 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   text-decoration: none; border: 1px solid var(--line);
   padding: 4px 10px; border-radius: var(--r1); display: inline-block;
 }
+
+/* ------------------------------------------------------------------ v11 --
+   R1 revision history + stale approvals, R2 upload queue. Colours come from
+   the existing tokens only, so both themes follow automatically. */
+.stale-badge { white-space: nowrap; }
+.stale-banner { background: var(--warn2); border-left-color: var(--warn); margin-bottom: var(--s2); width: 100%; }
+.gantt-stale { box-shadow: inset 0 0 0 2px var(--warn); }
+.gantt-stale::after { content: "!"; position: absolute; right: 3px; top: 0; font-weight: 700; color: var(--warn); }
+.print-stale { color: var(--warn); }
+.rev-badge { font-weight: 600; }
+.history-modal { width: min(880px, calc(100vw - 32px)); max-width: none; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.history-table th, .history-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.history-table tr.history-active td { background: var(--good2); }
+.history-body { max-height: 60vh; overflow: auto; }
+.reason-input { width: 100%; box-sizing: border-box; }
+
+#uploadQueue {
+  position: fixed; right: 16px; bottom: 16px; z-index: 1200;
+  width: min(380px, calc(100vw - 32px)); max-height: 60vh; display: flex; flex-direction: column;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong);
+  border-radius: var(--r2); box-shadow: var(--sh3); font-size: 13px;
+}
+#uploadQueue .uq-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+#uploadQueue .uq-counts { color: var(--muted); flex: 1; }
+#uploadQueue .uq-bad { color: var(--bad); font-weight: 600; }
+#uploadQueue .uq-bar { height: 4px; margin: 0 12px 6px; background: var(--soft); border-radius: 2px; overflow: hidden; }
+#uploadQueue .uq-bar div { height: 100%; background: var(--blue); transition: width var(--t-med); }
+#uploadQueue .uq-list { list-style: none; margin: 0; padding: 0 12px; overflow: auto; flex: 1; }
+#uploadQueue .uq-list li { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+#uploadQueue .uq-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#uploadQueue .uq-state { color: var(--muted); }
+#uploadQueue .uq-saved .uq-state { color: var(--good); }
+#uploadQueue .uq-failed .uq-state { color: var(--bad); font-weight: 600; }
+#uploadQueue .uq-uploading .uq-state, #uploadQueue .uq-saving .uq-state { color: var(--blue); }
+#uploadQueue .uq-err { flex-basis: 100%; color: var(--bad); font-size: 12px; }
+#uploadQueue .uq-acts { display: flex; gap: 8px; justify-content: flex-end; padding: 8px 12px 10px; }
+@media print { #uploadQueue { display: none !important; } }

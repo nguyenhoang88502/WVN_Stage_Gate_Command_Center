@@ -1582,7 +1582,12 @@ function evidenceFor(pid, stepKey, docCode) {
   var realRows = rows.filter(function(r) {
     return r.file_name || r.link_url || r.file_path;
   });
-  var del = realRows.length ? realRows[realRows.length - 1] : null;
+  // v11 R1: the ACTIVE revision (is_active is derived by the server on every
+  // read). Rows from an older server carry no flag - fall back to the last
+  // row, which is exactly what the active revision was defined to reproduce.
+  var del = realRows.length
+    ? (realRows.find(function(r) { return r.is_active === 'YES'; }) || realRows[realRows.length - 1])
+    : null;
   if (del && del.approved === 'YES') return { level: 'APPROVED', del };
   if (del) return { level: 'FILED', del };
   // No file — check if someone has claimed, been assigned, or is supporting
@@ -1631,7 +1636,43 @@ function gateState(project, proc, step) {
   const done = !!(approval || bypass);
   const priorBlocks = priorOpen.length > 0 && !isPrivileged();
   const canApprove = gated && !approval && missing.length === 0 && blocking.length === 0 && !priorBlocks;
-  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, gated, status, done, canApprove, priorOpen, priorBlocks };
+  const stale = staleApprovalOf(project.project_id, sk, req, approval);
+  return { sk, req, ev, cond, missing, removed, blocking, approval, bypass, gate, gated, status, done, canApprove, priorOpen, priorBlocks, stale };
+}
+
+/* v11 R1 - a signed gate is STALE when an active revision of one of its
+   required documents (config-required or per-model custom) was filed after
+   the signature. Derived and read-only: the approval row is history and is
+   never edited or deleted. Mirrors Get-StaleApprovalMap in launcher.ps1,
+   which feeds the XLSX exports - keep the two rules identical. */
+function staleApprovalOf(pid, sk, reqCodes, approval) {
+  if (!approval || !approval.approved_utc) return null;
+  var when = Date.parse(approval.approved_utc);
+  if (isNaN(when)) return null;
+  var late = [];
+  (TRK.lb_deliverables || []).forEach(function(d) {
+    if (d.project_id !== pid || d.step_key !== sk || d.is_active !== 'YES') return;
+    if (reqCodes.indexOf(d.doc_code) < 0) return;
+    var tm = Date.parse(d.uploaded_utc);
+    if (!isNaN(tm) && tm > when && late.indexOf(d.doc_code) < 0) late.push(d.doc_code);
+  });
+  return late.length ? { docs: late, approved_utc: approval.approved_utc } : null;
+}
+function staleText(stale) {
+  return 'Signed ' + fmtStamp(stale.approved_utc) + ', but ' + stale.docs.join(', ') +
+    (stale.docs.length > 1 ? ' were' : ' was') + ' revised afterwards - the signature no longer covers the current file(s).';
+}
+function staleBadgeHtml(stale) {
+  if (!stale) return '';
+  return '<span class="badge bg-warning stale-badge" title="' + esc(staleText(stale)) + '">' + iconHtml('alert-triangle') + ' approval stale</span>';
+}
+/* Local date + time for a stored ISO stamp; the raw value if it will not parse. */
+function fmtStamp(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 function progressOf(project) {
   const proc = project.process, steps = stepsOf(proc, project);
@@ -1765,6 +1806,7 @@ function matrixCell(project, step) {
   // bits always holds the percentage line, so test the real content instead
   if (!c.done.length && !c.filed.length && !c.missing.length && !c.removed.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
   if (c.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
+  if (c.g.stale) bits.push(staleBadgeHtml(c.g.stale));
   const nc = cellNoteCount(project, stepKeyOf(project.process, step));
   if (nc) bits.push('<span class="matrix-note-indicator" title="' + nc + ' note(s)">' + iconHtml('message-circle') + ' ' + nc + '</span>');
   // Overdue = a target_week is set, is in the past, and the thing it's on
@@ -2284,6 +2326,7 @@ function viewDashboard(root) {
               if (gcs.removed.length) bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + gcs.removed.map(esc).join(', ') + '</span>');
               if (!gcs.done.length && !gcs.filed.length && !gcs.missing.length && !gcs.removed.length) bits.push('<span class="' + badgeClass('NO_DATA') + '">not started</span>');
               if (gcs.g && gcs.g.bypass) bits.push('<span class="' + badgeClass('BYPASSED') + '">bypassed</span>');
+              if (gcs.g && gcs.g.stale) bits.push(staleBadgeHtml(gcs.g.stale));
               let groupNoteCount = 0;
               group.steps.forEach(function(gs) {
                 if (on.indexOf(gs) >= 0) {
@@ -2942,7 +2985,9 @@ function buildLiveGanttSection() {
       seg.appendChild(el('span', 'gantt-stage-label', 'S' + s.step_id));
       seg.title = p.project_id + ' — Step ' + s.step_id + ': ' + s.step_name + ' (S' + s.step_id + ')\n' +
         'Start: ' + isoWeek(r.start) + ' | End: ' + isoWeek(r.end) + '\n' +
-        'Status: ' + segStatus.replace(/_/g, ' ') + ' (' + (gs.req.length - gs.missing.length) + '/' + gs.req.length + ' docs filed)';
+        'Status: ' + segStatus.replace(/_/g, ' ') + ' (' + (gs.req.length - gs.missing.length) + '/' + gs.req.length + ' docs filed)' +
+        (gs.stale ? '\nAPPROVAL STALE - ' + staleText(gs.stale) : '');
+      if (gs.stale) seg.classList.add('gantt-stale');
       seg.onclick = function(e) { e.stopPropagation(); openDrawer(p, s, null); };
       track.appendChild(seg);
       if (idx > 0) {
@@ -3015,7 +3060,9 @@ function buildLiveGanttSection() {
         'Status: ' + st.replace(/_/g, ' ') +
         ' (' + (gs.req.length - gs.missing.length) + '/' + gs.req.length + ' docs filed)' +
         (stepIssues ? '\nOpen issues: ' + stepIssues : '') +
-        (isGated(proc, s) ? '' : '\nNo gate clearance required on this step');
+        (isGated(proc, s) ? '' : '\nNo gate clearance required on this step') +
+        (gs.stale ? '\nAPPROVAL STALE - ' + staleText(gs.stale) : '');
+      if (gs.stale) bar.classList.add('gantt-stale');
       bar.onclick = function(e) { e.stopPropagation(); openDrawer(p, s, null); };
       subTrack.appendChild(bar);
       if (showTodayLine) subTrack.appendChild(todayLine());
@@ -3187,7 +3234,7 @@ function buildPrintPackage() {
         var doneCount = c.done.length + c.filed.length;
         var pct = reqCount ? Math.round(100 * doneCount / reqCount) : 0;
         var cls = pct === 100 ? 'pct-done' : (pct > 0 ? 'pct-partial' : 'pct-none');
-        npiH += '<td class="' + cls + '">' + pct + '%</td>';
+        npiH += '<td class="' + cls + '">' + pct + '%' + (c.g.stale ? ' <b class="print-stale">(stale)</b>' : '') + '</td>';
       });
       npiH += '</tr>';
     });
@@ -3215,7 +3262,7 @@ function buildPrintPackage() {
         var doneCount = gc.done.length + gc.filed.length;
         var pct = reqCount ? Math.round(100 * doneCount / reqCount) : 0;
         var cls = pct === 100 ? 'pct-done' : (pct > 0 ? 'pct-partial' : 'pct-none');
-        ecnH += '<td class="' + cls + '">' + pct + '%</td>';
+        ecnH += '<td class="' + cls + '">' + pct + '%' + (gc.g && gc.g.stale ? ' <b class="print-stale">(stale)</b>' : '') + '</td>';
       });
       /* PPAP */
       var ppapRows = (TRK.lb_ppap || []).filter(function(r) { return r.project_id === prj.project_id; });
@@ -3404,7 +3451,7 @@ function _buildSvgGantt(projects) {
 }
 
 /* ---- sidebar evidence upload helper ------------------------------------ */
-async function uploadEvidence(project, stepKey, docCode, file) {
+async function uploadEvidence(project, stepKey, docCode, file, changeReason) {
   window._isUploadingEvidence = true;
   try {
     const who = requireName() || '(unnamed)';
@@ -3427,11 +3474,172 @@ async function uploadEvidence(project, stepKey, docCode, file) {
       approved: '', suspect_template: '', uploaded_by: who,
       uploaded_utc: new Date().toISOString(), notes: '', kind: 'file',
       original_name: up.originalName, wvn_id: project.family || '',
-      wnb_id: project.customer_number || '', description: docCode, link_url: ''
-    }, { audit: { user: who, action: 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: 'MISSING', to: 'Filed', detail: docCode } });
+      wnb_id: project.customer_number || '', description: docCode, link_url: '',
+      change_reason: changeReason || ''
+    }, { audit: { user: who, action: changeReason ? 'Upload_New_Revision' : 'Upload_Evidence_Sidebar', projectId: project.project_id, objType: 'Deliverable', objId: '', from: changeReason ? 'Revised' : 'MISSING', to: 'Filed', detail: docCode + (changeReason ? ' - ' + changeReason : '') } });
   } finally {
     window._isUploadingEvidence = false;
   }
+}
+
+/* ===================================================================== */
+/* v11 R2 - one sequential upload queue for every evidence upload        */
+/* ===================================================================== */
+/* Why: each file is two requests - the bytes (/api/upload) and its tracking
+   row. Before v11 a failure between them left the file in the vault with no
+   row (an orphan) and nothing retried it; one bad file also interrupted the
+   batch with an alert. Now every file goes through here:
+     1. bytes, one file at a time (the server is single-threaded - more in
+        flight only queue there), retried with backoff. Safe to retry: stored
+        names are content-addressed, so a repeat lands on the same file.
+     2. rows, in chunks of up to 20 through /api/deliverables/batch, retried
+        separately. A file whose bytes saved but whose row did not is shown as
+        "Failed (row)" and Retry re-sends ONLY the row - the file is not
+        uploaded again and is never silently orphaned.
+   The panel hangs off <body>, so redraws of #views / #drawer never wipe it,
+   and auto-reload pauses while it runs (window._isUploadingEvidence). */
+var UPQ = { items: [], running: false, seq: 0, callbacks: [], collapsed: false };
+var UPQ_ROW_CHUNK = 20;
+
+function enqueueUploads(items, onDone) {
+  var who = requireName(); if (!who) return [];
+  var added = items.map(function(it) {
+    var q = { id: ++UPQ.seq, who: who, it: it, name: it.file.name, status: 'Pending', phase: '', error: '', up: null, rowId: '', duplicate: false, utc: '' };
+    UPQ.items.push(q);
+    return q;
+  });
+  if (onDone) UPQ.callbacks.push(function() { onDone(added); });
+  renderUploadPanel();
+  runUploadQueue();
+  return added;
+}
+
+function uqSleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+async function uqRetry(fn, attempts) {
+  var last;
+  for (var i = 0; i < attempts; i++) {
+    try { return await fn(); }
+    catch (e) { last = e; if (i < attempts - 1) await uqSleep(500 * Math.pow(2, i) + Math.floor(Math.random() * 250)); }
+  }
+  throw last;
+}
+function uqReadBase64(file) {
+  return new Promise(function(resolve, reject) {
+    var rd = new FileReader();
+    rd.onload = function() { resolve(String(rd.result).split(',')[1]); };
+    rd.onerror = function() { reject(rd.error || new Error('could not read the file')); };
+    rd.readAsDataURL(file);
+  });
+}
+async function uqSendBytes(q) {
+  var it = q.it;
+  var b64 = await uqReadBase64(it.file);
+  var body = {
+    fileName: it.file.name, contentBase64: b64, docType: it.docCode,
+    family: it.project.family, wvnId: it.project.family, wnbId: it.project.customer_number || '',
+    description: it.docCode, partId: ''
+  };
+  if (it.uploadExtra) Object.keys(it.uploadExtra).forEach(function(k) { body[k] = it.uploadExtra[k]; });
+  return API.upload(body);
+}
+function uqRow(q) {
+  var it = q.it, up = q.up;
+  var row = {
+    project_id: it.project.project_id, step_key: it.stepKey, doc_code: it.docCode,
+    file_name: up.fileName, file_path: up.path, sha256: up.sha256, status: 'Filed',
+    approved: '', suspect_template: '', uploaded_by: q.who, uploaded_utc: q.utc,
+    notes: '', kind: 'file', original_name: up.originalName || it.file.name,
+    wvn_id: it.project.family || '', wnb_id: it.project.customer_number || '',
+    description: it.docCode, link_url: '', change_reason: it.changeReason || ''
+  };
+  var extra = typeof it.rowExtra === 'function' ? it.rowExtra(up) : it.rowExtra;
+  if (extra) Object.keys(extra).forEach(function(k) { row[k] = extra[k]; });
+  return row;
+}
+async function uqFlushRows(batch) {
+  try {
+    var res = await uqRetry(function() {
+      return API.post('/api/deliverables/batch', { user: batch[0].who, rows: batch.map(uqRow) });
+    }, 6);
+    (res.results || []).forEach(function(r, i) {
+      var q = batch[i]; if (!q) return;
+      if (r.ok) { q.status = 'Saved'; q.phase = ''; q.error = ''; q.rowId = r.id || ''; q.duplicate = !!r.duplicate; }
+      else { q.status = 'Failed'; q.phase = 'row'; q.error = r.error || 'row rejected'; }
+    });
+  } catch (e) {
+    batch.forEach(function(q) { q.status = 'Failed'; q.phase = 'row'; q.error = e.message; });
+  }
+  renderUploadPanel();
+}
+async function runUploadQueue() {
+  if (UPQ.running) return;
+  UPQ.running = true;
+  window._isUploadingEvidence = true;
+  try {
+    for (;;) {
+      var q = UPQ.items.find(function(x) { return x.status === 'Pending'; });
+      if (q) {
+        q.status = 'Uploading'; renderUploadPanel();
+        try {
+          q.up = await uqRetry(function() { return uqSendBytes(q); }, 4);
+          q.utc = new Date().toISOString();
+          q.status = 'Saving';
+        } catch (e) { q.status = 'Failed'; q.phase = 'file'; q.error = e.message; }
+        renderUploadPanel();
+      }
+      var ready = UPQ.items.filter(function(x) { return x.status === 'Saving'; });
+      var morePending = UPQ.items.some(function(x) { return x.status === 'Pending'; });
+      if (ready.length && (ready.length >= UPQ_ROW_CHUNK || !morePending)) { await uqFlushRows(ready.slice(0, UPQ_ROW_CHUNK)); continue; }
+      if (!q) break;
+    }
+  } finally {
+    UPQ.running = false;
+    window._isUploadingEvidence = false;
+    renderUploadPanel();
+    var cbs = UPQ.callbacks.splice(0);
+    try { await refreshSilently(); } catch (e) { }
+    cbs.forEach(function(fn) { try { fn(); } catch (e) { } });
+  }
+}
+function uqRetryFailed() {
+  UPQ.items.forEach(function(q) {
+    if (q.status !== 'Failed') return;
+    // A saved file keeps its upload result: only the row is re-sent.
+    q.status = q.phase === 'row' && q.up ? 'Saving' : 'Pending';
+    q.error = '';
+  });
+  renderUploadPanel();
+  runUploadQueue();
+}
+function renderUploadPanel() {
+  var panel = document.getElementById('uploadQueue');
+  if (!UPQ.items.length) { if (panel) panel.remove(); return; }
+  if (!panel) { panel = document.createElement('div'); panel.id = 'uploadQueue'; panel.setAttribute('role', 'status'); panel.setAttribute('aria-live', 'polite'); document.body.appendChild(panel); }
+  var n = { Pending: 0, Uploading: 0, Saving: 0, Saved: 0, Failed: 0 };
+  UPQ.items.forEach(function(q) { n[q.status] = (n[q.status] || 0) + 1; });
+  var total = UPQ.items.length;
+  var head = UPQ.running
+    ? 'Uploading ' + (n.Saved + n.Failed + 1 > total ? total : n.Saved + n.Failed + 1) + ' of ' + total
+    : (n.Failed ? n.Failed + ' of ' + total + ' need attention' : 'All ' + total + ' saved');
+  var html = '<div class="uq-head"><b>' + esc(head) + '</b><span class="uq-counts">' + n.Saved + ' saved' +
+    (n.Failed ? ' · <span class="uq-bad">' + n.Failed + ' failed</span>' : '') + (n.Pending + n.Uploading + n.Saving ? ' · ' + (n.Pending + n.Uploading + n.Saving) + ' to go' : '') + '</span>' +
+    '<button class="sm uq-toggle">' + (UPQ.collapsed ? 'Show' : 'Hide') + '</button></div>' +
+    '<div class="uq-bar"><div style="width:' + Math.round(100 * (n.Saved + n.Failed) / total) + '%"></div></div>';
+  if (!UPQ.collapsed) {
+    html += '<ol class="uq-list">' + UPQ.items.map(function(q) {
+      var label = q.status === 'Failed' ? 'Failed (' + (q.phase === 'row' ? 'row - file is saved' : 'file') + ')' : (q.status === 'Saved' && q.duplicate ? 'Already filed' : q.status);
+      return '<li class="uq-' + q.status.toLowerCase() + '"><span class="uq-name" title="' + esc(q.it.project.project_id + ' · ' + q.it.stepKey + ' · ' + q.it.docCode) + '">' + esc(q.name) + '</span>' +
+        '<span class="uq-state">' + esc(label) + '</span>' + (q.error ? '<div class="uq-err">' + esc(q.error) + '</div>' : '') + '</li>';
+    }).join('') + '</ol>';
+  }
+  var acts = '';
+  if (n.Failed && !UPQ.running) acts += '<button class="primary sm uq-retry">Retry failed</button>';
+  if (!UPQ.running) acts += '<button class="sm uq-clear">' + (n.Failed ? 'Dismiss' : 'Close') + '</button>';
+  if (acts) html += '<div class="uq-acts">' + acts + '</div>';
+  panel.innerHTML = html;
+  panel.querySelector('.uq-toggle').onclick = function() { UPQ.collapsed = !UPQ.collapsed; renderUploadPanel(); };
+  var r = panel.querySelector('.uq-retry'); if (r) r.onclick = uqRetryFailed;
+  var c = panel.querySelector('.uq-clear'); if (c) c.onclick = function() { UPQ.items = []; renderUploadPanel(); };
 }
 
 /* Renders a filed document's location two ways: a link that streams it from
@@ -3641,11 +3849,13 @@ function openDrawer(project, step, focusDocCode) {
   }
   /* ---- documents, with hashes ---- */
   d.appendChild(el('h3', null, 'Documents filed at this step'));
-  // Show only rows that carry actual evidence (file, link, or path), not custom-doc markers
+  // Show only rows that carry actual evidence (file, link, or path), not custom-doc markers.
+  // v11 R1: one row per DOCUMENT - its active revision. Superseded revisions
+  // live in the History modal instead of cluttering the table as peers.
   const dels = TRK.lb_deliverables.filter(function(x) {
     return x.project_id === project.project_id && x.step_key === sk &&
       (x.file_name || x.link_url || x.file_path || x.approved === 'YES') &&
-      x.status !== 'Removed';
+      x.status !== 'Removed' && x.is_active !== 'NO';
   });
   if (!dels.length) d.appendChild(el('p', 'note', 'Nothing filed here yet.'));
   else {
@@ -3666,9 +3876,11 @@ function openDrawer(project, step, focusDocCode) {
                   : '<span class="note">' + esc(x.file_name) + '</span><br><a href="file:///' + esc(path.replace(/\\/g, '/')) + '" class="note" style="font-size:10px;word-break:break-all">' + iconHtml('folder-open') + ' ' + esc(path) + '</a>')
         : '<span class="note">—</span>';
       var removedMark = isDelRemoved ? ' <span class="badge bg-secondary" style="text-decoration:line-through;opacity:0.7">Removed</span>' : '';
-      tr.innerHTML = '<td>' + dcEl + removedMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
-        '<td><code>' + esc(x.file_name) + '</code><div class="note">' + pathHtml + '</div></td>' +
-        '<td>' + esc(x.uploaded_by) + '<div class="note">' + esc((x.uploaded_utc || '').slice(0, 10)) + '</div></td><td></td>';
+      const revMark = x.revision_no ? ' <span class="badge bg-secondary rev-badge" title="Revision ' + esc(x.revision_no) + ' is the active one">rev ' + esc(x.revision_no) + '</span>' : '';
+      tr.innerHTML = '<td>' + dcEl + removedMark + revMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
+        '<td><code>' + esc(x.file_name) + '</code><div class="note">' + pathHtml + '</div>' +
+        (x.change_reason ? '<div class="note">Change: ' + esc(x.change_reason) + '</div>' : '') + '</td>' +
+        '<td>' + esc(x.uploaded_by) + '<div class="note">' + esc(fmtStamp(x.uploaded_utc)) + '</div></td><td></td>';
       if (isDelRemoved) tr.style.opacity = '0.65';
       // doc_code click → re-open drawer focused on this doc
       const dcLink = tr.querySelector('.doc-link');
@@ -3680,6 +3892,22 @@ function openDrawer(project, step, focusDocCode) {
           try { await API.openPath(path); } catch (err) { alert('Could not open: ' + err.message); }
         };
         tr.lastChild.appendChild(openBtn);
+      }
+      // v11 R1: history + an explicit new revision (with a change reason).
+      if (x.revision_no) {
+        const histBtn = el('button', '', 'History');
+        histBtn.style.marginLeft = '4px';
+        histBtn.onclick = function(e) { e.stopPropagation(); openHistoryModal(project, step, x.doc_code); };
+        tr.lastChild.appendChild(histBtn);
+        if (!isLink) {
+          const revBtn = el('button', '', 'New revision');
+          revBtn.style.marginLeft = '4px';
+          revBtn.onclick = function(e) {
+            e.stopPropagation();
+            pickNewRevision(project, sk, x.doc_code, function() { openDrawer(project, step, x.doc_code); });
+          };
+          tr.lastChild.appendChild(revBtn);
+        }
       }
       // No Claim/Assign button here — every row in this table already has a
       // file or an approval (see the filter above), so there is nothing left
@@ -3883,14 +4111,11 @@ function openDrawer(project, step, focusDocCode) {
         dz.style.borderColor = ''; dz.style.background = '';
         const files = e.dataTransfer.files;
         if (!files.length) return;
-        for (const file of files) {
-          try {
-            await uploadEvidence(project, sk, code, file);
-          } catch (err) {
-            alert('Could not upload ' + file.name + ': ' + err.message);
-          }
-        }
-        await afterUpload();
+        // v11 R2: queued - per-file status in the upload panel, retries, and
+        // the drawer redraws once when the whole drop is done.
+        enqueueUploads(Array.prototype.map.call(files, function(file) {
+          return { project: project, stepKey: sk, docCode: code, file: file };
+        }), function() { afterUpload(); });
       };
       dz.onclick = (e) => {
         // Any interactive control inside the dropzone (buttons, the template
@@ -3902,10 +4127,9 @@ function openDrawer(project, step, focusDocCode) {
         // future control remembering to call stopPropagation itself.
         if (e.target.closest('button, a, input, select, label, .target-week-editor, .claim-badge, .dz-note-wrap')) return;
         const inp = el('input'); inp.type = 'file'; inp.style.display = 'none';
-        inp.onchange = async () => {
+        inp.onchange = () => {
           if (!inp.files[0]) return;
-          await uploadEvidence(project, sk, code, inp.files[0]);
-          await afterUpload();
+          enqueueUploads([{ project: project, stepKey: sk, docCode: code, file: inp.files[0] }], function() { afterUpload(); });
         };
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
@@ -4988,47 +5212,33 @@ function viewInput(root) {
       const btn = $('#bGo', form); btn.disabled = true;
       const log = $('#bLog', form);
       const todo = state.filter(s => !s.skip);
-      let ok = 0, dup = 0, bad = 0;
-      window._isUploadingEvidence = true;
-      try {
-        for (const st of todo) {
-          btn.textContent = 'Filing ' + (ok + dup + bad + 1) + ' of ' + todo.length + '…';
-          try {
-            const step = stepsOf(p.process, p).find(s => s.step_id === Number(st.step));
-            const b64 = await new Promise((resolve, reject) => {
-              const rd = new FileReader();
-              rd.onload = () => resolve(rd.result.split(',')[1]);
-              rd.onerror = reject;
-              rd.readAsDataURL(st.file);
-            });
-            const up = await API.upload({
-              docType: st.doc, family: p.family, partId: $('#bPart', form).value.trim(),
-              wvnId: $('#bWvn', form).value.trim(), wnbId: $('#bWnb', form).value.trim(), description: st.desc,
-              fileName: st.file.name, contentBase64: b64
-            });
-            await API.action('lb_deliverables', {
-              project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: st.doc,
-              file_name: up.fileName, file_path: up.path, sha256: up.sha256,
+      const part = $('#bPart', form).value.trim(), wvn = $('#bWvn', form).value.trim(), wnb = $('#bWnb', form).value.trim();
+      // v11 R2: the whole batch goes through the upload queue - sequential
+      // bytes, rows in chunks of 20, retries, per-file status in the panel.
+      // The staged rows are cleared at once, so the queue owns the files and
+      // auto-reload stays paused only while it is actually working.
+      const items = todo.map(function(st) {
+        const step = stepsOf(p.process, p).find(s => s.step_id === Number(st.step));
+        return {
+          project: p, stepKey: stepKeyOf(p.process, step), docCode: st.doc, file: st.file,
+          uploadExtra: { docType: st.doc, family: p.family, partId: part, wvnId: wvn, wnbId: wnb, description: st.desc },
+          rowExtra: function(up) {
+            return {
               status: up.duplicate ? 'Already filed' : 'Filed', approved: 'NO', suspect_template: 'NO',
-              uploaded_by: who, uploaded_utc: new Date().toISOString(),
               notes: up.duplicate ? 'byte-identical file already present, no copy written' : '',
-              kind: 'file', original_name: up.originalName || st.file.name,
-              wvn_id: $('#bWvn', form).value.trim(), wnb_id: $('#bWnb', form).value.trim(), description: st.desc, link_url: ''
-            }, { audit: { user: who, action: 'File_Evidence', projectId: p.project_id, objType: 'Deliverable', objId: up.fileName, from: st.file.name, to: up.duplicate ? 'Already filed' : 'Filed', detail: up.path } });
-            if (up.duplicate) dup++; else ok++;
-          } catch (e) {
-            bad++;
-            log.innerHTML += '<br><b style="color:var(--bad)">' + esc(st.file.name) + '</b>: ' + esc(e.message);
+              wvn_id: wvn, wnb_id: wnb, description: st.desc
+            };
           }
-        }
-      } finally {
-        window._isUploadingEvidence = false;
-      }
-      btn.textContent = 'File all';
-      alert(ok + ' filed, ' + dup + ' already present, ' + bad + ' failed.');
-      if (!bad) { form.className = 'hide'; form.innerHTML = ''; fin.value = ''; }
-      else { btn.disabled = false; }
-      await redrawAfterWrite();
+        };
+      });
+      form.className = 'hide'; form.innerHTML = ''; fin.value = '';
+      enqueueUploads(items, function(done) {
+        const saved = done.filter(q => q.status === 'Saved' && !q.duplicate).length;
+        const dup = done.filter(q => q.status === 'Saved' && q.duplicate).length;
+        const bad = done.filter(q => q.status === 'Failed').length;
+        if (log) log.innerHTML += '<br>' + saved + ' filed, ' + dup + ' already present' + (bad ? ', <b style="color:var(--bad)">' + bad + ' failed - see the upload panel</b>' : '') + '.';
+        redrawAfterWrite();
+      });
     };
   }
 
@@ -5678,6 +5888,12 @@ function evidenceTable(g, project, step, redraw) {
 function gateActions(project, proc, step, g, redraw) {
   const wrap = el('div', 'filters'); wrap.style.marginTop = '8px';
   const sk = g.sk;
+  if (g.approval && g.stale) {
+    const warn = el('div', 'banner stale-banner');
+    warn.innerHTML = iconHtml('alert-triangle') + ' <b>Approval stale.</b> ' + esc(staleText(g.stale)) +
+      ' Review the new revision(s); the original signature stays on record.';
+    wrap.appendChild(warn);
+  }
   if (g.gated) {
     if (!g.approval) {
       const ap = el('button', g.canApprove ? 'primary' : '', 'Approve step ' + step.step_id);
@@ -6819,6 +7035,112 @@ function viewSettings(root) {
 /* ------------------------------------------------------ stop the server -- */
 /* The PowerShell window is minimised and most people will not think to hunt
    for it. This is the supported way to release the port and the CSV locks. */
+/* v11 R1 - revision history of one document, newest first. Served by the
+   scoped /api/document-history endpoint rather than filtered out of the full
+   store, so it stays fast when lb_deliverables is large. */
+async function openHistoryModal(project, step, docCode) {
+  const sk = stepKeyOf(project.process, step);
+  const scrim = el('div', 'modal-scrim');
+  const box = el('div', 'modal history-modal');
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'histTitle');
+  const doc = docTypeById(docCode);
+  box.innerHTML = '<h2 id="histTitle">History - ' + esc(docCode) + '</h2><p class="note">' + esc(project.project_id) + ' · ' +
+    esc(sk) + (doc && doc.name && doc.name !== docCode ? ' · ' + esc(doc.name) : '') + '</p><div class="history-body"><p class="note">Loading…</p></div>';
+  const acts = el('div', 'acts');
+  const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+  const onEsc = e => { if (e.key === 'Escape') close(); };
+  const closeBtn = el('button', '', 'Close');
+  closeBtn.onclick = close;
+  acts.appendChild(closeBtn);
+  box.appendChild(acts);
+  scrim.appendChild(box);
+  scrim.onclick = e => { if (e.target === scrim) close(); };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(scrim);
+  closeBtn.focus();
+  const body = box.querySelector('.history-body');
+  let h;
+  try {
+    const r = await fetch('/api/document-history?project_id=' + encodeURIComponent(project.project_id) +
+      '&step_key=' + encodeURIComponent(sk) + '&doc_code=' + encodeURIComponent(docCode), { cache: 'no-store' });
+    if (!r.ok) throw await API.err(r);
+    h = await r.json();
+  } catch (e) { body.innerHTML = '<p class="note" style="color:var(--bad)">Could not load history: ' + esc(e.message) + '</p>'; return; }
+  const revs = h.revisions || [];
+  if (!revs.length) { body.innerHTML = '<p class="note">No revision has been filed for this document yet.</p>'; return; }
+  let html = '';
+  if (h.stale && h.approval) {
+    html += '<div class="banner stale-banner">' + iconHtml('alert-triangle') + ' The gate was signed ' + esc(fmtStamp(h.approval.approved_utc)) +
+      ' by ' + esc(h.approval.approved_by) + '; a newer revision was filed afterwards.</div>';
+  }
+  html += '<table class="history-table"><thead><tr><th>Rev</th><th>Filed</th><th>PIC</th><th>Status</th><th>Change reason</th><th>File</th></tr></thead><tbody>';
+  revs.forEach(function(r) {
+    const active = r.is_active === 'YES';
+    const status = r.status === 'Removed' ? 'Removed' : (active ? 'Active' : 'Superseded');
+    const cls = status === 'Active' ? badgeClass('COMPLETE') : (status === 'Removed' ? badgeClass('NO_DATA') : 'badge bg-secondary');
+    const viewUrl = r.kind === 'link' ? r.link_url : evidenceViewerUrl(r.file_path);
+    const fileCell = viewUrl
+      ? '<a href="' + esc(viewUrl) + '" target="_blank" rel="noopener">' + esc(r.file_name || r.link_url || 'open') + '</a>'
+      : esc(r.file_name || r.file_path || '');
+    html += '<tr class="' + (active ? 'history-active' : '') + '"><td><b>' + esc(r.revision_no) + '</b></td>' +
+      '<td>' + esc(fmtStamp(r.uploaded_utc)) + (r.superseded_utc ? '<div class="note">superseded ' + esc(fmtStamp(r.superseded_utc)) + '</div>' : '') + '</td>' +
+      '<td>' + esc(r.uploaded_by) + '</td><td><span class="' + cls + '">' + status + '</span></td>' +
+      '<td>' + (r.change_reason ? esc(r.change_reason) : '<span class="note">-</span>') + '</td>' +
+      '<td>' + fileCell + (r.sha256 ? '<div class="note" title="SHA-256">' + esc(r.sha256.slice(0, 12)) + '…</div>' : '') + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  body.innerHTML = html;
+}
+
+/* v11 R1 - an explicit new revision of an already-filed document: pick the
+   file, then give a change reason. Goes through the same upload queue as
+   every other upload, so the file and its row are written the same way. */
+function pickNewRevision(project, stepKey, docCode, onDone) {
+  const fin = document.createElement('input');
+  fin.type = 'file';
+  fin.style.display = 'none';
+  fin.onchange = function() {
+    const file = fin.files && fin.files[0];
+    fin.remove();
+    if (!file) return;
+    reasonModal('New revision of ' + docCode, file.name, function(reason) {
+      enqueueUploads([{ project: project, stepKey: stepKey, docCode: docCode, file: file, changeReason: reason }], onDone);
+    });
+  };
+  document.body.appendChild(fin);
+  fin.click();
+}
+function reasonModal(title, fileName, onOk) {
+  const scrim = el('div', 'modal-scrim');
+  const box = el('div', 'modal');
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'reasonTitle');
+  box.innerHTML = '<h2 id="reasonTitle">' + esc(title) + '</h2><p class="note">' + esc(fileName) +
+    '</p><label class="fld"><span>Change reason *</span><textarea rows="3" class="reason-input" placeholder="What changed and why - e.g. RPN updated after trial 2"></textarea></label>' +
+    '<p class="note reason-err" style="color:var(--bad);display:none">A change reason is required.</p>';
+  const acts = el('div', 'acts');
+  const no = el('button', '', 'Cancel');
+  const yes = el('button', 'primary', 'Upload revision');
+  const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+  const onEsc = e => { if (e.key === 'Escape') close(); };
+  no.onclick = close;
+  yes.onclick = () => {
+    const v = box.querySelector('.reason-input').value.trim();
+    if (!v) { box.querySelector('.reason-err').style.display = ''; return; }
+    close(); onOk(v);
+  };
+  acts.appendChild(no); acts.appendChild(yes);
+  box.appendChild(acts);
+  scrim.appendChild(box);
+  scrim.onclick = e => { if (e.target === scrim) close(); };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(scrim);
+  box.querySelector('.reason-input').focus();
+}
+
 function confirmModal(title, body, confirmLabel, onConfirm) {
   const scrim = el('div', 'modal-scrim');
   const box = el('div', 'modal');

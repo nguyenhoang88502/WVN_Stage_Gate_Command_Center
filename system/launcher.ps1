@@ -19,7 +19,10 @@ param(
   [int]$Port = 8080,
   [switch]$NoBrowser,
   # v11: overrides the COMPUTERNAME_USERNAME journal identity (tests only).
-  [string]$WriterId = ''
+  [string]$WriterId = '',
+  # v11: one-time revision backfill. Dry run (report only) unless -Apply.
+  [switch]$Backfill,
+  [switch]$Apply
 )
 
 $ErrorActionPreference = 'Stop'
@@ -898,9 +901,13 @@ function Test-StorageHealth {
 Test-StorageHealth
 
 function Add-Audit { param([string]$User, [string]$Action, [string]$ProjectId, [string]$ObjType, [string]$ObjId, [string]$From, [string]$To, [string]$Detail)
-  # v11: audit rows are append-only and nothing looks them up by number, so
-  # they skip the sequential minting (which would re-merge the whole, largest
-  # store on every action) and take a time + writer ID instead.
+  Add-JournalVersions -Store 'lb_audit' -Versions @(New-AuditVersion -User $User -Action $Action -ProjectId $ProjectId -ObjType $ObjType -ObjId $ObjId -From $From -To $To -Detail $Detail)
+}
+# v11: audit rows are append-only and nothing looks them up by number, so they
+# skip the sequential minting (which would re-merge the whole, largest store on
+# every action) and take a time + writer ID instead. Returned as a journal
+# version so a batch can append many in one write.
+function New-AuditVersion { param([string]$User, [string]$Action, [string]$ProjectId, [string]$ObjType, [string]$ObjId, [string]$From, [string]$To, [string]$Detail)
   $script:VSeq++
   $now = [DateTime]::UtcNow
   $row = @{
@@ -911,7 +918,7 @@ function Add-Audit { param([string]$User, [string]$Action, [string]$ProjectId, [
   }
   $full = @{}
   foreach ($c in $Stores['lb_audit']) { $full[$c] = if ($row.ContainsKey($c) -and $null -ne $row[$c]) { [string]$row[$c] } else { '' } }
-  Add-JournalVersions -Store 'lb_audit' -Versions @(New-VersionRow -Values $full -Set (Get-InsertSet $full 'log_id'))
+  return (New-VersionRow -Values $full -Set (Get-InsertSet $full 'log_id'))
 }
 
 # ============================================================== evidence ==
@@ -1416,13 +1423,82 @@ function Get-TransferStatus { param([bool]$Complete, [string]$TargetWeek, [strin
 # can't be resolved (e.g. the step was renumbered after the issue was
 # raised) so a report row never goes blank.
 function Get-StepName { param([string]$StepKey, $Config)
-  if ($StepKey -notmatch '^(NPI|ECN)-(\d+)$') { return $StepKey }
-  $proc = $Matches[1]
-  $stepId = [int]$Matches[2]
-  $steps = if ($proc -eq 'NPI') { $Config.npi_workflow.steps } else { $Config.ecn_workflow.steps }
-  $step = @($steps) | Where-Object { [int]$_.step_id -eq $stepId } | Select-Object -First 1
+  $step = Get-StepDef -Config $Config -StepKey $StepKey
   if ($step) { return [string]$step.step_name }
   return $StepKey
+}
+
+# Every process the config defines, each as @{ process_id; steps; gate_mode }.
+# The one place the server learns which processes exist - v11 R4 adds
+# config.pillars[]; without it the two legacy workflow objects are used, so
+# existing data behaves exactly as before.
+function Get-ProcessDefs { param($Config)
+  $out = @()
+  if ($Config.npi_workflow) { $out += ,([pscustomobject]@{ process_id = 'NPI'; steps = @($Config.npi_workflow.steps); gate_mode = 'all' }) }
+  if ($Config.ecn_workflow) { $out += ,([pscustomobject]@{ process_id = 'ECN'; steps = @($Config.ecn_workflow.steps); gate_mode = 'flagged' }) }
+  return $out
+}
+function Get-ProcessDef { param($Config, [string]$ProcessId)
+  foreach ($p in (Get-ProcessDefs $Config)) { if ([string]$p.process_id -eq $ProcessId) { return $p } }
+  return $null
+}
+# Step keys are '<process_id>-<step_id>'; a process id may itself contain '-'.
+function Get-StepDef { param($Config, [string]$StepKey)
+  if (-not $StepKey) { return $null }
+  $i = $StepKey.LastIndexOf('-')
+  if ($i -lt 1) { return $null }
+  $proc = Get-ProcessDef -Config $Config -ProcessId $StepKey.Substring(0, $i)
+  if (-not $proc) { return $null }
+  $sid = $StepKey.Substring($i + 1)
+  foreach ($s in @($proc.steps)) { if ([string]$s.step_id -eq $sid) { return $s } }
+  return $null
+}
+# Is this step a signed gate? 'all' = every step (NPI); 'flagged' = only steps
+# with gate_clearance_required (ECN).
+function Test-GatedStep { param($ProcessDef, $Step)
+  if ([string]$ProcessDef.gate_mode -eq 'flagged') { return [bool]$Step.gate_clearance_required }
+  return $true
+}
+
+function ConvertTo-UtcTime { param([string]$Value)
+  if (-not $Value) { return $null }
+  try { return [DateTime]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } catch { return $null }
+}
+
+# R1 stale approvals. A signed gate is stale when an ACTIVE revision of one of
+# its required documents (config-required or a per-model custom doc) was filed
+# after the signature. Derived and read-only: the approval row is a historical
+# fact and is never edited. Mirrors staleApprovalOf() in app.js - keep the two
+# in step. Returns @{ 'project|step' = @{ docs = @(codes); approved_utc } }.
+function Get-StaleApprovalMap { param($Config, $Approvals, $Deliverables)
+  $latest = @{}
+  foreach ($a in $Approvals) { $latest[[string]$a.project_id + '|' + [string]$a.step_key] = $a }
+  $custom = @{}
+  $active = @{}
+  foreach ($d in $Deliverables) {
+    $k = [string]$d.project_id + '|' + [string]$d.step_key
+    if ($d.custom_doc -eq 'YES') { $custom[$k + '|' + [string]$d.doc_code] = $true }
+    if ($d.is_active -ne 'YES') { continue }
+    if (-not $active.ContainsKey($k)) { $active[$k] = New-Object System.Collections.Generic.List[object] }
+    $active[$k].Add($d)
+  }
+  $out = @{}
+  foreach ($k in @($latest.Keys)) {
+    if (-not $active.ContainsKey($k)) { continue }
+    $when = ConvertTo-UtcTime ([string]$latest[$k].approved_utc)
+    if (-not $when) { continue }
+    $step = Get-StepDef -Config $Config -StepKey ($k.Substring($k.IndexOf('|') + 1))
+    $req = @{}
+    if ($step) { foreach ($c in @($step.required_evidence_doctypes)) { if ($c) { $req[[string]$c] = $true } } }
+    $late = @()
+    foreach ($r in $active[$k]) {
+      if (-not ($req.ContainsKey([string]$r.doc_code) -or $custom.ContainsKey($k + '|' + [string]$r.doc_code))) { continue }
+      $tm = ConvertTo-UtcTime ([string]$r.uploaded_utc)
+      if ($tm -and $tm -gt $when) { $late += [string]$r.doc_code }
+    }
+    if ($late.Count) { $out[$k] = @{ docs = $late; approved_utc = [string]$latest[$k].approved_utc } }
+  }
+  return $out
 }
 
 function New-ReportSheetXml { param([string]$Existing, [string[]]$RowsXml, [string]$Ns, [switch]$Append)
@@ -1659,6 +1735,7 @@ function Get-ReportData {
   $allIssues      = @(Read-Store 'lb_issues')
   $allSpIssues    = @(Read-Store 'lb_sp_issues')
   $allDeliverables = @(Read-Store 'lb_deliverables')
+  $staleMap = Get-StaleApprovalMap -Config $config -Approvals $allApprovals -Deliverables $allDeliverables
 
   # Build progress cache: project_id -> { pct, done, total, complete, missingDocs }
   $progressCache = @{}
@@ -1668,19 +1745,19 @@ function Get-ReportData {
     # npi_workflow.steps / ecn_workflow.steps (see lines ~1332-1334 below for
     # the same lookup). The old path silently resolved to $null, so $total
     # was always 0 and every report's Completion % was always 0.
-    $steps = if ($proc -eq 'NPI') { $config.npi_workflow.steps } else { $config.ecn_workflow.steps }
-    if (-not $steps) { $steps = @() }
-    $gated = @($steps | Where-Object {
-      if ($proc -eq 'NPI') { $true } else { [bool]$_.gate_clearance_required }
-    })
+    $pdef = Get-ProcessDef -Config $config -ProcessId $proc
+    $steps = if ($pdef) { @($pdef.steps) } else { @() }
+    $gated = @($steps | Where-Object { Test-GatedStep $pdef $_ })
     $total = $gated.Count
     $done = 0
     $missingDocs = 0
+    $staleGates = 0
     foreach ($step in $gated) {
       $sk = "$proc-$($step.step_id)"
       $appr = @($allApprovals | Where-Object { $_.project_id -eq $p.project_id -and $_.step_key -eq $sk })
       $byp  = @($allBypasses  | Where-Object { $_.project_id -eq $p.project_id -and $_.step_key -eq $sk -and -not $_.closed_utc })
       if ($appr.Count -gt 0 -or $byp.Count -gt 0) { $done++ }
+      if ($appr.Count -gt 0 -and $staleMap.ContainsKey($p.project_id + '|' + $sk)) { $staleGates++ }
       # Required-doc count comes from required_evidence_doctypes only —
       # conditional_evidence_doctypes don't block the gate, so they don't
       # count as "missing" here either.
@@ -1694,7 +1771,7 @@ function Get-ReportData {
     }
     $pct = if ($total -gt 0) { [Math]::Round(100 * $done / $total) } else { 0 }
     $complete = ($done -eq $total -and $total -gt 0)
-    $progressCache[$p.project_id] = @{ pct = $pct; done = $done; total = $total; complete = $complete; missingDocs = $missingDocs }
+    $progressCache[$p.project_id] = @{ pct = $pct; done = $done; total = $total; complete = $complete; missingDocs = $missingDocs; staleGates = $staleGates }
   }
 
   if ($Type -eq 'lfi') {
@@ -1739,7 +1816,7 @@ function Get-ReportData {
     # L is free — the template never references it.
     $headers = @('Project ID','Process','Model','Product Family','Change Class','PRF Date',
       'Progress','Gates Completed','Total Gates','Missing Docs','Open Issues','Status',
-      'Target Date','Market Manager','Country','Customer Number','Project Status','Notes')
+      'Target Date','Market Manager','Country','Customer Number','Project Status','Notes','Stale Approvals')
     # @($headers) SPLATS the header array into N separate scalar elements,
     # so each column name renders as its own one-cell row and the real data
     # gets pushed down past it. The unary comma keeps it as ONE row.
@@ -1753,7 +1830,7 @@ function Get-ReportData {
       $rows += ,@(
         $p.project_id, $p.process, $p.family, $p.prod_family, $p.class_abcde, $p.prf_date,
         (ConvertTo-PctFraction $pr.pct), [string]$pr.done, [string]$pr.total, [string]$pr.missingDocs, [string]$openCount, $status,
-        $p.target_date, $p.market_manager, $p.country, $p.customer_number, $p.status, $p.notes
+        $p.target_date, $p.market_manager, $p.country, $p.customer_number, $p.status, $p.notes, [string]$pr.staleGates
       )
     }
     # ,$rows - NOT $rows. PowerShell unwraps a single-element array on
@@ -1851,6 +1928,78 @@ function Get-ReportData {
   return @()
 }
 
+# ------------------------------------------------------ v11 R1 backfill --
+# One-time, run with every PC's app stopped:
+#   powershell -File system\launcher.ps1 -Backfill          (dry run: report only)
+#   powershell -File system\launcher.ps1 -Backfill -Apply   (backup + write)
+# Revision numbers and the active flag are DERIVED on every read, so the app is
+# correct without this. The backfill only writes those derived values into the
+# base lb_deliverables.csv, so the raw CSV also reads correctly in Excel.
+if ($Backfill) {
+  $merged  = Get-MergedStore 'lb_deliverables'
+  $derived = @(Read-Store 'lb_deliverables')
+  $byId = @{}
+  foreach ($r in $derived) { $byId[[string]$r.deliverable_id] = $r }
+  $real = @($derived | Where-Object { $_.revision_no })
+  $docs = @{}
+  foreach ($r in $real) { $k = $r.project_id + '|' + $r.step_key + '|' + $r.doc_code; $docs[$k] = 1 + [int]$docs[$k] }
+  # Cross-check against pre-v11 evidenceFor(): the LAST real row per document
+  # in file order must be the one marked active.
+  $lastWins = @{}
+  foreach ($r in $derived) { if ($r.file_name -or $r.link_url -or $r.file_path) { $lastWins[$r.project_id + '|' + $r.step_key + '|' + $r.doc_code] = [string]$r.deliverable_id } }
+  $mismatch = @($lastWins.Keys | Where-Object { $byId[$lastWins[$_]].is_active -ne 'YES' })
+  $multi = @($docs.Keys | Where-Object { $docs[$_] -gt 1 } | Sort-Object)
+  $mode = if ($Apply) { 'APPLY' } else { 'DRY RUN' }
+  $mm = if ($mismatch.Count) { '  <-- ' + ($mismatch -join ', ') } else { '  (none - day one shows no change)' }
+  $lines = @(
+    ('v11 revision backfill - ' + $mode + ' - ' + (Get-Date -Format 's')),
+    ('rows in lb_deliverables           : ' + $derived.Count),
+    ('revision rows (file/path/link)    : ' + $real.Count),
+    ('marker rows (claim/custom/removed): ' + ($derived.Count - $real.Count) + '  - never numbered'),
+    ('documents                         : ' + $docs.Count),
+    ('documents with >1 revision        : ' + $multi.Count),
+    ('active differs from last-row-wins : ' + $mismatch.Count + $mm),
+    '',
+    'documents with several revisions:'
+  )
+  foreach ($k in $multi) {
+    $lines += ('  ' + $k)
+    foreach ($r in @($real | Where-Object { ($_.project_id + '|' + $_.step_key + '|' + $_.doc_code) -eq $k })) {
+      $act = if ($r.is_active -eq 'YES') { '  ACTIVE' } else { '' }
+      $lines += ('    rev ' + $r.revision_no + '  ' + $r.deliverable_id + '  ' + $r.uploaded_utc + '  ' + $r.uploaded_by + $act)
+    }
+  }
+  $journals = @(if (Test-Path -LiteralPath $JournalRoot) { Get-ChildItem -LiteralPath $JournalRoot -Recurse -Filter '*.csv' })
+  if ($Apply) {
+    if ($mismatch.Count) { $lines += 'REFUSED: the active revision would differ from last-row-wins - investigate first.' }
+    elseif ($journals.Count) { $lines += ('REFUSED: ' + $journals.Count + ' journal file(s) exist. The backfill is a pre-rollout step; the running app already derives these values.') }
+    else {
+      $bk = Join-Path $SystemDir ('tracking_backup_v11_' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+      Copy-Item -LiteralPath $TrackingDir -Destination $bk -Recurse
+      $cols = $Stores['lb_deliverables']
+      $sb = New-Object System.Text.StringBuilder
+      [void]$sb.Append(($cols -join ',')); [void]$sb.Append("`r`n")
+      foreach ($o in $merged.list) {
+        $d = $byId[[string]$o['deliverable_id']]
+        $cells = foreach ($c in $cols) {
+          $v = if ((@('revision_no', 'is_active', 'superseded_utc') -contains $c) -and $d) { [string]$d.$c } else { [string]$o[$c] }
+          ConvertTo-CsvCell $v
+        }
+        [void]$sb.Append(($cells -join ',')); [void]$sb.Append("`r`n")
+      }
+      $outText = $sb.ToString()
+      Invoke-Locked -Path (CsvPath 'lb_deliverables') -Action { param($s) Write-AllText $s $outText }.GetNewClosure() | Out-Null
+      Set-Content -LiteralPath $SealPath -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII
+      $lines += ('APPLIED. Backup of tracking\ : ' + $bk)
+    }
+  }
+  $report = Join-Path $LogDir ('v11_backfill_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt')
+  Set-Content -LiteralPath $report -Value $lines -Encoding UTF8
+  $lines | ForEach-Object { Write-Output $_ }
+  Write-Output ('Report: ' + $report)
+  exit 0
+}
+
 # ---------------------------------------------------------------- server --
 $listener = New-Object System.Net.HttpListener
 $boundPort = $null
@@ -1925,6 +2074,100 @@ try {
           paths = @{ root = $RootDir; vault = $EvidenceDir; templates = $TemplatesDir }
           storage = @{ mode = 'journal'; writer = $WriterId; tag = $WriterTag; warnings = @($script:StorageWarnings.Values) }
         }
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/document-history') {
+        # v11 R1: one document's revisions, newest first. Scoped on purpose -
+        # the browser never filters the whole store for this, and the contract
+        # stays the same when lb_deliverables is partitioned later.
+        $qp = [string]$req.QueryString['project_id']; $qs = [string]$req.QueryString['step_key']; $qd = [string]$req.QueryString['doc_code']
+        if (-not $qp -or -not $qs -or -not $qd) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'project_id, step_key and doc_code are all required.' }
+        } else {
+          $docRows = @(Read-Store 'lb_deliverables' | Where-Object { $_.project_id -ceq $qp -and $_.step_key -ceq $qs -and $_.doc_code -ceq $qd })
+          $revs = @($docRows | Where-Object { $_.revision_no } | Sort-Object { [int]$_.revision_no } -Descending)
+          $apprs = @(Read-Store 'lb_approvals' | Where-Object { $_.project_id -ceq $qp -and $_.step_key -ceq $qs })
+          $appr = if ($apprs.Count) { $apprs[$apprs.Count - 1] } else { $null }
+          $stale = Get-StaleApprovalMap -Config (Get-Config) -Approvals $apprs -Deliverables $docRows
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{
+            project_id = $qp; step_key = $qs; doc_code = $qd
+            revisions = $revs
+            removed = [bool](@($docRows | Where-Object { $_.status -eq 'Removed' }).Count)
+            approval = $appr
+            stale = [bool]$stale.Count
+          }
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/deliverables/batch') {
+        # v11 R2: the ROW half of a bulk upload. The browser uploads each file
+        # through /api/upload (retried on its own), then sends the rows here in
+        # chunks of at most 20: one journal append for the rows and one for
+        # their audit entries, however many files are in the chunk.
+        # Idempotent: a row identical to the document's ACTIVE revision (same
+        # SHA-256) is reported back as a duplicate, not written again - so a
+        # retry after a lost response never mints a second revision, while
+        # deliberately re-filing an OLDER revision's content still works.
+        $body = Read-JsonBody -Request $req
+        $inRows = @($body.rows)
+        $who = [string]$body.user
+        if ($inRows.Count -eq 0 -or $inRows.Count -gt 20) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = ('Send between 1 and 20 rows per request (got ' + $inRows.Count + ').') }
+        } else {
+          $activeSha = @{}
+          foreach ($r in @(Read-Store 'lb_deliverables')) {
+            if ($r.is_active -eq 'YES' -and $r.sha256) { $activeSha[[string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code] = @{ sha = [string]$r.sha256; id = [string]$r.deliverable_id } }
+          }
+          $results = New-Object System.Collections.Generic.List[object]
+          $toAdd = New-Object System.Collections.Generic.List[object]
+          $slots = New-Object System.Collections.Generic.List[int]
+          foreach ($row in $inRows) {
+            $h = ConvertTo-Hashtable $row
+            $h.Remove('deliverable_id')
+            $k = [string]$h['project_id'] + '|' + [string]$h['step_key'] + '|' + [string]$h['doc_code']
+            if (-not $h['project_id'] -or -not $h['step_key'] -or -not $h['doc_code']) {
+              $results.Add(@{ ok = $false; error = 'project_id, step_key and doc_code are required.' }); continue
+            }
+            $cur = $activeSha[$k]
+            if ($cur -and $h['sha256'] -and ([string]$h['sha256']) -eq $cur.sha) {
+              $results.Add(@{ ok = $true; id = $cur.id; duplicate = $true }); continue
+            }
+            if ($h['sha256']) { $activeSha[$k] = @{ sha = [string]$h['sha256']; id = '' } }
+            $slots.Add($results.Count)
+            $results.Add(@{ ok = $true; id = ''; duplicate = $false })
+            $toAdd.Add($h)
+          }
+          if ($toAdd.Count) {
+            $ids = @(Add-StoreRowsBatch -Store 'lb_deliverables' -Rows $toAdd.ToArray() -IdField 'deliverable_id')
+            $audits = New-Object System.Collections.Generic.List[object]
+            for ($i = 0; $i -lt $toAdd.Count; $i++) {
+              $results[$slots[$i]].id = $ids[$i]
+              $h = $toAdd[$i]
+              $act = if ($h['change_reason']) { 'Upload_New_Revision' } else { 'File_Evidence' }
+              $audits.Add((New-AuditVersion -User $who -Action $act -ProjectId ([string]$h['project_id']) -ObjType 'Deliverable' -ObjId $ids[$i] -From ([string]$h['original_name']) -To ([string]$h['status']) -Detail ([string]$h['doc_code'] + $(if ($h['change_reason']) { ' - ' + [string]$h['change_reason'] } else { '' }))))
+            }
+            Add-JournalVersions -Store 'lb_audit' -Versions $audits.ToArray()
+          }
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ results = $results.ToArray() }
+        }
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/vault/orphans') {
+        # v11 R2: files in the vault that no tracking row points at - the
+        # "file saved, row never written" failure the upload queue exists to
+        # prevent. Read-only; nothing is moved or deleted.
+        $refs = @{}
+        foreach ($pair in @(@('lb_deliverables', 'file_path'), @('lb_issues', 'evidence_path'), @('lb_sp_issues', 'attachment_path'), @('lb_mwer', 'evidence_file'))) {
+          foreach ($r in @(Read-Store $pair[0])) {
+            $v = [string]$r.($pair[1])
+            if ($v -and -not ($v -match '^[a-zA-Z][a-zA-Z0-9+.-]*://')) { try { $refs[[System.IO.Path]::GetFullPath((ConvertFrom-StoredPath $v))] = $true } catch { } }
+          }
+        }
+        $all = @(if (Test-Path -LiteralPath $EvidenceDir) { Get-ChildItem -LiteralPath $EvidenceDir -Recurse -File -ErrorAction SilentlyContinue })
+        $orph = New-Object System.Collections.Generic.List[object]
+        foreach ($f in $all) {
+          if (-not $refs.ContainsKey($f.FullName)) {
+            $orph.Add(@{ path = $f.FullName.Substring($EvidenceDir.TrimEnd('\').Length).TrimStart('\'); bytes = $f.Length; modified_utc = $f.LastWriteTimeUtc.ToString('o') })
+          }
+        }
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ vault = $EvidenceDir; files = $all.Count; orphans = $orph.ToArray() }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/config') {
         New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
@@ -2912,29 +3155,36 @@ try {
           $manifest.Add('')
           $manifest.Add('THIS PACKAGE IS A SNAPSHOT OF WHAT HAS BEEN FILED, NOT A CERTIFICATE OF COMPLETENESS.')
           $manifest.Add('')
-          $manifest.Add(('Step' + "`t" + 'Document' + "`t" + 'File or link' + "`t" + 'Filed by' + "`t" + 'Approved' + "`t" + 'SHA-256'))
-          $copied = 0; $missing = 0; $links = 0
-          foreach ($r in $rows) {
+          # v11: only rows that ARE evidence (claim / custom-doc markers carry
+          # no file and used to be listed as "FILE NOT FOUND"). The active
+          # revision of each document sits in its step folder; superseded
+          # revisions are kept, clearly apart, in <step>\_superseded.
+          $manifest.Add(('Step' + "`t" + 'Document' + "`t" + 'Rev' + "`t" + 'Status' + "`t" + 'File or link' + "`t" + 'Filed by' + "`t" + 'Approved' + "`t" + 'SHA-256'))
+          $copied = 0; $missing = 0; $links = 0; $superseded = 0
+          foreach ($r in @($rows | Where-Object { $_.revision_no })) {
+            $revState = if ($r.is_active -eq 'YES') { 'active' } else { 'superseded' }
+            $revCols = [string]$r.revision_no + "`t" + $revState + "`t"
             if ([string]$r.kind -eq 'link') {
               $links++
-              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + '[link] ' + $r.link_url + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t"))
+              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + $revCols + '[link] ' + $r.link_url + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t"))
               continue
             }
             $src = [string]$r.file_path
             if ($src -and (Test-Path -LiteralPath $src -PathType Leaf)) {
               $sub = Join-Path $stage (ConvertTo-NamePart $r.step_key)
+              if ($revState -eq 'superseded') { $sub = Join-Path $sub '_superseded'; $superseded++ }
               if (-not (Test-Path -LiteralPath $sub)) { New-Item -ItemType Directory -Path $sub -Force | Out-Null }
               $dest = Join-Path $sub ([System.IO.Path]::GetFileName($src))
               if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $src -Destination $dest -Force }
               $copied++
-              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + [System.IO.Path]::GetFileName($src) + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
+              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + $revCols + [System.IO.Path]::GetFileName($src) + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
             } else {
               $missing++
-              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + '*** FILE NOT FOUND: ' + $src + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
+              $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + $revCols + '*** FILE NOT FOUND: ' + $src + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
             }
           }
           $manifest.Add('')
-          $manifest.Add(('Files included: ' + $copied + '   links cited: ' + $links + '   missing from disk: ' + $missing))
+          $manifest.Add(('Files included: ' + $copied + ' (of which superseded revisions: ' + $superseded + ')   links cited: ' + $links + '   missing from disk: ' + $missing))
           Set-Content -LiteralPath (Join-Path $stage '_MANIFEST.txt') -Value ($manifest -join "`r`n") -Encoding UTF8
 
           $zipPath = Join-Path $env:TEMP ($safePid + '_Transfer_Package.zip')
