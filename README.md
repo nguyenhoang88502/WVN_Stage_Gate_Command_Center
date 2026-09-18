@@ -121,18 +121,42 @@ content key, never clobbered, and a second run adds nothing.
 
 ---
 
-## 3. How writes stay safe with multiple users
+## 3. How writes stay safe with multiple users (v11)
 
-Every Submit/Save button in the UI sends one HTTP `POST`. The backend opens the relevant CSV file
-**exclusively** (`FileShare.None`) only for the few milliseconds it takes to read, append or update a
-row and write it back, then closes it immediately — no file handle is ever held between requests. If two
-people submit at the same instant, the second request retries up to 3 times with a 100 ms backoff
-(`config.file_system_resilience`) rather than failing; record IDs are assigned inside that same locked
-section so two concurrent registrations can never collide on the same ID.
+**Deployment (v11):** one app folder inside a SharePoint document library, synced by the OneDrive
+client to every user's PC. Each user runs the app from their own local replica. An exclusive file lock
+therefore only protects against other processes on the *same* PC — two PCs rewriting the same CSV
+between syncs would silently lose one side's rows. So since v11 **no file under `system\tracking\`
+ever has two writers:**
 
-If a write still can't get the lock after all retries, the request returns an error to the browser
-instead of crashing the listener, and the failure is written to `system\logs\launcher.log` (or a fresh
-`app_fallback_*.log` if even that can't be written).
+| Path | Written by | Holds |
+|---|---|---|
+| `tracking\<store>.csv` | nobody while running (only `launcher.ps1 -Backfill -Apply`) | the base snapshot — everything written before v11 |
+| `tracking\journal\<PC>_<user>\<store>.csv` | only that PC + Windows user's instance | an append-only log of row *versions* |
+| `tracking\journal\BASE_SEALED.txt` | the first v11 launch | when the base snapshot was sealed |
+
+Every read merges the base with every journal — and with any OneDrive conflict copy
+(`lb_x-PCNAME.csv`), so even a conflict loses nothing. Versions are applied per record in time order;
+each version sets only the fields that changed, so two people editing different fields of one record
+both keep their change, and on the same field the later edit wins. Record IDs carry a per-PC tag
+(`DEL-0082-3FA`) so two PCs never mint the same one; a record created by an upsert (a gate row, a claim)
+gets an ID derived from its natural key, so two PCs creating "the same" row offline merge instead of
+duplicating. Paths to vault files are stored vault-relative and resolved on each PC, and stored file
+names end in the first 8 hex of their SHA-256 so two PCs can never collide on a name.
+
+Nothing is written to `config.json` at startup any more (the deployment path and vault location are
+worked out per PC at runtime). Each PC writes its own log, `system\logs\launcher_<PC>_<user>.log`.
+Anything unusual — a conflict copy, a base file written after the seal (i.e. a PC still running an
+older version), a `config-*.json` conflict copy from two admins saving at once — is logged and returned
+by `/api/data` as a storage warning.
+
+**Every PC must run v11.** An older version writes the base files directly and does not read the
+journals: its users would see stale data and could overwrite base rows. The app flags this (see above)
+but cannot prevent it — restart every PC's app after the upgrade.
+
+Writes are still short, locked and retried (`config.file_system_resilience`; the journal path uses 8
+retries with jitter because OneDrive briefly holds files while uploading them). If a write still fails
+the request returns an error instead of crashing the listener.
 
 **Do not keep `system\tracking\*.csv` open for editing in Excel while the app is running** — Excel's
 write lock will make that one file's saves fail until you close it. Opening a file read-only to look at
@@ -411,6 +435,31 @@ five are cleared for a given project/step, the step cannot be approved. Which st
 
 ## 11. Honest limits
 
+### Known gaps (v11)
+
+- **Sync latency.** Another user's change appears after OneDrive syncs it (usually seconds, longer on a
+  slow or offline laptop) plus the 15 s auto-reload. Nothing is lost while a PC is offline; it just
+  arrives late.
+- **Clock-based ordering.** Concurrent edits of the *same field* resolve by the writing PC's clock
+  (bumped past the version it was edited on top of). PCs on the company domain keep time within
+  seconds; a PC with a wildly wrong clock can win or lose a same-field race it should not.
+- **Same family, two PCs, same moment.** Two users registering the same process + family while offline
+  from each other produce one merged project, not `-2` — both meant the same product.
+- **Scale.** Every read still merges the full stores (parsed files are cached, so a 15 s poll only
+  re-parses what changed). Partitioning `lb_deliverables` and a startup index are deferred; the
+  `/api/document-history`, `/api/deliverables/batch` and `/api/vault/search` contracts are what they
+  will sit behind.
+- **Revision order** is the order rows were written (which is what "last row wins" always used), not
+  the uploader's clock.
+- **Stale approvals** flag signed gates only; a bypassed gate is not re-flagged when a document is
+  revised later.
+- **Pillars:** the stage-completion cards serve one pillar (the one flagged `stage_completion`), and
+  PPAP is a single-project checklist per pillar. Change types restrict steps per pillar through
+  `steps_by_process`; without it a pillar runs all its steps for every type.
+- **Pre-v11 data** keeps absolute vault paths; they are re-rooted on each PC by folder name. Five cells
+  in the existing tracking data (three Vietnamese upload file names, two audit notes) still carry
+  mojibake from the pre-v11 request-decoding bug — they are left as recorded history.
+
 - Evidence presence is exactly what has been filed through this tool — there is no scan of any shared
   drive, so a document that exists elsewhere but was never uploaded here shows as `MISSING`.
 - Gate status here is not an official stage-gate sign-off and does not replace the QA-SOP-NPI route.
@@ -460,6 +509,44 @@ teams.**
 ---
 
 ## 13. Version history
+
+Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
+
+### v11.0.0 (2026-09-18)
+
+**Sync-safe storage, revision history, bulk upload, Document Vault, pillars.**
+
+- **Storage for a OneDrive-synced deployment** — per-PC append-only journals merged on read (see §3).
+  Found while testing it: PowerShell's `[Array]::Sort(keys, items, comparer)` sorts a *converted copy*
+  of `items` and throws it away, so the obvious merge implementation applied versions in file order.
+- **Revision history (R1)** — every file, path or link filed against a document is a revision;
+  `revision_no`, `is_active` and `superseded_utc` are derived on every read (exactly one active
+  revision per document by construction); `change_reason` is recorded. Drawer rows show the active
+  revision with **History** and **New revision** (reason required). A signed gate whose required
+  document was revised after the signature shows **approval stale** in the drawer, matrices, Gantt
+  tooltips, the PDF package and a new *Stale Approvals* column in the transfer XLSX — the approval
+  itself is never edited. `GET /api/document-history`. One-time `launcher.ps1 -Backfill [-Apply]`
+  writes the derived values into the base CSV (dry run by default, backs up first). The transfer ZIP
+  now contains only evidence rows (claim markers used to be listed as FILE NOT FOUND) with superseded
+  revisions in `<step>\_superseded`.
+- **Bulk upload (R2)** — one upload queue for every evidence upload: files one at a time with retry,
+  rows in chunks of 20 through `POST /api/deliverables/batch` (idempotent against the active
+  revision), row-only retry when a file saved but its row did not, a per-file status panel.
+  `GET /api/vault/orphans` lists vault files no row points at. 105 files: ~6 s, zero orphans.
+- **Document Vault tab (R3)** — one row per document across every project and pillar, active revision
+  inline; filters for pillar, family, doc type, PIC, department, date range, status, stale-only and
+  free text; server-side paging via `GET /api/vault/search`; History and New revision from any row.
+- **Pillars (R4)** — `config.json` `pillars[]`: NPI and ECN are the first two entries and reference
+  their existing `npi_workflow` / `ecn_workflow` definitions. A new pillar needs only config (its own
+  steps, document types, responsible-person label, gate mode, feature flags) or the new **Settings →
+  Pillars** editor; it gets a tab, registration, dashboard matrix, Gantt rows, revision history and
+  Vault search. Project IDs are `<process_id>-<family>`; registration validates the process.
+- **Fixed on the way:** request bodies were decoded as cp1252 when no charset was sent (which the app
+  never sent), storing every non-ASCII character as mojibake and re-mangling `config.json` on each
+  Settings save — 11 config strings repaired; `Package-App.ps1` read `config.json` as ANSI; the
+  dashboard slicers and the drawer's project search only knew NPI projects.
+- Tests: `tests\storage\test_storage.ps1` (two simulated PCs, 32 checks), `tests\v11\e2e_r1r2.js`
+  (16), `tests\v11\e2e_r3r4.js` (32); the existing Playwright suite (51) passes unchanged.
 
 ### v3.5.0 (2026-08-06)
 

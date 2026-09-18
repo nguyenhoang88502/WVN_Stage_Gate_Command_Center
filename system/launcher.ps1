@@ -1202,7 +1202,17 @@ function Test-LoopbackRequest {
 }
 function Read-JsonBody {
   param([System.Net.HttpListenerRequest]$Request)
-  $reader = New-Object System.IO.StreamReader($Request.InputStream, $Request.ContentEncoding)
+  # v11: JSON is UTF-8 (RFC 8259). HttpListener's ContentEncoding falls back
+  # to the ANSI code page (cp1252) when the request names no charset - which
+  # app.js never did - so every POST carrying non-ASCII text (Vietnamese
+  # names, comments, issue text, Settings edits) was stored as mojibake, and
+  # each Settings save re-mangled what it echoed back (config.json had em
+  # dashes encoded 3 and 5 levels deep). Only an explicit charset overrides.
+  $enc = [System.Text.Encoding]::UTF8
+  if (([string]$Request.ContentType) -match 'charset\s*=\s*"?([A-Za-z0-9_\-]+)') {
+    try { $enc = [System.Text.Encoding]::GetEncoding($Matches[1]) } catch { $enc = [System.Text.Encoding]::UTF8 }
+  }
+  $reader = New-Object System.IO.StreamReader($Request.InputStream, $enc)
   $text = $reader.ReadToEnd(); $reader.Close()
   if (-not $text) { return @{} }
   return $text | ConvertFrom-Json
@@ -1434,8 +1444,26 @@ function Get-StepName { param([string]$StepKey, $Config)
 # existing data behaves exactly as before.
 function Get-ProcessDefs { param($Config)
   $out = @()
-  if ($Config.npi_workflow) { $out += ,([pscustomobject]@{ process_id = 'NPI'; steps = @($Config.npi_workflow.steps); gate_mode = 'all' }) }
-  if ($Config.ecn_workflow) { $out += ,([pscustomobject]@{ process_id = 'ECN'; steps = @($Config.ecn_workflow.steps); gate_mode = 'flagged' }) }
+  $pillars = @($Config.pillars | Where-Object { $_ -and $_.process_id })
+  if ($pillars.Count) {
+    foreach ($pl in $pillars) {
+      $steps = @()
+      if ($pl.workflow -and $Config.($pl.workflow)) { $steps = @($Config.($pl.workflow).steps) } elseif ($pl.steps) { $steps = @($pl.steps) }
+      $gm = if ([string]$pl.gate_mode -eq 'flagged') { 'flagged' } else { 'all' }
+      $out += ,([pscustomobject]@{ process_id = [string]$pl.process_id; steps = $steps; gate_mode = $gm; doc_types = @($pl.doc_types); name = [string]$pl.name })
+    }
+    return $out
+  }
+  if ($Config.npi_workflow) { $out += ,([pscustomobject]@{ process_id = 'NPI'; steps = @($Config.npi_workflow.steps); gate_mode = 'all'; doc_types = @(); name = 'NPI' }) }
+  if ($Config.ecn_workflow) { $out += ,([pscustomobject]@{ process_id = 'ECN'; steps = @($Config.ecn_workflow.steps); gate_mode = 'flagged'; doc_types = @(); name = 'ECN' }) }
+  return $out
+}
+# Doc types across the shared catalogue and every pillar's own list.
+function Get-AllDocTypes { param($Config)
+  $seen = @{}; $out = @()
+  foreach ($d in @($Config.document_types) + @((Get-ProcessDefs $Config) | ForEach-Object { @($_.doc_types) })) {
+    if ($d -and $d.doctype_id -and -not $seen.ContainsKey([string]$d.doctype_id)) { $seen[[string]$d.doctype_id] = $true; $out += ,$d }
+  }
   return $out
 }
 function Get-ProcessDef { param($Config, [string]$ProcessId)
@@ -1928,6 +1956,138 @@ function Get-ReportData {
   return @()
 }
 
+# ---------------------------------------------------- v11 R3 vault index --
+# One entry per document that has at least one revision (or is marked
+# Removed), with its active revision inline. Cached until a contributing
+# store (deliverables, projects, approvals) or config changes.
+$script:VaultIndexCache = @{ sig = ''; docs = @() }
+function Get-VaultIndex { param($Config)
+  # Signature first (Get-MergedStore is cheap when nothing changed), so a
+  # 15 s poll with unchanged data never re-materialises a single row.
+  foreach ($s in @('lb_deliverables', 'lb_projects', 'lb_approvals')) { [void](Get-MergedStore $s) }
+  $cfgStamp = ''
+  try { $ci = Get-Item -LiteralPath $ConfigPath; $cfgStamp = [string]$ci.Length + '|' + [string]$ci.LastWriteTimeUtc.Ticks } catch { }
+  $sig = ((@('lb_deliverables', 'lb_projects', 'lb_approvals') | ForEach-Object { [string]$script:MergeCache[$_].sig }) -join '#') + '#' + $cfgStamp
+  if ($script:VaultIndexCache.sig -eq $sig) { return $script:VaultIndexCache.docs }
+  $delivs = @(Read-Store 'lb_deliverables')
+  $projects = @(Read-Store 'lb_projects')
+  $approvals = @(Read-Store 'lb_approvals')
+  $projById = @{}; foreach ($pr in $projects) { $projById[[string]$pr.project_id] = $pr }
+  $docInfo = @{}; foreach ($dt in (Get-AllDocTypes $Config)) { $docInfo[[string]$dt.doctype_id] = $dt }
+  $stale = Get-StaleApprovalMap -Config $Config -Approvals $approvals -Deliverables $delivs
+  $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+  $order = New-Object System.Collections.Generic.List[string]
+  foreach ($r in $delivs) {
+    $k = [string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code
+    if (-not $groups.ContainsKey($k)) { $groups[$k] = @{ revs = 0; active = $null; removed = $false }; $order.Add($k) }
+    $g = $groups[$k]
+    if ($r.status -eq 'Removed') { $g.removed = $true }
+    if ($r.revision_no) { $g.revs++; if ($r.is_active -eq 'YES') { $g.active = $r } }
+  }
+  $docs = New-Object System.Collections.Generic.List[object]
+  foreach ($k in $order) {
+    $g = $groups[$k]
+    if (-not $g.active -and -not $g.removed) { continue }
+    $parts = $k.Split('|')
+    $pr = $projById[$parts[0]]
+    $a = $g.active
+    $dt = $docInfo[$parts[2]]
+    $st = Get-StepDef -Config $Config -StepKey $parts[1]
+    $staleEntry = $stale[$parts[0] + '|' + $parts[1]]
+    $isStale = [bool]($staleEntry -and (@($staleEntry.docs) -contains $parts[2]))
+    $o = @{
+      project_id = $parts[0]; step_key = $parts[1]; doc_code = $parts[2]
+      process = if ($pr) { [string]$pr.process } else { ($parts[1] -replace '-[^-]*$', '') }
+      family = if ($pr) { [string]$pr.family } else { '' }
+      prod_family = if ($pr) { [string]$pr.prod_family } else { '' }
+      step_name = if ($st) { [string]$st.step_name } else { '' }
+      doc_name = if ($dt) { [string]$dt.name } else { $parts[2] }
+      owner_dept = if ($dt) { [string]$dt.owner_dept } else { '' }
+      status = if ($g.removed) { 'Removed' } else { 'Active' }
+      revisions = $g.revs
+      rev = if ($a) { [string]$a.revision_no } else { '' }
+      pic = if ($a) { [string]$a.uploaded_by } else { '' }
+      date = if ($a) { [string]$a.uploaded_utc } else { '' }
+      deliverable_id = if ($a) { [string]$a.deliverable_id } else { '' }
+      file_name = if ($a) { [string]$a.file_name } else { '' }
+      file_path = if ($a) { [string]$a.file_path } else { '' }
+      kind = if ($a) { [string]$a.kind } else { '' }
+      link_url = if ($a) { [string]$a.link_url } else { '' }
+      change_reason = if ($a) { [string]$a.change_reason } else { '' }
+      stale = $isStale
+    }
+    $o.search = (@($o.project_id, $o.doc_code, $o.doc_name, $o.file_name, $o.family, $o.step_name, $o.pic,
+      $(if ($a) { [string]$a.original_name + ' ' + [string]$a.description } else { '' })) -join ' ').ToLowerInvariant()
+    $docs.Add($o)
+  }
+  # newest active revision first
+  $arr = $docs.ToArray()
+  $keys = New-Object 'string[]' $arr.Length
+  for ($i = 0; $i -lt $arr.Length; $i++) { $keys[$i] = ([string]$arr[$i].date).PadRight(40) + '|' + $i.ToString('D9') }
+  [Array]::Sort($keys, [StringComparer]::Ordinal)
+  $sorted = New-Object System.Collections.Generic.List[object]
+  for ($i = $keys.Length - 1; $i -ge 0; $i--) { $sorted.Add($arr[[int]$keys[$i].Substring($keys[$i].Length - 9)]) }
+  $script:VaultIndexCache = @{ sig = $sig; docs = $sorted }
+  return $sorted
+}
+
+# ------------------------------------------------ v11 R4 pillar validation --
+# Returns error strings; empty = the whole list is acceptable.
+function Test-PillarList { param($Config, $Pillars)
+  $errs = @()
+  if (-not $Pillars -or -not @($Pillars).Count) { return @('At least one pillar is required.') }
+  $seen = @{}
+  $shared = @{}; foreach ($d in @($Config.document_types)) { $shared[[string]$d.doctype_id] = $true }
+  $pillarDocs = @{}
+  foreach ($pl in @($Pillars)) {
+    $id = [string]$pl.process_id
+    if ($id -notmatch '^[A-Z][A-Z0-9_]{1,15}$') { $errs += ("Pillar id '" + $id + "' must be 2-16 characters: capital letters, digits or _ (it prefixes project IDs and step keys)."); continue }
+    if ($seen.ContainsKey($id)) { $errs += ("Pillar id '" + $id + "' is used twice."); continue }
+    $seen[$id] = $true
+    if (-not ([string]$pl.name).Trim()) { $errs += ("Pillar " + $id + ": a display name is required.") }
+    if ($pl.gate_mode -and @('all', 'flagged') -notcontains [string]$pl.gate_mode) { $errs += ("Pillar " + $id + ": gate_mode must be 'all' or 'flagged'.") }
+    foreach ($d in @($pl.doc_types)) {
+      if (-not $d) { continue }
+      $did = [string]$d.doctype_id
+      if (-not $did -or -not ([string]$d.name).Trim()) { $errs += ("Pillar " + $id + ": every document type needs an id and a name."); continue }
+      if ($shared.ContainsKey($did)) { $errs += ("Pillar " + $id + ": document type '" + $did + "' already exists in the shared catalogue - reference it instead of redefining it.") }
+      elseif ($pillarDocs.ContainsKey($did)) { $errs += ("Document type '" + $did + "' is defined by two pillars.") }
+      $pillarDocs[$did] = $true
+    }
+    if ($pl.workflow) {
+      if (-not $Config.([string]$pl.workflow)) { $errs += ("Pillar " + $id + ": workflow '" + [string]$pl.workflow + "' does not exist in config.json.") }
+      continue
+    }
+    $steps = @($pl.steps)
+    if (-not $steps.Count) { $errs += ("Pillar " + $id + ": at least one step is required."); continue }
+    $sids = @{}
+    foreach ($s in $steps) {
+      $sid = 0
+      if (-not [int]::TryParse([string]$s.step_id, [ref]$sid) -or $sid -lt 1) { $errs += ("Pillar " + $id + ": step ids must be whole numbers from 1."); continue }
+      if ($sids.ContainsKey($sid)) { $errs += ("Pillar " + $id + ": step " + $sid + " appears twice.") }
+      $sids[$sid] = $true
+      if (-not ([string]$s.step_name).Trim()) { $errs += ("Pillar " + $id + ": step " + $sid + " needs a name.") }
+    }
+  }
+  # every document code a step asks for must exist somewhere
+  foreach ($pl in @($Pillars)) {
+    if ($pl.workflow) { continue }
+    foreach ($s in @($pl.steps)) {
+      foreach ($code in @($s.required_evidence_doctypes) + @($s.conditional_evidence_doctypes)) {
+        if ($code -and -not $shared.ContainsKey([string]$code) -and -not $pillarDocs.ContainsKey([string]$code)) {
+          $errs += ("Pillar " + [string]$pl.process_id + ", step " + [string]$s.step_id + ": document type '" + [string]$code + "' is not defined (shared catalogue or this pillar's own types).")
+        }
+      }
+    }
+  }
+  # a pillar that still has projects cannot disappear
+  $kept = @{}; foreach ($pl in @($Pillars)) { $kept[[string]$pl.process_id] = $true }
+  $orphaned = @{}
+  foreach ($pr in @(Read-Store 'lb_projects')) { if (-not $kept.ContainsKey([string]$pr.process)) { $orphaned[[string]$pr.process] = 1 + [int]$orphaned[[string]$pr.process] } }
+  foreach ($k in $orphaned.Keys) { $errs += ("Pillar " + $k + " cannot be removed: " + $orphaned[$k] + " project(s) use it.") }
+  return $errs
+}
+
 # ------------------------------------------------------ v11 R1 backfill --
 # One-time, run with every PC's app stopped:
 #   powershell -File system\launcher.ps1 -Backfill          (dry run: report only)
@@ -2168,6 +2328,67 @@ try {
           }
         }
         New-JsonResponse -Response $res -StatusCode 200 -Body @{ vault = $EvidenceDir; files = $all.Count; orphans = $orph.ToArray() }
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/vault/search') {
+        # v11 R3: one row per DOCUMENT (project + step + doc type), its active
+        # revision inline, filtered and paged on the server. The index is
+        # rebuilt only when a contributing store changes; this contract is
+        # what a partitioned lb_deliverables would sit behind later.
+        $cfg = Get-Config
+        $docsIdx = Get-VaultIndex -Config $cfg
+        $qv = { param($n) ([string]$req.QueryString[$n]).Trim() }
+        $fq = (& $qv 'q').ToLowerInvariant()
+        $fPillar = & $qv 'pillar'; $fFam = & $qv 'family'; $fDoc = & $qv 'doc'; $fPic = & $qv 'pic'; $fDept = & $qv 'dept'
+        $fFrom = & $qv 'from'; $fTo = & $qv 'to'; $fStatus = & $qv 'status'; $fStale = (& $qv 'stale') -eq '1'
+        $size = 50; try { $size = [Math]::Max(1, [Math]::Min(200, [int](& $qv 'size'))) } catch { $size = 50 }
+        if (-not (& $qv 'size')) { $size = 50 }
+        $page = 1; try { $page = [Math]::Max(1, [int](& $qv 'page')) } catch { $page = 1 }
+        $hits = New-Object System.Collections.Generic.List[object]
+        foreach ($d in $docsIdx) {
+          if ($fPillar -and $d.process -ne $fPillar) { continue }
+          if ($fFam -and $d.prod_family -ne $fFam -and $d.family -ne $fFam) { continue }
+          if ($fDoc -and $d.doc_code -ne $fDoc) { continue }
+          if ($fPic -and $d.pic -ne $fPic) { continue }
+          if ($fDept -and $d.owner_dept -ne $fDept) { continue }
+          if ($fStatus -and $d.status -ne $fStatus) { continue }
+          if ($fStale -and -not $d.stale) { continue }
+          $day = if ($d.date) { ([string]$d.date).Substring(0, [Math]::Min(10, ([string]$d.date).Length)) } else { '' }
+          if ($fFrom -and (-not $day -or $day -lt $fFrom)) { continue }
+          if ($fTo -and (-not $day -or $day -gt $fTo)) { continue }
+          if ($fq -and -not $d.search.Contains($fq)) { continue }
+          $hits.Add($d)
+        }
+        $total = $hits.Count
+        $start = ($page - 1) * $size
+        $rowsOut = @()
+        if ($start -lt $total) { $rowsOut = @($hits.GetRange($start, [Math]::Min($size, $total - $start)) | ForEach-Object { $x = @{}; foreach ($k in $_.Keys) { if ($k -ne 'search') { $x[$k] = $_[$k] } }; $x }) }
+        $facet = { param($f) @($docsIdx | ForEach-Object { [string]$_[$f] } | Where-Object { $_ } | Sort-Object -Unique) }
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{
+          total = $total; page = $page; size = $size; rows = $rowsOut
+          facets = @{ pillars = (& $facet 'process'); families = (& $facet 'prod_family'); docs = (& $facet 'doc_code'); pics = (& $facet 'pic'); depts = (& $facet 'owner_dept') }
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/pillars') {
+        # v11 R4: admin edits the pillar list. Validated as a whole; nothing
+        # is saved unless every pillar passes.
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if ($actor.ToLowerInvariant() -ne 'admin') {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change pillars.' }
+        } else {
+          $cfg = Get-Config
+          $incoming = @($body.pillars)
+          $errs = @(Test-PillarList -Config $cfg -Pillars $incoming)
+          if ($errs.Count) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = ($errs -join ' '); errors = $errs }
+          } else {
+            $before = @($cfg.pillars | ForEach-Object { [string]$_.process_id }) -join ','
+            $cfg | Add-Member -NotePropertyName pillars -NotePropertyValue $incoming -Force
+            Save-Config $cfg
+            Add-Audit -User $actor -Action 'Config_Pillars_Update' -ProjectId '' -ObjType 'Config' -ObjId 'pillars' -From $before -To (($incoming | ForEach-Object { [string]$_.process_id }) -join ',') -Detail ''
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; pillars = $incoming }
+          }
+        }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/config') {
         New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
@@ -2453,6 +2674,17 @@ try {
             }
           }
 
+          # v11 R4: steps_by_process.<process_id> = [step ids] for any pillar
+          if ($t.steps_by_process) {
+            foreach ($prop in $t.steps_by_process.PSObject.Properties) {
+              $pdef = Get-ProcessDef -Config $cfg -ProcessId $prop.Name
+              if (-not $pdef) { $errors += @{ index = $i; field = 'steps_by_process'; msg = ("'" + $prop.Name + "' is not a configured pillar") }; continue }
+              $ids = @{}; foreach ($s in @($pdef.steps)) { $ids[[string]$s.step_id] = $true }
+              foreach ($sid in @($prop.Value)) {
+                if (-not $ids.ContainsKey([string]$sid)) { $errors += @{ index = $i; field = 'steps_by_process'; msg = ("step " + [string]$sid + " does not exist in the " + $prop.Name + " workflow") } }
+              }
+            }
+          }
           # Validate ecn_steps
           foreach ($sid in @($t.ecn_steps)) {
             if (-not $ecnStepIds.ContainsKey([int]$sid)) {
@@ -2509,6 +2741,11 @@ try {
         if (-not $famId) { throw 'A Family is required — it forms the project ID.' }
         $idPart = ($famId.ToUpperInvariant() -replace '[^A-Z0-9\.\-_]', '')
         if (-not $idPart) { throw "Family '$famId' has no usable characters for an ID." }
+        # v11 R4: the process must be a configured pillar; the ID is
+        # <process_id>-<family> for every pillar.
+        if (-not (Get-ProcessDef -Config (Get-Config) -ProcessId ([string]$body.process))) {
+          throw ("Unknown process '" + [string]$body.process + "' - it must be one of the configured pillars (" + (((Get-ProcessDefs (Get-Config)) | ForEach-Object { $_.process_id }) -join ', ') + ").")
+        }
         $candidate = ([string]$body.process) + '-' + $idPart
 
         # certifications arrive as an array from the browser; store them flat
@@ -2631,8 +2868,8 @@ try {
           $klass    = (& $get 'class_abcde').ToUpperInvariant()
           $famRaw   = & $get 'prod_family'
 
-          if ($process -ne 'NPI' -and $process -ne 'ECN') {
-            $rejections += @{ row = $rowNo; reason = ("process must be NPI or ECN (got '" + (& $get 'process') + "')") }; continue
+          if (-not (Get-ProcessDef -Config $cfg -ProcessId $process)) {
+            $rejections += @{ row = $rowNo; reason = ("process must be one of the configured pillars (" + (((Get-ProcessDefs $cfg) | ForEach-Object { $_.process_id }) -join ', ') + "), got '" + (& $get 'process') + "'") }; continue
           }
           if (-not $klass) {
             $rejections += @{ row = $rowNo; reason = 'class_abcde is required' }; continue

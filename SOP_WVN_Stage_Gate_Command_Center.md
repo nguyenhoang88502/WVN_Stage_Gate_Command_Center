@@ -1,7 +1,7 @@
 # SOP — WVN NPI & ECN Stage Gate Command Center
 
 **Document:** SOP-EPM-001
-**Applies to:** WVN Stage Gate Command Center v10
+**Applies to:** WVN Stage Gate Command Center v11
 **Owner:** Early Product Management (EPM) — WOS Pillar 09
 **Audience:** NPI/ECN project members, moderators, and the system admin
 
@@ -33,11 +33,14 @@ made and on what evidence.
 
 ## 2. Installing and launching
 
-The tool runs **entirely offline** on a local machine. No internet, no CDN, no
-server infrastructure.
+The tool runs **entirely offline** on each PC. No internet, no CDN, no server
+infrastructure. Since v11 the team shares **one app folder in the SharePoint
+library**, synced to every PC by the OneDrive client; each user launches it from
+their own synced copy.
 
-1. Unzip `WVN_Stage_Gate_Command_Center_ModelOnly_v10.zip` to a local folder.
-   Avoid OneDrive-synced folders — file locking causes intermittent write errors.
+1. The admin unzips `WVN_Stage_Gate_Command_Center_ModelOnly_v11.zip` into the
+   shared library folder (with `NPI_EPM_Documents_Control` beside it for the
+   vault). Every user syncs that library.
 2. If Windows flagged the download, run `WVN_Unblock_Files.cmd` once.
 3. Double-click **`Open_WVN_NPI_Command_Center.cmd`**. A PowerShell window opens
    (leave it running) and the browser launches at `http://localhost:8080`.
@@ -45,6 +48,21 @@ server infrastructure.
 
 **Health check:** the pill at the top right must read `connected`. If it reads
 `offline`, the PowerShell window has closed or another process holds port 8080.
+
+### Upgrading to v11 (admin, once)
+
+1. Ask everyone to **stop the app** on their PC.
+2. Back up `system\tracking\` and the vault folder.
+3. Replace the app folder with the v11 bundle, keeping `system\tracking\`.
+4. Dry run: `powershell -ExecutionPolicy Bypass -File system\launcher.ps1 -Backfill`
+   — read the report in `system\logs\v11_backfill_*.txt`. The line
+   *active differs from last-row-wins* must be **0**.
+5. Apply: the same command with `-Backfill -Apply` (it backs up `tracking\` first
+   and refuses once any PC has already written v11 data).
+6. Everyone restarts the app. **No PC may keep running an older version.**
+
+Each PC's changes are kept in its own file under `system\tracking\journal\`
+and merged by everyone's app — never edit or delete those folders.
 
 ---
 
@@ -122,8 +140,19 @@ Each dropzone also offers:
 - **Download Blank Template** — the controlled company form, where one is mapped
 - **Mark as not applicable** — for documents this project genuinely does not need
 
-Files are copied into the evidence vault under a standardised name and hashed.
-A byte-identical re-upload is detected and skipped rather than duplicated.
+Files are copied into the evidence vault under a standardised name (ending in
+a short fingerprint of the file's content) and hashed. A byte-identical
+re-upload is detected and skipped rather than duplicated.
+
+**Upload panel.** Every upload — one file or a hundred — goes through the panel
+at the bottom right: one file at a time, retried automatically. A line reading
+*Failed (row – file is saved)* means the file is safely in the vault but its
+record did not save: press **Retry failed**; only the record is re-sent.
+
+**Revising a document.** A filed document shows its current revision (`rev 2`).
+Use **New revision** to file a changed version — a change reason is required —
+and **History** to see every revision, who filed it, when and why. The latest
+revision is the one gates and reports use; older ones stay on record.
 
 **Cannot copy the file?** Use *Or cite a network path / link* on the Input tab.
 The gate counts it as filed, but nothing is copied and there is no hash to
@@ -154,6 +183,11 @@ open, and prior steps are closed. The button's tooltip states what is blocking
 it. You are asked for an optional comment — **Cancel aborts; nothing is signed.**
 
 Approval is **irreversible through the interface.** There is no un-approve.
+
+**Approval stale.** If a required document is revised *after* the gate was
+signed, the gate shows **⚠ approval stale** (drawer, dashboard matrix, Gantt,
+PDF, transfer report). The signature stays on record; review the new revision
+with the approver and record the decision in Gate Notes.
 
 ### 5.8 Authorise a bypass (exception)
 
@@ -238,6 +272,16 @@ dragging, mid-upload, or have files staged.
 
 ---
 
+## 8b. Finding documents — the Document Vault tab
+
+One row per document across every project: its current revision, who filed it
+and when, and whether a signed gate is stale because of it. Filter by pillar,
+family, document type, PIC, department, date range or status, or type part of a
+file name, description or project ID. **Open**, **History** and **New revision**
+work from any row.
+
+---
+
 ## 9. Administration
 
 **Settings** (admin only):
@@ -249,6 +293,11 @@ dragging, mid-upload, or have files staged.
 - **Moderators** — who may assign work and sign out of sequence
 - **Templates** — blank company forms mapped to document types
 - **Admin Security PIN** — requires the current PIN to change
+- **Pillars** — the stage-gate processes. NPI and ECN come built in; **Add pillar**
+  creates another (for example an equipment process) with its own steps,
+  document types and name for the responsible person. It gets its own tab,
+  dashboard matrix and Vault search at once. A pillar with projects cannot be
+  deleted. Pillar IDs become the project-ID prefix and cannot be changed later.
 
 A change type still referenced by a project cannot be deleted.
 
@@ -264,12 +313,16 @@ A change type still referenced by a project cannot be deleted.
 | Uploads fail | Vault path wrong or not writable | Check Settings → evidence vault path |
 | PowerShell won't start the script | `.ps1` missing its UTF-8 BOM after manual editing | Re-extract from the distributed zip |
 | Page unstyled | `system/vendor/` missing from the deployment | Re-extract; do not copy files selectively |
+| A colleague's change has not appeared | OneDrive has not synced it yet | Check the OneDrive icon; it arrives once both PCs have synced |
+| Upload panel shows *Failed (row – file is saved)* | The record write failed | Press **Retry failed** — the file is not uploaded again |
+| Storage warning about a conflict copy or "modified after the v11 upgrade" | A PC still runs an old version, or two admins saved Settings at once | Update/restart that PC; for `config-*.json`, re-apply the missing Settings change |
 
 ---
 
 ## 11. Records and audit
 
-Everything is CSV under `system/tracking/`:
+Everything is CSV under `system/tracking/` — the base files plus each PC's
+journal under `system/tracking/journal/`:
 
 | File | Holds |
 |---|---|
@@ -284,10 +337,11 @@ Everything is CSV under `system/tracking/`:
 These are the record. Back up `system/tracking/` and the evidence vault on the
 same schedule as any other quality record.
 
-**Do not hand-edit them while the server is running** — the tool writes whole
-files and your changes will be lost.
+**Never hand-edit them.** Since v11 the app merges the base files with every
+PC's journal; an edited file can be silently outvoted or flagged as a conflict.
 
 ---
 
 *Prepared for WAHL Vietnam Early Product Management. Screens shown in the
-accompanying deck are from v10.*
+accompanying deck are from v10; v11 adds the Document Vault tab, revision
+history, the upload panel and Settings → Pillars.*

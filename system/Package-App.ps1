@@ -22,7 +22,10 @@ $ScriptDir = $PSScriptRoot
 if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $RootDir   = Split-Path -Parent $ScriptDir
 
-$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v10'
+# v11: the bundle name follows config.json's system_info.version (major
+# number), so the zip can no longer drift from the version the app reports.
+$VersionText = [string]((Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $ScriptDir 'config.json') | ConvertFrom-Json).system_info.version)
+$ZipName   = 'WVN_Stage_Gate_Command_Center_ModelOnly_v' + ($VersionText -split '\.')[0]
 $OutZip    = Join-Path $RootDir "$ZipName.zip"
 
 # --- 1. Stage into a temp directory ---
@@ -108,7 +111,10 @@ else { Write-Warning "  MISSING: system\vendor — packaged app.html will load w
 Write-Host ""
 Write-Host "Sanitising config.json — clearing machine-specific paths ..."
 $StagedConfig = Join-Path $StageDir 'system\config.json'
-$config = Get-Content -Raw -LiteralPath $StagedConfig | ConvertFrom-Json
+# -Encoding UTF8 is load-bearing: config.json has no BOM, and PS 5.1's
+# Get-Content otherwise reads it as ANSI, mangling every non-ASCII character
+# (em dashes, <=, Vietnamese) in the shipped copy.
+$config = Get-Content -Raw -Encoding UTF8 -LiteralPath $StagedConfig | ConvertFrom-Json
 $config.system_info.deployment_path = ''
 if ($config.deployment_defaults.PSObject.Properties.Name -contains 'evidence_vault_path') {
   $config.deployment_defaults.evidence_vault_path = ''

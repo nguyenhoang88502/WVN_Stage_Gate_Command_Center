@@ -37,6 +37,9 @@ const LOCALES = {
   en: {
     dashboard: 'Dashboard', claimed: 'Claimed Work', input: 'Input',
     npi: 'NPI · 7 steps', ecn: 'ECN · 12 steps + PPAP', settings: 'Settings',
+    vault: 'Document Vault', vaultTitle: 'Document Vault',
+    vaultSub: 'Every document across every project - one row per document, its active revision inline',
+    steps: 'steps', projects: 'Projects',
 
     dashboardTitle: 'Executive Dashboard',
     dashboardSub: 'Portfolio health, stage matrix and schedule',
@@ -60,6 +63,9 @@ const LOCALES = {
   vi: {
     dashboard: 'Bảng điều khiển', claimed: 'Công việc đã nhận', input: 'Nhập liệu',
     npi: 'Quy trình NPI · 7 bước', ecn: 'Quy trình ECN · 12 bước + PPAP', settings: 'Cài đặt',
+    vault: 'Kho tài liệu', vaultTitle: 'Kho tài liệu',
+    vaultSub: 'Mọi tài liệu của mọi dự án - mỗi tài liệu một dòng, kèm phiên bản hiện hành',
+    steps: 'bước', projects: 'Dự án',
 
     dashboardTitle: 'Bảng điều khiển tổng hợp',
     dashboardSub: 'Tình trạng dự án, ma trận giai đoạn và tiến độ',
@@ -197,7 +203,8 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
   async verifyPin(pin) { return API.post('/api/config/verify-pin', { pin }); },
   async changePin(currentPin, newPin, user) { return API.post('/api/config/change-pin', { currentPin, newPin, user }); },
   async post(path, body) {
-    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // charset spelled out: without it the server used to decode as cp1252 (v11 fix).
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify(body) });
     if (!r.ok) throw await API.err(r);
     return r.json();
   },
@@ -296,16 +303,25 @@ async function boot() {
   }
 }
 
-/* [viewId, i18n key, icon]. The label is resolved through i18n() at render
-   time so switching language re-labels the rail without a reload. */
-const TABS = [['dash', 'dashboard', 'layout-dashboard'], ['claimed', 'claimed', 'checklist'],
-              ['input', 'input', 'file-import'], ['npi', 'npi', 'rocket'],
-              ['ecn', 'ecn', 'git-branch'], ['settings', 'settings', 'settings']];
+/* [viewId, i18n key, icon, pillarId]. The label is resolved at render time so
+   switching language re-labels the rail without a reload. v11 R4: one tab per
+   configured pillar (config.pillars[]), between Input and Settings - a new
+   pillar gets its tab from config.json alone. */
+const FIXED_TAB_IDS = ['dash', 'claimed', 'vault', 'input', 'settings'];
+function tabList() {
+  const t = [['dash', 'dashboard', 'layout-dashboard'], ['claimed', 'claimed', 'checklist'],
+             ['vault', 'vault', 'folder-open'], ['input', 'input', 'file-import']];
+  pillarDefs().forEach(pd => t.push([pillarTabId(pd.id), null, pd.icon, pd.id]));
+  t.push(['settings', 'settings', 'settings']);
+  return t;
+}
+function tabLabel(tab) { return tab[3] ? pillarTabLabel(pillarDef(tab[3])) : i18n(tab[1]); }
 let current = 'dash';
 function buildTabs() {
   const n = $('#tabs'); n.innerHTML = '';
-  TABS.forEach(([id, labelKey, iconName]) => {
-    const label = i18n(labelKey);
+  tabList().forEach(tab => {
+    const [id, , iconName] = tab;
+    const label = tabLabel(tab);
     const b = el('button', id === current ? 'on' : '');
     b.type = 'button';
     b.title = label;
@@ -321,14 +337,18 @@ function show(id, preserveScroll) {
   // NB: the find callback is `tab`, not `t` — `t` is the translator and a
   // NB: the find callback is `tab`, not `t` — a bare `t` here would read as
   // the old translator name and invites re-introducing the shadowing bug.
-  const activeTab = TABS.find(tab => tab[0] === id);
-  if (pt) pt.textContent = activeTab ? i18n(activeTab[1]) : '';
+  let activeTab = tabList().find(tab => tab[0] === id);
+  // A tab id restored from an older session (or a pillar since removed)
+  // falls back to the dashboard instead of rendering nothing.
+  if (!activeTab) { id = 'dash'; current = id; buildTabs(); activeTab = tabList()[0]; }
+  if (pt) pt.textContent = tabLabel(activeTab);
   closeDrawer();
   const v = $('#views'); v.innerHTML = '';
   // Reveal the loader only if the view build exceeds ~150ms — near-instant
   // tab switches shouldn't flash the full-screen overlay.
   const loaderTimer = setTimeout(showLoader, 150);
-  ({ dash: viewDashboard, claimed: viewClaimed, input: viewInput, npi: viewNpi, ecn: viewEcn, settings: viewSettings })[id](v);
+  if (activeTab[3]) viewPillar(v, activeTab[3]);
+  else ({ dash: viewDashboard, claimed: viewClaimed, vault: viewVault, input: viewInput, settings: viewSettings })[id](v);
   clearTimeout(loaderTimer);
   hideLoader();
   if (preserveScroll) {
@@ -1205,9 +1225,109 @@ function issueResolveDropzone(project, onAfterResolve, issueRow) {
 }
 const projectsOf = proc => TRK.lb_projects.filter(p => p.process === proc);
 const projById = id => TRK.lb_projects.find(p => p.project_id === id);
-const allStepsOf = proc => (proc === 'NPI' ? CFG.npi_workflow.steps : CFG.ecn_workflow.steps);
+const allStepsOf = proc => { const pd = pillarDef(proc); return pd ? pd.steps : []; };
 const stepKeyOf = (proc, s) => proc + '-' + s.step_id;
-const docTypeById = id => CFG.document_types.find(d => d.doctype_id === id) || { doctype_id: id, name: id };
+const docTypeById = id => allDocTypes().find(d => d.doctype_id === id) || { doctype_id: id, name: id };
+
+/* ===================================================================== */
+/* v11 R4 - pillars: every process the app runs, from config.pillars[]   */
+/* ===================================================================== */
+/* Each pillar: process_id, name (+ _vi), EITHER its own ordered steps OR a
+   'workflow' reference to a legacy workflow object (NPI -> npi_workflow,
+   ECN -> ecn_workflow, so their definitions did not move), gate_mode
+   ('all' = every step is a signed gate, 'flagged' = only steps with
+   gate_clearance_required), pic_label (+ _vi), icon, approval_type, its own
+   doc_types (added to the shared document_types catalogue), and feature
+   flags for the process-specific extras: ppap, mwer, trial_by_step_name,
+   gate_grouped_matrix, stage_completion. A config without pillars[] behaves
+   exactly as before v11 (the fallback below is the old hardcoded pair). */
+const LEGACY_PILLARS = [
+  { process_id: 'NPI', workflow: 'npi_workflow', gate_mode: 'all', i18n: 'npi', icon: 'rocket', approval_type: 'Evidence-Based', features: { stage_completion: true } },
+  { process_id: 'ECN', workflow: 'ecn_workflow', gate_mode: 'flagged', i18n: 'ecn', icon: 'git-branch', approval_type: 'Milestone',
+    features: { ppap: true, mwer: true, trial_by_step_name: true, gate_grouped_matrix: true } }
+];
+const PILLAR_ICONS = ['rocket', 'git-branch', 'clipboard-check', 'building-factory-2', 'settings', 'shield-lock', 'chart-bar', 'files', 'table', 'users', 'calendar-event', 'star'];
+let _pillarMemo = { cfg: null, list: [] };
+function pillarDefs() {
+  if (_pillarMemo.cfg === CFG && CFG) return _pillarMemo.list;
+  const src = (CFG && CFG.pillars && CFG.pillars.length) ? CFG.pillars : LEGACY_PILLARS;
+  const list = src.map(function(p) {
+    const id = String(p.process_id || '').trim();
+    const wf = p.workflow && CFG ? CFG[p.workflow] : null;
+    return {
+      id: id, raw: p, name: p.name || id, name_vi: p.name_vi || '',
+      steps: (wf && wf.steps) || p.steps || [],
+      workflow: p.workflow || '',
+      gate_mode: p.gate_mode === 'flagged' ? 'flagged' : 'all',
+      pic_label: p.pic_label || 'PIC', pic_label_vi: p.pic_label_vi || '',
+      icon: PILLAR_ICONS.indexOf(p.icon) >= 0 ? p.icon : 'clipboard-check',
+      i18n: p.i18n || '', approval_type: p.approval_type || '',
+      features: p.features || {}, doc_types: p.doc_types || [],
+      tab_label: p.tab_label || '', tab_label_vi: p.tab_label_vi || '',
+      title: p.title || '', title_vi: p.title_vi || '', subtitle: p.subtitle || '', subtitle_vi: p.subtitle_vi || '',
+      banner: p.banner || ''
+    };
+  }).filter(function(pd) { return pd.id; });
+  _pillarMemo = { cfg: CFG, list: list };
+  return list;
+}
+function pillarDef(pid) { return pillarDefs().find(function(pd) { return pd.id === pid; }) || null; }
+function hasFeature(pid, f) { const pd = pillarDef(pid); return !!(pd && pd.features[f]); }
+function pickLang(en, vi) { return (getLang() === 'vi' && vi) ? vi : en; }
+function pillarName(pid) { const pd = pillarDef(pid); return pd ? pickLang(pd.name, pd.name_vi) : pid; }
+function picLabel(pid) { const pd = pillarDef(pid); return pd ? pickLang(pd.pic_label, pd.pic_label_vi) : 'PIC'; }
+/* Stable tab ids: the pillar id in lower case ('npi', 'ecn' - what saved UI
+   state and the test suite already use), prefixed only if it would collide
+   with a fixed tab. */
+function pillarTabId(pid) {
+  const low = String(pid).toLowerCase();
+  return FIXED_TAB_IDS.indexOf(low) >= 0 ? 'p_' + low : low;
+}
+function pillarTabLabel(pd) {
+  if (!pd) return '';
+  if (pd.i18n) return i18n(pd.i18n);
+  return pickLang(pd.tab_label, pd.tab_label_vi) || (pickLang(pd.name, pd.name_vi) + ' · ' + pd.steps.length + ' ' + i18n('steps'));
+}
+function pillarTitle(pd) { return pd.i18n ? i18n(pd.i18n + 'Title') : (pickLang(pd.title, pd.title_vi) || pickLang(pd.name, pd.name_vi) + ' ' + i18n('projects')); }
+function pillarSubtitle(pd) {
+  if (pd.i18n) return i18n(pd.i18n + 'Sub');
+  return pickLang(pd.subtitle, pd.subtitle_vi) || (pd.steps.length + '-step ' + pickLang(pd.name, pd.name_vi) + ' workflow');
+}
+/* Shared catalogue + every pillar's own document types (first definition wins). */
+let _docMemo = { cfg: null, list: [] };
+function allDocTypes() {
+  if (_docMemo.cfg === CFG && CFG) return _docMemo.list;
+  const seen = {}, out = [];
+  // Bracket access on purpose: every other allDocTypes() read outside
+  // Settings is rewritten to allDocTypes(), and this one must stay the source.
+  let src = ((CFG && CFG['document_types']) || []).slice();
+  pillarDefs().forEach(function(pd) { src = src.concat(pd.doc_types); });
+  src.forEach(function(d) { if (d && d.doctype_id && !seen[d.doctype_id]) { seen[d.doctype_id] = true; out.push(d); } });
+  _docMemo = { cfg: CFG, list: out };
+  return out;
+}
+/* Which steps a change type runs for a pillar: steps_by_process[pid] if the
+   type defines it, else the legacy per-process fields, else all steps. */
+function ctStepsFor(ct, pid) {
+  if (!ct) return null;
+  if (ct.steps_by_process && ct.steps_by_process[pid]) return ct.steps_by_process[pid];
+  const legacy = ct[String(pid).toLowerCase() + '_steps'];
+  return Array.isArray(legacy) ? legacy : null;
+}
+/* Gate columns for gate_grouped_matrix pillars: every non-gated step folds
+   into the NEXT gated step's column (see groupCellStateFor). */
+function gateGroupsOf(pid) {
+  const steps = allStepsOf(pid);
+  const groups = [];
+  let bucket = [];
+  steps.forEach(s => {
+    bucket.push(s);
+    if (isGated(pid, s)) { groups.push({ gate: s, steps: bucket }); bucket = []; }
+  });
+  if (bucket.length && groups.length) groups[groups.length - 1].steps = groups[groups.length - 1].steps.concat(bucket);
+  else if (bucket.length) bucket.forEach(s => groups.push({ gate: s, steps: [s] }));
+  return groups;
+}
 
 /* ---- CSV cell quoting (client-side, mirrors launcher.ps1 ConvertTo-CsvCell) ---- */
 function csvCell(v) {
@@ -1247,15 +1367,15 @@ function normaliseFamilyInput(val) {
 function normaliseDoctypeInput(val) {
   const s = (val || '').trim();
   if (!s) return '';
-  if (CFG.document_types.some(d => d.doctype_id === s)) return s;
+  if (allDocTypes().some(d => d.doctype_id === s)) return s;
   const m = s.match(/^([A-Za-z0-9_-]+)\s*[-—–]\s*/);
-  if (m && CFG.document_types.some(d => d.doctype_id === m[1])) return m[1];
-  const byName = CFG.document_types.find(d => d.name === s);
+  if (m && allDocTypes().some(d => d.doctype_id === m[1])) return m[1];
+  const byName = allDocTypes().find(d => d.name === s);
   if (byName) return byName.doctype_id;
   const lower = s.toLowerCase();
-  const byNameCI = CFG.document_types.find(d => d.name.toLowerCase() === lower);
+  const byNameCI = allDocTypes().find(d => d.name.toLowerCase() === lower);
   if (byNameCI) return byNameCI.doctype_id;
-  const byIdCI = CFG.document_types.find(d => d.doctype_id.toLowerCase() === lower);
+  const byIdCI = allDocTypes().find(d => d.doctype_id.toLowerCase() === lower);
   if (byIdCI) return byIdCI.doctype_id;
   return s;
 }
@@ -1306,7 +1426,7 @@ function stepDatalistOptions(project, docCode) {
    first, then conditionally applicable, then the rest. Every doctype stays
    available — filing an unexpected document is legitimate. */
 function docDatalistOptionsForStep(project, stepId) {
-  const def = CFG.document_types.map(d =>
+  const def = allDocTypes().map(d =>
     '<option value="' + esc(d.doctype_id) + ' — ' + esc(d.name) + '">').join('');
   if (!project || !stepId) return def;
   const step = stepsOf(project.process, project).find(s => s.step_id === stepId);
@@ -1314,7 +1434,7 @@ function docDatalistOptionsForStep(project, stepId) {
   const req = step.required_evidence_doctypes || [];
   const cond = step.conditional_evidence_doctypes || [];
   const reqList = [], condList = [], restList = [];
-  CFG.document_types.forEach(d => {
+  allDocTypes().forEach(d => {
     if (req.indexOf(d.doctype_id) >= 0) reqList.push(d);
     else if (cond.indexOf(d.doctype_id) >= 0) condList.push(d);
     else restList.push(d);
@@ -1402,7 +1522,7 @@ function stepsOf(proc, project) {
   const all = allStepsOf(proc);
   const ct = project && changeTypeById(project.class_abcde);
   if (!ct) return all;
-  const allowed = proc === 'NPI' ? ct.npi_steps : ct.ecn_steps;
+  const allowed = ctStepsFor(ct, proc);
   if (!allowed || !allowed.length) return all;
   return all.filter(s => allowed.indexOf(s.step_id) >= 0);
 }
@@ -1422,7 +1542,10 @@ function targetDateFor(classId, fromDate) {
   return addWeeks(fromWeek, weeks);
 }
 
-function isGated(proc, step) { return proc === 'NPI' ? true : !!step.gate_clearance_required; }
+function isGated(proc, step) {
+  const pd = pillarDef(proc);
+  return pd && pd.gate_mode === 'flagged' ? !!step.gate_clearance_required : true;
+}
 
 /* A step counts as done for downstream progression if it was signed OR if a
    bypass is open against it (v2.1). The bypass record and its justification
@@ -1456,7 +1579,7 @@ function guessFromName(fileName) {
   const stem = fileName.replace(/\.[^.]+$/, '');
   const hay = stem.toLowerCase().replace(/[_\-.]+/g, ' ');
   let best = null, bestScore = 0;
-  CFG.document_types.forEach(d => {
+  allDocTypes().forEach(d => {
     let score = 0;
     const code = String(d.form_code || '').toLowerCase();
     const id = String(d.doctype_id || '').toLowerCase();
@@ -1473,13 +1596,13 @@ function guessFromName(fileName) {
       .forEach(w => { if (hay.indexOf(w) >= 0) score += 12; });
     if (score > bestScore) { bestScore = score; best = d; }
   });
-  const doc = best ? best.doctype_id : (CFG.document_types[0] || {}).doctype_id;
+  const doc = best ? best.doctype_id : (allDocTypes()[0] || {}).doctype_id;
 
   // step: the first workflow step that actually demands this document
   let step = null;
-  ['npi_workflow', 'ecn_workflow'].forEach(wf => {
+  pillarDefs().forEach(pd => {
     if (step != null) return;
-    (CFG[wf].steps || []).forEach(s => {
+    (pd.steps || []).forEach(s => {
       if (step != null) return;
       const req = (s.required_evidence_doctypes || []).concat(s.conditional_evidence_doctypes || []);
       if (req.indexOf(doc) >= 0) step = s.step_id;
@@ -1830,24 +1953,6 @@ function matrixCell(project, step) {
   return { td, c };
 }
 
-/* Groups ECN steps into gate-anchored buckets: every non-gated step folds
-   into the NEXT gated step's column. E.g. steps 1-3 fold into the step-4
-   gate column, 5-10 fold into step-11, nothing folds into step-12 if it
-   immediately follows step-11. Driven by isGated()/gate_clearance_required,
-   not hardcoded step numbers, so it stays correct if the SOP config changes. */
-function ecnGateGroups() {
-  const steps = allStepsOf('ECN');
-  const groups = [];
-  let bucket = [];
-  steps.forEach(s => {
-    bucket.push(s);
-    if (isGated('ECN', s)) { groups.push({ gate: s, steps: bucket }); bucket = []; }
-  });
-  if (bucket.length && groups.length) groups[groups.length - 1].steps = groups[groups.length - 1].steps.concat(bucket);
-  else if (bucket.length) bucket.forEach(s => groups.push({ gate: s, steps: [s] }));
-  return groups;
-}
-
 /* Aggregates matrixCell's per-step evidence status across every step in a
    gate group, for one project. Same done/filed/missing shape as
    cellStateFor(), merged (deduped by doc code) across all applicable steps in
@@ -2012,10 +2117,20 @@ function viewDashboard(root) {
   root.appendChild(dashSlicerWrap);
 
   /* ---- matrix containers (rebuilt when filters change) ------------------ */
-  var dashNpiMatrixWrap = el('div'); dashNpiMatrixWrap.id = 'dashNpiMatrixWrap';
-  root.appendChild(dashNpiMatrixWrap);
-  var dashEcnMatrixWrap = el('div'); dashEcnMatrixWrap.id = 'dashEcnMatrixWrap';
-  root.appendChild(dashEcnMatrixWrap);
+  // v11 R4: one matrix per pillar. Ids stay dashNpiMatrixWrap /
+  // dashEcnMatrixWrap for the two original pillars.
+  var matrixWraps = pillarDefs().map(function(pd) {
+    var w = el('div'); w.id = 'dash' + pd.id.charAt(0) + pd.id.slice(1).toLowerCase() + 'MatrixWrap';
+    root.appendChild(w);
+    return { pd: pd, host: w };
+  });
+  var dashNpiMatrixWrap = matrixWraps.length ? matrixWraps[0].host : el('div');
+  function renderPillarMatrices() {
+    matrixWraps.forEach(function(m) {
+      if (m.pd.features.gate_grouped_matrix) renderDashboardEcnMatrix(m.pd.id, m.host);
+      else renderDashboardNpiMatrix(m.pd.id, m.host);
+    });
+  }
 
   // renderAll() is declared inside the IIFE further down that owns `wrap` and
   // renderCards(), so it is NOT in scope for the slicer onChange handlers up
@@ -2026,7 +2141,9 @@ function viewDashboard(root) {
   var dashRenderAll = null;
 
   function renderDashboardSlicers() {
-    var allNpi = projectsOf('NPI');
+    // Every pillar's projects - before v11 this read NPI projects only, so an
+    // ECN project's family / model never appeared in the slicers at all.
+    var allNpi = TRK.lb_projects.slice();
     _msOpenPopover = null; // close any stale popover from a prior render
 
     // Cascade: each slicer derives its options from projects matching the OTHER active filters
@@ -2112,18 +2229,19 @@ function viewDashboard(root) {
      ================================================================== */
 
   // ---- NPI matrix --------------------------------------------------------
-  function renderDashboardNpiMatrix() {
-    dashNpiMatrixWrap.innerHTML = '';
-    const list = filterDashboardProjects('NPI');
-    // Only skip the panel entirely when NO NPI projects are registered at all.
-    // When filters hide all of them we still render the panel with a hint.
-    if (!projectsOf('NPI').length) return;
-    const steps = allStepsOf('NPI');
-    const proc = 'NPI';
+  function renderDashboardNpiMatrix(pid, host) {
+    host.innerHTML = '';
+    const list = filterDashboardProjects(pid);
+    // Only skip the panel entirely when NO projects of this pillar are
+    // registered at all. When filters hide all of them we still render the
+    // panel with a hint.
+    if (!projectsOf(pid).length) return;
+    const steps = allStepsOf(pid);
+    const proc = pid;
 
     const panel = el('div', 'card');
     const panelHdr = el('div', 'card-header');
-    panelHdr.appendChild(el('h3', 'card-title', 'NPI — stage matrix'));
+    panelHdr.appendChild(el('h3', 'card-title', pillarName(pid) + ' — stage matrix'));
     panel.appendChild(panelHdr);
     const panelBody = el('div', 'card-body');
 
@@ -2132,15 +2250,15 @@ function viewDashboard(root) {
 
     t.innerHTML = '<thead><tr><th>Project</th>' +
       steps.map(s => '<th title="' + esc(s.step_name) + '">' + s.step_id + '. ' + esc(s.step_name) + '</th>').join('') +
-      '<th>PIC</th></tr></thead>';
+      '<th>' + esc(picLabel(pid)) + '</th></tr></thead>';
     const tb = el('tbody');
 
     if (!list.length) {
       const emptyTr = el('tr'); const emptyTd = el('td');
       emptyTd.colSpan = 2 + steps.length;
       emptyTd.textContent = (dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length)
-        ? 'No NPI projects match the current filter.'
-        : 'No NPI projects registered yet.';
+        ? 'No ' + pillarName(pid) + ' projects match the current filter.'
+        : 'No ' + pillarName(pid) + ' projects registered yet.';
       emptyTr.appendChild(emptyTd); tb.appendChild(emptyTr);
     } else {
       list.forEach(project => {
@@ -2224,21 +2342,22 @@ function viewDashboard(root) {
     panelBody.appendChild(el('p', 'note', 'Green means a named person signed the gate. Blue means the document is filed but nobody has signed for it. ' +
       'Red means the step requires it and nothing has been filed.'));
     panel.appendChild(panelBody);
-    dashNpiMatrixWrap.appendChild(panel);
+    host.appendChild(panel);
   }
 
   // ---- ECN matrix (gate-grouped columns + PPAP) ---------------------------
-  function renderDashboardEcnMatrix() {
-    dashEcnMatrixWrap.innerHTML = '';
-    const list = filterDashboardProjects('ECN');
-    // Only skip the panel entirely when NO ECN projects are registered at all.
-    if (!projectsOf('ECN').length) return;
-    const proc = 'ECN';
-    const groups = ecnGateGroups();
+  function renderDashboardEcnMatrix(pid, host) {
+    host.innerHTML = '';
+    const list = filterDashboardProjects(pid);
+    // Only skip the panel entirely when NO projects of this pillar are registered at all.
+    if (!projectsOf(pid).length) return;
+    const proc = pid;
+    const groups = gateGroupsOf(pid);
+    const withPpap = hasFeature(pid, 'ppap');
 
     const panel = el('div', 'card');
     const panelHdr = el('div', 'card-header');
-    panelHdr.appendChild(el('h3', 'card-title', 'ECN — stage matrix'));
+    panelHdr.appendChild(el('h3', 'card-title', pillarName(pid) + ' — stage matrix'));
     panel.appendChild(panelHdr);
     const panelBody = el('div', 'card-body');
 
@@ -2249,15 +2368,15 @@ function viewDashboard(root) {
     const gateHeaders = groups.map(g => '<th title="' + esc(g.gate.step_name) + '">' +
       g.gate.step_id + '. ' + esc(g.gate.step_name) +
       '<div class="note">' + g.steps.map(s => s.step_id).join(', ') + '</div></th>').join('');
-    t.innerHTML = '<thead><tr><th>Project</th>' + gateHeaders + '<th>PPAP</th><th>PIC</th></tr></thead>';
+    t.innerHTML = '<thead><tr><th>Project</th>' + gateHeaders + (withPpap ? '<th>PPAP</th>' : '') + '<th>' + esc(picLabel(pid)) + '</th></tr></thead>';
     const tb = el('tbody');
 
     if (!list.length) {
       const emptyTr = el('tr'); const emptyTd = el('td');
-      emptyTd.colSpan = 3 + groups.length;
+      emptyTd.colSpan = (withPpap ? 3 : 2) + groups.length;
       emptyTd.textContent = (dashFamFilter.length || dashModelFilter.length || dashStartWeekFilter.length || dashEndWeekFilter.length)
-        ? 'No ECN projects match the current filter.'
-        : 'No ECN projects registered yet.';
+        ? 'No ' + pillarName(pid) + ' projects match the current filter.'
+        : 'No ' + pillarName(pid) + ' projects registered yet.';
       emptyTr.appendChild(emptyTd); tb.appendChild(emptyTr);
     } else {
       list.forEach(project => {
@@ -2384,8 +2503,8 @@ function viewDashboard(root) {
           });
         });
 
-        // PPAP column — submission status from lb_ppap
-        (function() {
+        // PPAP column — submission status from lb_ppap (pillars with the ppap feature)
+        if (withPpap) (function() {
           const ppapRows = (TRK.lb_ppap || []).filter(r => r.project_id === project.project_id);
           const ppapTd = el('td', 'mcell');
           if (!ppapRows.length) {
@@ -2415,7 +2534,7 @@ function viewDashboard(root) {
     panelBody.appendChild(el('p', 'note', 'Green means a named person signed the gate. Blue means the document is filed but nobody has signed for it. ' +
       'Red means the step requires it and nothing has been filed. PPAP status shows submitted-vs-total items.'));
     panel.appendChild(panelBody);
-    dashEcnMatrixWrap.appendChild(panel);
+    host.appendChild(panel);
   }
 
   /* =====================================================================
@@ -2423,17 +2542,14 @@ function viewDashboard(root) {
      filterDashboardProjects('NPI') the matrices use.
      ================================================================== */
   (function() {
-    const NPI_DOCS = {
-      1: ['PRF','QUOTE','GANTT','IR','CLASS'],
-      2: ['DFM','DWG','WI'],
-      3: ['PFMEA','DWG','BOM'],
-      4: ['PFMEA','DWG','BOM','CONTROL-PLAN'],
-      5: ['INSP-STD','CONTROL-PLAN','SOP','WI','PPAP'],
-      6: ['QA-F-GEN-0010','SOP','WI','TRIAL-RPT','PFMEA'],
-      7: ['RAMP-UP','KAIZEN','LL-INFO','NPI-CLOSURE','8D-CAPA']
-    };
-    const npiSteps = allStepsOf('NPI');
-    const allNpi = projectsOf('NPI');
+    // v11 R4: the pillar flagged stage_completion (NPI by default). The doc
+    // lists come from the pillar's own step definitions - they used to be a
+    // hardcoded copy of npi_workflow's required documents.
+    const scPid = ((pillarDefs().find(function(pd) { return pd.features.stage_completion; })) || {}).id || '';
+    const npiSteps = allStepsOf(scPid);
+    const NPI_DOCS = {};
+    npiSteps.forEach(function(s) { NPI_DOCS[s.step_id] = (s.required_evidence_doctypes || []).slice(); });
+    const allNpi = projectsOf(scPid);
 
     /* container for the stage-cards section — rebuilt on filter change */
     const wrap = el('div'); wrap.id = 'npiStageWrap';
@@ -2443,7 +2559,7 @@ function viewDashboard(root) {
        scope so the stage cards and both matrices always use the exact same
        filtered set */
     function filteredProjects() {
-      return filterDashboardProjects('NPI');
+      return filterDashboardProjects(scPid);
     }
 
     function renderCards(container) {
@@ -2457,9 +2573,9 @@ function viewDashboard(root) {
 
       npiSteps.forEach(step => {
         const snum = step.step_id;
-        const sk = 'NPI-' + snum;
+        const sk = stepKeyOf(scPid, { step_id: snum });
         const docs = NPI_DOCS[snum] || [];
-        const applicable = filtered.filter(p => stepsOf('NPI', p).some(s => s.step_id === snum));
+        const applicable = filtered.filter(p => stepsOf(scPid, p).some(s => s.step_id === snum));
         const total = applicable.length;
         if (!total) return;
 
@@ -2527,14 +2643,14 @@ function viewDashboard(root) {
       // Re-render the slicer bar — always at the top
       renderDashboardSlicers();
 
-      // Rebuild both matrices with the current filter state
-      renderDashboardNpiMatrix();
-      renderDashboardEcnMatrix();
+      // Rebuild every pillar's matrix with the current filter state
+      renderPillarMatrices();
 
       // Rebuild stage cards — collapsed by default (v9.2.1). The whole header
       // is the hit target, not just the chevron, so it behaves like the step
       // cards elsewhere in the app.
       wrap.innerHTML = '';
+      if (!scPid) return;
       const head = el('button', 'section-toggle');
       head.type = 'button';
       head.setAttribute('aria-expanded', npiStageOpen ? 'true' : 'false');
@@ -2544,7 +2660,7 @@ function viewDashboard(root) {
       function paintHead() {
         head.innerHTML = '';
         head.appendChild(icon(npiStageOpen ? 'chevron-down' : 'chevron-right'));
-        head.appendChild(el('h3', null, i18n('npiStageCompletion')));
+        head.appendChild(el('h3', null, scPid === 'NPI' ? i18n('npiStageCompletion') : pillarName(scPid) + ' Stage Completion'));
         head.setAttribute('aria-expanded', npiStageOpen ? 'true' : 'false');
         cardHost.className = npiStageOpen ? 'stage-grid' : 'stage-grid hide';
       }
@@ -2750,7 +2866,8 @@ function buildLiveGanttSection() {
       return true;
     });
   }
-  var projects = filteredByProcess('NPI').concat(filteredByProcess('ECN'));
+  var projects = [];
+  pillarDefs().forEach(function(pd) { projects = projects.concat(filteredByProcess(pd.id)); });
 
   var wrap = el('div', 'card gantt-live-wrap');
   var hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'Project Schedule (Gantt) — Planned vs Actual'));
@@ -3161,9 +3278,8 @@ function buildPrintPackage() {
     });
   }
 
-  var filteredNpi = filteredByProcess('NPI');
-  var filteredEcn = filteredByProcess('ECN');
-  var allFiltered = filteredNpi.concat(filteredEcn);
+  var allFiltered = [];
+  pillarDefs().forEach(function(pd) { allFiltered = allFiltered.concat(filteredByProcess(pd.id)); });
 
   var container = document.getElementById('dashPrintPackage');
   if (!container) { container = document.createElement('div'); container.id = 'dashPrintPackage'; document.body.appendChild(container); }
@@ -3215,15 +3331,21 @@ function buildPrintPackage() {
      ================================================================== */
   var page2 = document.createElement('div'); page2.className = 'print-page';
 
-  /* --- NPI matrix --- */
+  /* v11 R4: one matrix per pillar - per-step columns, or gate-grouped
+     columns (+ PPAP where enabled) for gate_grouped_matrix pillars. */
+  pillarDefs().forEach(function(pd) {
+  var grouped = !!pd.features.gate_grouped_matrix;
+  var filteredNpi = grouped ? [] : filteredByProcess(pd.id);
+  var filteredEcn = grouped ? filteredByProcess(pd.id) : [];
+  /* --- per-step matrix --- */
   if (filteredNpi.length) {
-    var npiSteps = allStepsOf('NPI');
-    var npiH = '<div class="print-matrix"><h3>NPI Stage Matrix — Completion %</h3><table><thead><tr><th>Project</th>' +
+    var npiSteps = allStepsOf(pd.id);
+    var npiH = '<div class="print-matrix"><h3>' + esc(pillarName(pd.id)) + ' Stage Matrix — Completion %</h3><table><thead><tr><th>Project</th>' +
       npiSteps.map(function(s) { return '<th>' + esc(s.step_id) + '. ' + esc(s.step_name) + '</th>'; }).join('') +
       '</tr></thead><tbody>';
 
     filteredNpi.forEach(function(prj) {
-      var on = stepsOf('NPI', prj);
+      var on = stepsOf(pd.id, prj);
       var fam = familyById(prj.prod_family);
       var label = esc(prj.project_id) + (fam ? ' (' + esc(fam.prod_family_name) + ')' : '');
       npiH += '<tr><td>' + label + '</td>';
@@ -3242,15 +3364,16 @@ function buildPrintPackage() {
     page2.innerHTML += npiH;
   }
 
-  /* --- ECN matrix (gate-grouped + PPAP) --- */
+  /* --- gate-grouped matrix (+ PPAP) --- */
   if (filteredEcn.length) {
-    var groups = ecnGateGroups();
-    var ecnH = '<div class="print-matrix"><h3>ECN Stage Matrix — Completion %</h3><table><thead><tr><th>Project</th>' +
+    var groups = gateGroupsOf(pd.id);
+    var withPpap = !!pd.features.ppap;
+    var ecnH = '<div class="print-matrix"><h3>' + esc(pillarName(pd.id)) + ' Stage Matrix — Completion %</h3><table><thead><tr><th>Project</th>' +
       groups.map(function(g) { return '<th>' + esc(g.gate.step_id) + '. ' + esc(g.gate.step_name) + '</th>'; }).join('') +
-      '<th>PPAP</th></tr></thead><tbody>';
+      (withPpap ? '<th>PPAP</th>' : '') + '</tr></thead><tbody>';
 
     filteredEcn.forEach(function(prj) {
-      var on = stepsOf('ECN', prj);
+      var on = stepsOf(pd.id, prj);
       var fam = familyById(prj.prod_family);
       var label = esc(prj.project_id) + (fam ? ' (' + esc(fam.prod_family_name) + ')' : '');
       ecnH += '<tr><td>' + label + '</td>';
@@ -3265,16 +3388,19 @@ function buildPrintPackage() {
         ecnH += '<td class="' + cls + '">' + pct + '%' + (gc.g && gc.g.stale ? ' <b class="print-stale">(stale)</b>' : '') + '</td>';
       });
       /* PPAP */
-      var ppapRows = (TRK.lb_ppap || []).filter(function(r) { return r.project_id === prj.project_id; });
-      var ppapApproved = ppapRows.filter(function(r) { return r.customer_approved && r.customer_approved !== 'NO'; }).length;
-      var ppapPct = ppapRows.length ? Math.round(100 * ppapApproved / ppapRows.length) : 0;
-      var ppapCls = ppapRows.length ? (ppapPct === 100 ? 'pct-done' : (ppapPct > 0 ? 'pct-partial' : 'pct-none')) : 'pct-na';
-      ecnH += '<td class="' + ppapCls + '">' + (ppapRows.length ? ppapPct + '%' : 'n/a') + '</td>';
+      if (withPpap) {
+        var ppapRows = (TRK.lb_ppap || []).filter(function(r) { return r.project_id === prj.project_id; });
+        var ppapApproved = ppapRows.filter(function(r) { return r.customer_approved && r.customer_approved !== 'NO'; }).length;
+        var ppapPct = ppapRows.length ? Math.round(100 * ppapApproved / ppapRows.length) : 0;
+        var ppapCls = ppapRows.length ? (ppapPct === 100 ? 'pct-done' : (ppapPct > 0 ? 'pct-partial' : 'pct-none')) : 'pct-na';
+        ecnH += '<td class="' + ppapCls + '">' + (ppapRows.length ? ppapPct + '%' : 'n/a') + '</td>';
+      }
       ecnH += '</tr>';
     });
     ecnH += '</tbody></table></div>';
     page2.innerHTML += ecnH;
   }
+  });
 
   if (!page2.innerHTML) page2.innerHTML = '<p style="padding:10px;color:#999">No filtered projects to display.</p>';
   container.appendChild(page2);
@@ -3774,10 +3900,10 @@ function openDrawer(project, step, focusDocCode) {
   // NPI keys trial quantities off the step's own config flag; ECN never sets
   // that flag and instead keys off the step name, matching what the old ECN
   // step accordion checked.
-  if (step.trial_quantity || (proc === 'ECN' && /trial production execution/i.test(step.step_name))) {
+  if (step.trial_quantity || (hasFeature(proc, 'trial_by_step_name') && /trial production execution/i.test(step.step_name))) {
     d.appendChild(trialConfig(project, proc, step, reopenDrawer));
   }
-  if (proc === 'ECN' && /mwer/i.test(step.step_name)) d.appendChild(mwerSection(project, step, reopenDrawer));
+  if (hasFeature(proc, 'mwer') && /mwer/i.test(step.step_name)) d.appendChild(mwerSection(project, step, reopenDrawer));
 
   // LFI accordion — available on every step, expands in place in the drawer
   d.appendChild(lfiSection(project, step));
@@ -3801,7 +3927,8 @@ function openDrawer(project, step, focusDocCode) {
 
     function renderSidebarProjectList(query) {
       const q = (query || '').toLowerCase().trim();
-      const npiProjects = projectsOf('NPI');
+      // Every pillar's projects (was NPI only before v11).
+      const npiProjects = TRK.lb_projects.slice();
       const filtered = q
         ? npiProjects.filter(p => {
             const fam = familyById(p.prod_family);
@@ -4191,7 +4318,7 @@ function openDrawer(project, step, focusDocCode) {
     code = code.trim().toUpperCase();
     if (!code) { alert('Document code cannot be empty.'); return; }
     // Must not collide with a global doctype id
-    if (CFG.document_types.some(function(d) { return d.doctype_id === code; })) {
+    if (allDocTypes().some(function(d) { return d.doctype_id === code; })) {
       alert('"' + code + '" is already a global document type. Custom documents must use a new code.');
       return;
     }
@@ -4624,7 +4751,8 @@ function viewInput(root) {
   const classDlOpts = changeTypes().map(t => '<option value="Type ' + esc(t.type_id) + ' — ' + esc(t.name) +
     (t.cycle_time_days == null ? ' (cycle TBD)' : ' (' + t.cycle_time_days + ' d)') + '">').join('');
 
-  g.appendChild(fld('Process', '<select id="npProc"><option>NPI</option><option>ECN</option></select>'));
+  g.appendChild(fld('Process', '<select id="npProc">' + pillarDefs().map(pd => '<option value="' + esc(pd.id) + '">' + esc(pd.id) +
+    (pd.name && pd.name !== pd.id ? ' — ' + esc(pickLang(pd.name, pd.name_vi)) : '') + '</option>').join('') + '</select>'));
   g.appendChild(fld('Family ID *', '<input id="npFamId" list="fgList" placeholder="9649LP, 5612, …">' +
     '<datalist id="fgList">' + known.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'));
   g.appendChild(fld('Change / project type *', '<input id="npClass" list="classList" placeholder="— type or pick —">' +
@@ -4664,7 +4792,7 @@ function viewInput(root) {
     if (!t) { ctNote.style.display = 'none'; return; }
     const override = $('#npTargetDate').value;
     const tgt = override || targetDateFor(t.type_id, $('#npPrf').value);
-    const runs = proc === 'NPI' ? t.npi_steps : t.ecn_steps;
+    const runs = ctStepsFor(t, proc) || allStepsOf(proc).map(s => s.step_id);
     const all = allStepsOf(proc);
     const skipped = all.filter(s => (runs || []).indexOf(s.step_id) < 0);
     const fam = familyById($('#npFamId').value.trim());
@@ -5047,7 +5175,7 @@ function viewInput(root) {
     const projOpts = TRK.lb_projects.map(r => '<option value="' + esc(r.project_id) + '">' + esc(r.project_id) +
       (r.prod_family ? ' — ' + esc((familyById(r.prod_family) || {}).prod_family_name || r.prod_family) : '') + '</option>').join('');
     // combobox format: value shown to user is "DOCTYPE_ID — Name", normalised at read time
-    const docDlOpts = CFG.document_types.map(d => '<option value="' + esc(d.doctype_id) + ' — ' + esc(d.name) + '">').join('');
+    const docDlOpts = allDocTypes().map(d => '<option value="' + esc(d.doctype_id) + ' — ' + esc(d.name) + '">').join('');
 
     form.className = '';
     form.innerHTML = '<h3>Confirm before filing — ' + files.length + ' file' + (files.length === 1 ? '' : 's') + '</h3>' +
@@ -5108,7 +5236,7 @@ function viewInput(root) {
           // codes, so labelling one of those would echo the user's own text back
           // twice — "CP — Control Plan — CP — Control Plan" — and grow on every
           // redraw. A free-typed code is shown exactly as typed.
-          const d = CFG.document_types.find(x => x.doctype_id === st.doc);
+          const d = allDocTypes().find(x => x.doctype_id === st.doc);
           ds.value = d ? (d.doctype_id + ' — ' + d.name) : st.doc;
         }
         syncStepSelect(tr, st, p, false);
@@ -5243,6 +5371,307 @@ function viewInput(root) {
   }
 
 
+}
+
+/* ===================================================================== */
+/* v11 R3 - TAB: Document Vault (cross-project, revision-aware search)   */
+/* ===================================================================== */
+/* One row per DOCUMENT (project + step + doc type) with its active revision
+   inline. Filtering and paging happen on the server (/api/vault/search) -
+   this view never scans the full store dump. Filter state lives outside the
+   view so the 15 s auto-reload redraw keeps it. */
+var vaultState = { q: '', pillar: '', family: '', doc: '', pic: '', dept: '', from: '', to: '', status: '', stale: false, page: 1, size: 50 };
+function viewVault(root) {
+  root.appendChild(pageHeader(i18n('vaultTitle'), i18n('vaultSub')));
+  const bar = el('div', 'filters vault-filters');
+  const sel = (id, label) => '<label for="' + id + '">' + label + '</label><select id="' + id + '"></select>';
+  bar.innerHTML =
+    '<input id="vq" type="search" placeholder="Search file name, description, project, document…" style="min-width:260px">' +
+    sel('vPillar', 'Pillar') + sel('vFam', 'Family') + sel('vDoc', 'Doc type') + sel('vPic', 'PIC') + sel('vDept', 'Dept') +
+    '<label for="vStatus">Status</label><select id="vStatus"><option value="">Any</option><option value="Active">Active</option><option value="Removed">Removed</option></select>' +
+    '<label for="vFrom">From</label><input id="vFrom" type="date"><label for="vTo">To</label><input id="vTo" type="date">' +
+    '<label class="vault-stale-chk"><input id="vStale" type="checkbox"> stale approvals only</label>' +
+    '<button id="vReset" type="button">Reset</button>';
+  root.appendChild(bar);
+  const out = el('div', 'vault-results');
+  root.appendChild(out);
+
+  const ids = { q: 'vq', pillar: 'vPillar', family: 'vFam', doc: 'vDoc', pic: 'vPic', dept: 'vDept', status: 'vStatus', from: 'vFrom', to: 'vTo' };
+  Object.keys(ids).forEach(k => { const e = $('#' + ids[k], bar); if (e.tagName !== 'SELECT' || k === 'status') e.value = vaultState[k]; });
+  $('#vStale', bar).checked = !!vaultState.stale;
+
+  let seq = 0, timer = null;
+  const fillSelect = (id, values, current, allLabel, labelOf) => {
+    const s = $('#' + id, bar);
+    const vals = values.slice();
+    if (current && vals.indexOf(current) < 0) vals.unshift(current);
+    s.innerHTML = '<option value="">' + esc(allLabel) + '</option>' + vals.map(v => '<option value="' + esc(v) + '"' + (v === current ? ' selected' : '') + '>' + esc(labelOf ? labelOf(v) : v) + '</option>').join('');
+  };
+  const run = async () => {
+    const my = ++seq;
+    const qs = new URLSearchParams();
+    ['q', 'pillar', 'family', 'doc', 'pic', 'dept', 'status', 'from', 'to'].forEach(k => { if (vaultState[k]) qs.set(k, vaultState[k]); });
+    if (vaultState.stale) qs.set('stale', '1');
+    qs.set('page', vaultState.page); qs.set('size', vaultState.size);
+    out.innerHTML = '<p class="note">Searching…</p>';
+    let res;
+    try {
+      const r = await fetch('/api/vault/search?' + qs.toString(), { cache: 'no-store' });
+      if (!r.ok) throw await API.err(r);
+      res = await r.json();
+    } catch (e) { if (my === seq) out.innerHTML = '<p class="note" style="color:var(--bad)">Search failed: ' + esc(e.message) + '</p>'; return; }
+    if (my !== seq) return;   // a newer search superseded this one
+    const f = res.facets || {};
+    // every configured pillar, not only those that already have documents
+    fillSelect('vPillar', pillarDefs().map(pd => pd.id), vaultState.pillar, 'All pillars', v => pillarName(v));
+    fillSelect('vFam', f.families || [], vaultState.family, 'All families', v => { const fm = familyById(v); return fm ? fm.prod_family_name + ' (' + v + ')' : v; });
+    fillSelect('vDoc', f.docs || [], vaultState.doc, 'All doc types', v => v + ' — ' + docTypeById(v).name);
+    fillSelect('vPic', f.pics || [], vaultState.pic, 'Anyone');
+    fillSelect('vDept', f.depts || [], vaultState.dept, 'All departments');
+    renderVaultResults(out, res, run);
+  };
+  const onChange = () => {
+    Object.keys(ids).forEach(k => { vaultState[k] = $('#' + ids[k], bar).value.trim(); });
+    vaultState.stale = $('#vStale', bar).checked;
+    vaultState.page = 1;
+    run();
+  };
+  bar.querySelectorAll('select, input[type="date"], input[type="checkbox"]').forEach(e => { e.onchange = onChange; });
+  $('#vq', bar).oninput = () => { clearTimeout(timer); timer = setTimeout(onChange, 300); };
+  $('#vReset', bar).onclick = () => {
+    vaultState = { q: '', pillar: '', family: '', doc: '', pic: '', dept: '', from: '', to: '', status: '', stale: false, page: 1, size: 50 };
+    show('vault');
+  };
+  run();
+}
+function renderVaultResults(out, res, rerun) {
+  out.innerHTML = '';
+  const total = res.total || 0;
+  const from = total ? (res.page - 1) * res.size + 1 : 0;
+  const to = Math.min(total, res.page * res.size);
+  const head = el('div', 'vault-summary');
+  head.innerHTML = '<b>' + total + '</b> document' + (total === 1 ? '' : 's') + (total ? ' · showing ' + from + '–' + to : '');
+  out.appendChild(head);
+  if (!total) { out.appendChild(el('p', 'note', 'No document matches these filters.')); return; }
+  const wrap = el('div', 'scroll');
+  const t = el('table', 'vault-table');
+  t.innerHTML = '<thead><tr><th>Project</th><th>Pillar</th><th>Document</th><th>Step</th><th>Rev</th><th>PIC</th><th>Filed</th><th>Status</th><th></th></tr></thead>';
+  const tb = el('tbody');
+  res.rows.forEach(r => {
+    const tr = el('tr');
+    const statusCls = r.status === 'Removed' ? badgeClass('NO_DATA') : badgeClass('COMPLETE');
+    tr.innerHTML =
+      '<td><b>' + esc(r.project_id) + '</b><div class="note">' + esc(r.family || '') + '</div></td>' +
+      '<td>' + esc(pillarName(r.process)) + '</td>' +
+      '<td><b>' + esc(r.doc_code) + '</b><div class="note">' + esc(r.doc_name || '') + (r.owner_dept ? ' · ' + esc(r.owner_dept) : '') + '</div>' +
+        (r.file_name ? '<div class="note"><code>' + esc(r.file_name) + '</code></div>' : '') +
+        (r.change_reason ? '<div class="note">Change: ' + esc(r.change_reason) + '</div>' : '') + '</td>' +
+      '<td>' + esc(r.step_key) + '<div class="note">' + esc(r.step_name || '') + '</div></td>' +
+      '<td>' + (r.rev ? '<span class="badge bg-secondary rev-badge">rev ' + esc(r.rev) + '</span>' + (r.revisions > 1 ? '<div class="note">' + r.revisions + ' revisions</div>' : '') : '—') + '</td>' +
+      '<td>' + esc(r.pic || '') + '</td>' +
+      '<td>' + esc(fmtStamp(r.date)) + '</td>' +
+      '<td><span class="' + statusCls + '">' + esc(r.status) + '</span>' +
+        (r.stale ? '<div>' + staleBadgeHtml({ docs: [r.doc_code], approved_utc: '' }).replace(/title="[^"]*"/, 'title="The gate was signed before this revision was filed"') + '</div>' : '') + '</td><td class="vault-acts"></td>';
+    const acts = tr.lastChild;
+    const project = projById(r.project_id);
+    const step = project ? allStepsOf(project.process).find(s => stepKeyOf(project.process, s) === r.step_key) : null;
+    const viewUrl = r.kind === 'link' ? r.link_url : evidenceViewerUrl(r.file_path);
+    if (viewUrl) {
+      const a = el('a', 'btn btn-sm', 'Open');
+      a.href = viewUrl; a.target = '_blank'; a.rel = 'noopener';
+      acts.appendChild(a);
+    }
+    if (project && step && r.rev) {
+      const h = el('button', 'sm', 'History');
+      h.onclick = () => openHistoryModal(project, step, r.doc_code);
+      acts.appendChild(h);
+      if (r.kind !== 'link' && r.status !== 'Removed') {
+        const nr = el('button', 'sm', 'New revision');
+        nr.onclick = () => pickNewRevision(project, r.step_key, r.doc_code, rerun);
+        acts.appendChild(nr);
+      }
+    }
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); wrap.appendChild(t); out.appendChild(wrap);
+  if (total > res.size) {
+    const pager = el('div', 'filters vault-pager');
+    const prev = el('button', '', '‹ Previous'); prev.disabled = res.page <= 1;
+    const next = el('button', '', 'Next ›'); next.disabled = to >= total;
+    prev.onclick = () => { vaultState.page = Math.max(1, res.page - 1); rerun(); };
+    next.onclick = () => { vaultState.page = res.page + 1; rerun(); };
+    pager.appendChild(prev);
+    pager.appendChild(el('span', 'note', 'page ' + res.page + ' of ' + Math.ceil(total / res.size)));
+    pager.appendChild(next);
+    out.appendChild(pager);
+  }
+}
+
+/* ---- v11 R4: Pillars (processes) - admin editor ------------------------ */
+const PILLAR_FEATURES = [
+  ['ppap', 'PPAP package sub-view + matrix column'],
+  ['mwer', 'MWER record on steps whose name mentions MWER'],
+  ['trial_by_step_name', 'Trial quantities on "trial production execution" steps'],
+  ['gate_grouped_matrix', 'Dashboard matrix grouped by gate'],
+  ['stage_completion', 'Stage-completion cards on the dashboard']
+];
+function rawPillarList() {
+  const src = (CFG.pillars && CFG.pillars.length) ? CFG.pillars : LEGACY_PILLARS;
+  return JSON.parse(JSON.stringify(src));
+}
+function pillarsCard() {
+  const card = el('div', 'card pillars-card');
+  const hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'Pillars (processes)')); card.appendChild(hdr);
+  const body = el('div', 'card-body');
+  body.appendChild(el('p', 'note', 'Each pillar is a stage-gate process with its own steps, document types and name for the responsible person. ' +
+    'A pillar added here gets its own tab, dashboard matrix, Gantt rows, revision history and Vault search without any code change. ' +
+    'NPI and ECN keep their step definitions in npi_workflow / ecn_workflow.'));
+  const t = el('table', 'pillar-table');
+  t.innerHTML = '<thead><tr><th>ID</th><th>Name</th><th>Steps</th><th>Signed gates</th><th>Responsible label</th><th>Own doc types</th><th>Features</th><th>Projects</th><th></th></tr></thead>';
+  const tb = el('tbody');
+  pillarDefs().forEach(pd => {
+    const tr = el('tr');
+    const feats = PILLAR_FEATURES.filter(f => pd.features[f[0]]).map(f => f[0]).join(', ') || '—';
+    tr.innerHTML = '<td><b>' + esc(pd.id) + '</b></td><td>' + esc(pd.name) + (pd.name_vi ? '<div class="note">' + esc(pd.name_vi) + '</div>' : '') + '</td>' +
+      '<td>' + pd.steps.length + (pd.workflow ? '<div class="note">from ' + esc(pd.workflow) + '</div>' : '') + '</td>' +
+      '<td>' + (pd.gate_mode === 'flagged' ? 'flagged steps' : 'every step') + '</td>' +
+      '<td>' + esc(pd.pic_label) + '</td><td>' + pd.doc_types.length + '</td><td class="note">' + esc(feats) + '</td>' +
+      '<td>' + projectsOf(pd.id).length + '</td><td></td>';
+    const b = el('button', 'sm', 'Edit');
+    b.onclick = () => editPillarModal(pd);
+    tr.lastChild.appendChild(b);
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  const scroll = el('div', 'scroll'); scroll.appendChild(t); body.appendChild(scroll);
+  const add = el('button', 'primary', 'Add pillar');
+  add.style.marginTop = '8px';
+  add.onclick = () => editPillarModal(null);
+  body.appendChild(add);
+  card.appendChild(body);
+  return card;
+}
+function editPillarModal(pd) {
+  const isNew = !pd;
+  const raw = pd ? JSON.parse(JSON.stringify(pd.raw)) : { features: {}, steps: [{ step_id: 1, step_name: '', required_evidence_doctypes: [], conditional_evidence_doctypes: [], gate_clearance_required: true }], doc_types: [] };
+  const ownsSteps = !raw.workflow;
+  const scrim = el('div', 'modal-scrim');
+  const box = el('div', 'modal pillar-modal');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-labelledby', 'pmTitle');
+  const v = x => esc(x == null ? '' : String(x));
+  let html = '<h2 id="pmTitle">' + (isNew ? 'Add pillar' : 'Edit pillar ' + v(raw.process_id)) + '</h2><div class="pm-body">' +
+    '<div class="grid2">' +
+    '<div class="fld"><span>ID * (prefixes project IDs)</span><input id="pmId" value="' + v(raw.process_id) + '"' + (isNew ? '' : ' disabled') + ' placeholder="e.g. EEM"></div>' +
+    '<div class="fld"><span>Icon</span><select id="pmIcon">' + PILLAR_ICONS.map(i => '<option' + (i === (raw.icon || 'clipboard-check') ? ' selected' : '') + '>' + i + '</option>').join('') + '</select></div>' +
+    '<div class="fld"><span>Name *</span><input id="pmName" value="' + v(raw.name) + '"></div>' +
+    '<div class="fld"><span>Name (Vietnamese)</span><input id="pmNameVi" value="' + v(raw.name_vi) + '"></div>' +
+    '<div class="fld"><span>Responsible-person label (shown where NPI says "PIC")</span><input id="pmPic" value="' + v(raw.pic_label || 'PIC') + '"></div>' +
+    '<div class="fld"><span>Responsible-person label (Vietnamese)</span><input id="pmPicVi" value="' + v(raw.pic_label_vi) + '"></div>' +
+    '<div class="fld"><span>Signed gates</span><select id="pmGate"><option value="all"' + (raw.gate_mode !== 'flagged' ? ' selected' : '') + '>Every step is a signed gate</option>' +
+      '<option value="flagged"' + (raw.gate_mode === 'flagged' ? ' selected' : '') + '>Only steps marked "gate"</option></select></div>' +
+    '</div><h3>Features</h3><div class="pm-feats">' +
+    PILLAR_FEATURES.map(f => '<label><input type="checkbox" data-feat="' + f[0] + '"' + ((raw.features || {})[f[0]] ? ' checked' : '') + '> ' + esc(f[1]) + '</label>').join('') +
+    '</div><h3>Steps</h3>';
+  if (ownsSteps) {
+    html += '<p class="note">Document codes are comma-separated and must exist in the shared catalogue or in this pillar\'s own document types below.</p>' +
+      '<table class="pm-steps"><thead><tr><th>#</th><th>Step name *</th><th>Required documents</th><th>If applicable</th><th>Gate</th><th></th></tr></thead><tbody></tbody></table>' +
+      '<button type="button" class="sm" id="pmAddStep">Add step</button>';
+  } else {
+    html += '<p class="note">Steps come from <code>' + v(raw.workflow) + '</code> in config.json (' + (pd ? pd.steps.length : 0) + ' steps) and are not edited here.</p>';
+  }
+  html += '<h3>Own document types</h3><p class="note">Added to the shared catalogue for this pillar only.</p>' +
+    '<table class="pm-docs"><thead><tr><th>Code *</th><th>Name *</th><th>Owner dept</th><th></th></tr></thead><tbody></tbody></table>' +
+    '<button type="button" class="sm" id="pmAddDoc">Add document type</button>' +
+    '<p class="note pm-err" style="color:var(--bad);display:none"></p></div>';
+  box.innerHTML = html;
+
+  const stepBody = box.querySelector('.pm-steps tbody');
+  const addStepRow = s => {
+    const tr = el('tr');
+    tr.innerHTML = '<td><input class="pm-sid" type="number" min="1" style="width:56px" value="' + v(s.step_id) + '"></td>' +
+      '<td><input class="pm-sname" value="' + v(s.step_name) + '"></td>' +
+      '<td><input class="pm-sreq" value="' + v((s.required_evidence_doctypes || []).join(', ')) + '"></td>' +
+      '<td><input class="pm-scond" value="' + v((s.conditional_evidence_doctypes || []).join(', ')) + '"></td>' +
+      '<td><input class="pm-sgate" type="checkbox"' + (s.gate_clearance_required !== false ? ' checked' : '') + '></td><td></td>';
+    const rm = el('button', 'sm', 'Remove'); rm.type = 'button'; rm.onclick = () => tr.remove();
+    tr.lastChild.appendChild(rm);
+    stepBody.appendChild(tr);
+  };
+  if (stepBody) {
+    (raw.steps || []).forEach(addStepRow);
+    box.querySelector('#pmAddStep').onclick = () => addStepRow({ step_id: stepBody.children.length + 1, step_name: '', gate_clearance_required: true });
+  }
+  const docBody = box.querySelector('.pm-docs tbody');
+  const addDocRow = d => {
+    const tr = el('tr');
+    tr.innerHTML = '<td><input class="pm-did" value="' + v(d.doctype_id) + '" style="width:120px"></td><td><input class="pm-dname" value="' + v(d.name) + '"></td>' +
+      '<td><input class="pm-ddept" value="' + v(d.owner_dept) + '" style="width:120px"></td><td></td>';
+    const rm = el('button', 'sm', 'Remove'); rm.type = 'button'; rm.onclick = () => tr.remove();
+    tr.lastChild.appendChild(rm);
+    docBody.appendChild(tr);
+  };
+  (raw.doc_types || []).forEach(addDocRow);
+  box.querySelector('#pmAddDoc').onclick = () => addDocRow({});
+
+  const acts = el('div', 'acts');
+  const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+  const onEsc = e => { if (e.key === 'Escape') close(); };
+  const err = msg => { const e = box.querySelector('.pm-err'); e.textContent = msg; e.style.display = msg ? '' : 'none'; };
+  const post = async list => {
+    try {
+      await API.post('/api/config/pillars', { user: getUser(), pillars: list });
+    } catch (e) { err(e.message); return false; }
+    close();
+    await refreshSilently();
+    show('settings');
+    return true;
+  };
+  if (!isNew && !projectsOf(raw.process_id).length) {
+    const del = el('button', 'danger', 'Delete pillar');
+    del.onclick = () => post(rawPillarList().filter(x => x.process_id !== raw.process_id));
+    acts.appendChild(del);
+  }
+  const no = el('button', '', 'Cancel'); no.onclick = close;
+  const yes = el('button', 'primary', 'Save pillar');
+  const codes = s => s.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
+  yes.onclick = () => {
+    const out = raw;
+    out.process_id = (box.querySelector('#pmId').value || '').trim().toUpperCase();
+    out.name = box.querySelector('#pmName').value.trim();
+    out.name_vi = box.querySelector('#pmNameVi').value.trim();
+    out.pic_label = box.querySelector('#pmPic').value.trim() || 'PIC';
+    out.pic_label_vi = box.querySelector('#pmPicVi').value.trim();
+    out.gate_mode = box.querySelector('#pmGate').value;
+    out.icon = box.querySelector('#pmIcon').value;
+    out.features = {};
+    box.querySelectorAll('[data-feat]').forEach(c => { if (c.checked) out.features[c.getAttribute('data-feat')] = true; });
+    if (ownsSteps) {
+      out.steps = Array.prototype.map.call(stepBody.children, tr => ({
+        step_id: Number(tr.querySelector('.pm-sid').value),
+        step_name: tr.querySelector('.pm-sname').value.trim(),
+        required_evidence_doctypes: codes(tr.querySelector('.pm-sreq').value),
+        conditional_evidence_doctypes: codes(tr.querySelector('.pm-scond').value),
+        gate_clearance_required: tr.querySelector('.pm-sgate').checked
+      }));
+    }
+    out.doc_types = Array.prototype.map.call(docBody.children, tr => ({
+      doctype_id: tr.querySelector('.pm-did').value.trim(),
+      name: tr.querySelector('.pm-dname').value.trim(),
+      owner_dept: tr.querySelector('.pm-ddept').value.trim()
+    })).filter(d => d.doctype_id || d.name);
+    const list = rawPillarList();
+    const i = list.findIndex(x => x.process_id === (isNew ? out.process_id : raw.process_id));
+    if (isNew && i >= 0) { err('A pillar with id ' + out.process_id + ' already exists.'); return; }
+    if (i >= 0) list[i] = out; else list.push(out);
+    post(list);
+  };
+  acts.appendChild(no); acts.appendChild(yes);
+  box.appendChild(acts);
+  scrim.appendChild(box);
+  scrim.onclick = e => { if (e.target === scrim) close(); };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(scrim);
+  (isNew ? box.querySelector('#pmId') : box.querySelector('#pmName')).focus();
 }
 
 /* ===================================================================== */
@@ -5909,7 +6338,7 @@ function gateActions(project, proc, step, g, redraw) {
         const note = noteRaw;
         await API.action('lb_approvals', {
           project_id: project.project_id, step_key: sk, deliverable_id: '', approved_by: who, approved_utc: new Date().toISOString(),
-          approval_type: proc === 'NPI' ? 'Evidence-Based' : 'Milestone', evidence_count: g.ev.length, comments: note
+          approval_type: (pillarDef(proc) || {}).approval_type || (isGated(proc, { gate_clearance_required: false }) ? 'Evidence-Based' : 'Milestone'), evidence_count: g.ev.length, comments: note
         });
         await API.action('lb_gates', {
           project_id: project.project_id, process: proc, step_key: sk, step_num: step.step_id, step_name: step.step_name,
@@ -6198,21 +6627,62 @@ function projectListRow(project, proc) {
   return row;
 }
 
-function viewNpi(root) {
-  root.appendChild(pageHeader(i18n('npiTitle'), i18n('npiSub')));
-  const b = el('div', 'banner');
-  b.innerHTML = '<b>NPI gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
-    'and a named person signs. Click a project to open its detail — gate approval, filing, and Authorise bypass all live in that sidebar now.';
-  root.appendChild(b);
+/* v11 R4 - one view for every pillar. PPAP gets its own sub-view where the
+   pillar has the ppap feature; everything else is the flat project list, and
+   the drawer carries approval, filing, MWER and trial quantities. */
+function viewPillar(root, pid) {
+  const pd = pillarDef(pid);
+  if (!pd) { root.appendChild(el('p', 'note', 'Unknown process ' + pid)); return; }
+  root.appendChild(pageHeader(pillarTitle(pd), pillarSubtitle(pd)));
+  const withPpap = !!pd.features.ppap;
+  const tabId = pillarTabId(pid);
+  if (withPpap) {
+    const seg = el('div', 'seg');
+    [['steps', 'Process steps'], ['ppap', 'PPAP package']].forEach(([k, l]) => {
+      const bt = el('button', ecnMode === k ? 'on' : '', l); bt.onclick = () => { ecnMode = k; show(tabId); }; seg.appendChild(bt);
+    });
+    root.appendChild(seg);
+  }
 
-  const projects = projectsOf('NPI');
+  const projects = projectsOf(pid);
   if (!projects.length) {
     const p = el('div', 'card'); const pb = el('div', 'card-body');
-    pb.appendChild(el('p', 'note', 'No NPI projects registered yet — use the Input tab.'));
+    pb.appendChild(el('p', 'note', 'No ' + pickLang(pd.name, pd.name_vi) + ' projects registered yet — use the Input tab.'));
     p.appendChild(pb); root.appendChild(p); return;
   }
+
+  if (withPpap && ecnMode === 'ppap') {
+    // PPAP is inherently a single-project checklist, so it keeps a project
+    // picker — just a plain <select>, not the removed tree/accordion.
+    if (!projects.some(p => p.project_id === ecnSel)) ecnSel = projects[0].project_id;
+    const pickBar = el('div', 'filters');
+    pickBar.appendChild(el('label', null, 'Project'));
+    const sel = el('select');
+    sel.innerHTML = projects.map(p => '<option value="' + esc(p.project_id) + '"' + (p.project_id === ecnSel ? ' selected' : '') + '>' +
+      esc(p.project_id) + ' — ' + esc((familyById(p.prod_family) || {}).prod_family_name || p.prod_family) + '</option>').join('');
+    sel.onchange = () => { ecnSel = sel.value; show(tabId); };
+    pickBar.appendChild(sel);
+    root.appendChild(pickBar);
+    root.appendChild(ppapSection(projects.find(p => p.project_id === ecnSel) || projects[0]));
+    return;
+  }
+
+  const b = el('div', 'banner');
+  const nm = esc(pickLang(pd.name, pd.name_vi));
+  const extras = (pd.features.mwer ? ', MWER records' : '') + (pd.features.trial_by_step_name ? ', trial quantities' : '');
+  if (pd.banner) b.innerHTML = esc(pd.banner);
+  else if (pd.gate_mode === 'flagged') {
+    const gatedIds = pd.steps.filter(s => s.gate_clearance_required).map(s => s.step_id).join(', ');
+    b.innerHTML = '<b>' + nm + ' gates are signed milestones.</b> Only steps <b>' + esc(gatedIds || 'none') + '</b> are signed; the rest are tracked. ' +
+      'Click a project to open its detail — gate approval, filing' + extras + ' all live in that sidebar.';
+  } else {
+    b.innerHTML = '<b>' + nm + ' gates are strict.</b> A step closes only when every required document is filed, no issue is open against it, ' +
+      'and a named person signs. Click a project to open its detail — gate approval, filing' + extras + ', and Authorise bypass all live in that sidebar now.';
+  }
+  root.appendChild(b);
+
   const list = el('div', 'project-list');
-  projects.forEach(project => list.appendChild(projectListRow(project, 'NPI')));
+  projects.forEach(project => list.appendChild(projectListRow(project, pid)));
   root.appendChild(list);
 }
 
@@ -6260,55 +6730,10 @@ function scopeNote(project, proc) {
   return d;
 }
 
-/* ===================================================================== */
-/* TAB — ECN (12 steps, lighter gates) + PPAP sub-section                */
-/* ===================================================================== */
-function viewEcn(root) {
-  root.appendChild(pageHeader(i18n('ecnTitle'), i18n('ecnSub')));
-  const seg = el('div', 'seg');
-  [['steps', 'Process steps'], ['ppap', 'PPAP package']].forEach(([k, l]) => {
-    const bt = el('button', ecnMode === k ? 'on' : '', l); bt.onclick = () => { ecnMode = k; show('ecn'); }; seg.appendChild(bt);
-  });
-  root.appendChild(seg);
-
-  const projects = projectsOf('ECN');
-  if (!projects.length) {
-    const p = el('div', 'card'); const pb = el('div', 'card-body');
-    pb.appendChild(el('p', 'note', 'No ECN projects registered yet — use the Input tab.'));
-    p.appendChild(pb); root.appendChild(p); return;
-  }
-
-  if (ecnMode === 'ppap') {
-    // PPAP is inherently a single-project checklist, so it keeps a project
-    // picker — just a plain <select>, not the removed tree/accordion.
-    if (!projects.some(p => p.project_id === ecnSel)) ecnSel = projects[0].project_id;
-    const pickBar = el('div', 'filters');
-    pickBar.appendChild(el('label', null, 'Project'));
-    const sel = el('select');
-    sel.innerHTML = projects.map(p => '<option value="' + esc(p.project_id) + '"' + (p.project_id === ecnSel ? ' selected' : '') + '>' +
-      esc(p.project_id) + ' — ' + esc((familyById(p.prod_family) || {}).prod_family_name || p.prod_family) + '</option>').join('');
-    sel.onchange = () => { ecnSel = sel.value; show('ecn'); };
-    pickBar.appendChild(sel);
-    root.appendChild(pickBar);
-    root.appendChild(ppapSection(projects.find(p => p.project_id === ecnSel) || projects[0]));
-    return;
-  }
-
-  const b = el('div', 'banner');
-  const gatedIds = allStepsOf('ECN').filter(s => s.gate_clearance_required).map(s => s.step_id).join(', ');
-  b.innerHTML = '<b>ECN gates are lighter than NPI.</b> Only steps <b>' + gatedIds + '</b> are signed milestones; the rest are tracked. ' +
-    'Click a project to open its detail — gate approval, filing, MWER records, and trial quantities all live in that sidebar now.';
-  root.appendChild(b);
-
-  const list = el('div', 'project-list');
-  projects.forEach(project => list.appendChild(projectListRow(project, 'ECN')));
-  root.appendChild(list);
-}
-
 /* MWER — the morning meeting or Zoom call whose summary email from the
    chair is the actual approval record at Wahl. */
 function mwerSection(project, step, redraw) {
-  const sk = stepKeyOf('ECN', step);
+  const sk = stepKeyOf(project.process, step);
   const existing = TRK.lb_mwer.filter(m => m.project_id === project.project_id && m.step_key === sk).slice(-1)[0];
   const box = el('div', 'sub');
   box.appendChild(el('h3', null, 'MWER approval record'));
@@ -6825,6 +7250,9 @@ function viewSettings(root) {
     urpBody.appendChild(urAddRow);
   }
   urp.appendChild(urpBody); root.appendChild(urp);
+
+  /* ---- pillars (v11 R4) ---- */
+  if (isAdmin()) root.appendChild(pillarsCard());
 
   /* ---- admin security PIN (v8.3 Section 4) ---- */
   if (isAdmin()) {
