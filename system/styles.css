@@ -1830,3 +1830,18 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 #uploadQueue .uq-err { flex-basis: 100%; color: var(--bad); font-size: 12px; }
 #uploadQueue .uq-acts { display: flex; gap: 8px; justify-content: flex-end; padding: 8px 12px 10px; }
 @media print { #uploadQueue { display: none !important; } }
+
+/* --------------------------------------------------------------- v11.1 --
+   Part-aware documents, the categorize/naming modals and the uncategorized-
+   files card. Colours come from existing tokens only, same as the v11 block
+   above, so both themes follow automatically without new palette work. */
+.part-badge {
+  font-weight: 600; background: var(--soft) !important; color: var(--ink) !important;
+  border: 1px solid var(--line-strong);
+}
+.categorize-modal, .naming-modal { width: min(720px, calc(100vw - 32px)); max-width: none; }
+.categorize-modal .scroll, .naming-modal .scroll { max-height: 50vh; overflow: auto; }
+.naming-seg-table td { vertical-align: middle; padding: 4px 6px; }
+.naming-seg-handle { display: flex; gap: 2px; }
+.naming-seg-handle button { padding: 2px 6px; }
+.naming-table td, .pillar-table td { vertical-align: top; }

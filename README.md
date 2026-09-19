@@ -459,6 +459,15 @@ five are cleared for a given project/step, the step cannot be approved. Which st
 - **Pre-v11 data** keeps absolute vault paths; they are re-rooted on each PC by folder name. Five cells
   in the existing tracking data (three Vietnamese upload file names, two audit notes) still carry
   mojibake from the pre-v11 request-decoding bug — they are left as recorded history.
+- **"Categorize" never renames or moves a file (v11.1).** A stray file adopted from the "Uncategorized
+  files" card is registered exactly where it sits; it does not get the standard naming convention
+  applied. Use New revision afterwards if it should be re-filed properly.
+- **A document's "required" status is still doc_code-level, not part-level (v11.1).** Filing one part
+  of a multi-part document satisfies the requirement; there is no way to declare "this document needs
+  exactly these 5 parts" and be warned if one is missing.
+- **Naming rules cannot express a condition** (v11.1) — e.g. "use the drawing shape only when a WVN
+  code is present, otherwise fall back to the generic one," which the old hard-coded DWG shape did. A
+  DWG filed with no WVN code now just gets an empty WVN segment rather than the generic shape.
 
 - Evidence presence is exactly what has been filed through this tool — there is no scan of any shared
   drive, so a document that exists elsewhere but was never uploaded here shows as `MISSING`.
@@ -547,6 +556,39 @@ Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) an
   dashboard slicers and the drawer's project search only knew NPI projects.
 - Tests: `tests\storage\test_storage.ps1` (two simulated PCs, 32 checks), `tests\v11\e2e_r1r2.js`
   (16), `tests\v11\e2e_r3r4.js` (32); the existing Playwright suite (51) passes unchanged.
+
+### v11.1.0 (2026-09-19)
+
+**Parts, a no-code naming standard, folder drop, uncategorized-file detection, an accurate Vault status.**
+
+- **A document can have more than one active file at once (`part_id`)** — appended to
+  `lb_deliverables`. `Set-DerivedRevisions` and `Get-VaultIndex` group by
+  `project + step + doc_code + part_id`, not just `doc_code`, so filing a drawing per BOM part under
+  one document type no longer supersedes every part but the last one — the exact failure this fixed.
+  Dropping more than one file at once (the drawer's dropzone, "+ Add part", or the Input tab's batch
+  table) prompts for each file's part / category before filing; a single file is unaffected (blank
+  part, same behaviour as before v11.1). History, New revision and the Vault are all part-scoped.
+- **File naming standard, editable with no code** — `config.json` `naming.rules[]`: an ordered list of
+  rules (first whose document-code list matches wins; a blank list is the default), each an ordered
+  list of *segments* — a field (document code, model, WVN/WNB, description, project ID, part, date,
+  time) or literal text — built and previewed live in **Settings → File naming standard**, no format
+  string to get right. Shipped seeded with the exact pre-v11.1 hard-coded shapes (default + DWG), so
+  upgrading changes no file name until an admin edits it. `POST /api/config/naming` (admin-only,
+  validated as a whole, same pattern as Pillars).
+- **Folder drop** — dropping a folder (Input tab, or a drawer dropzone) expands to every file inside it
+  via `webkitGetAsEntry`; if the folder's own name matches a registered project (by project_id or
+  family, ignoring case/punctuation), that project is pre-selected. The Input tab's project field is
+  now a searchable combobox as well as a picker.
+- **Uncategorized vault files, surfaced** — `GET /api/vault/orphans` (built in R2, never wired to the
+  UI) now also reports each file's Windows owner, creation time and SHA-256, and excludes anything
+  recorded in the new append-only `lb_vault_ignored` store. The Input tab's new "Uncategorized files"
+  card lists every one prominently with who/when, **Categorize** (registers it in place — nothing is
+  renamed or moved) or **Not a deliverable** (dismisses it with a reason).
+- **Document Vault status fixed** — it read either `Active` or `Removed` regardless of whether anyone
+  had actually signed off; now `Filed` / `Approved` (the step's gate is signed or bypassed) / `Removed`,
+  the same promotion rule the dashboard already used. Vault rows also show the part badge.
+- Tests: `tests\v11_1\e2e_parts_naming_vault.js` (31 checks); `tests\storage\test_storage.ps1` (32),
+  `tests\v11\e2e_r1r2.js` (16) and `tests\v11\e2e_r3r4.js` (32) pass unchanged.
 
 ### v3.5.0 (2026-08-06)
 

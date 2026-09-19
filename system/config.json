@@ -1,6 +1,6 @@
 {
     "system_info":  {
-                        "version":  "11.0.0",
+                        "version":  "11.1.0",
                         "app_name":  "WVN NPI \u0026 ECN Command Center",
                         "deployment_path":  "C:\\Users\\nguyenhoang88502\\Documents\\University document\\Intern\\EPM_EEM_Thesis_Working\\05_MVP\\WVN_Stage_Gate_Command_Center",
                         "description":  "Early Product Management (EPM) stage-gate command center for Wahl Vietnam — WOS Pillar 09",
@@ -30,7 +30,7 @@
                                 "filename_conventions":  {
                                                              "DWG":  "PD[WVN_Code]_01 [Description]_[WNB_Code].[ext]",
                                                              "default":  "[doctype_id]_[Model]_[WVN_ID]_[WNB_ID]_[Description].[ext]",
-                                                             "note":  "Applied server-side on upload. Invalid characters become _, runs collapse, extension is lowercased, empty segments are dropped. Drawings keep spaces; everything else uses underscores."
+                                                             "note":  "v11.1: this is now a human-readable summary of the top-level naming.rules block below, which is what Get-StandardFileName actually reads and what Settings -> File naming standard edits. Kept here so this note still makes sense read on its own."
                                                          },
                                 "sharepoint_path":  "",
                                 "ticketing_center_note":  "The WVN_Ticketing_Center app shares system\tracking with this tool. Column order in its $Stores must stay identical - both parse positionally.",
@@ -1517,5 +1517,39 @@
                               "role":  "user"
                           }
                       ],
+    "naming":  {
+        "rules":  [
+            {
+                "id":  "drawing",
+                "label":  "Drawing (DWG)",
+                "doc_codes":  [ "DWG" ],
+                "segments":  [
+                    { "type": "text",  "value": "PD" },
+                    { "type": "field", "key": "wvn_id" },
+                    { "type": "text",  "value": "_01" },
+                    { "type": "text",  "value": " " },
+                    { "type": "field", "key": "description", "keep_spaces": true },
+                    { "type": "text",  "value": "_" },
+                    { "type": "field", "key": "wnb_id" }
+                ]
+            },
+            {
+                "id":  "default",
+                "label":  "Standard filing name (everything else)",
+                "doc_codes":  [],
+                "segments":  [
+                    { "type": "field", "key": "doc_code" },
+                    { "type": "text",  "value": "_" },
+                    { "type": "field", "key": "model" },
+                    { "type": "text",  "value": "_" },
+                    { "type": "field", "key": "wvn_id" },
+                    { "type": "text",  "value": "_" },
+                    { "type": "field", "key": "wnb_id" },
+                    { "type": "text",  "value": "_" },
+                    { "type": "field", "key": "description" }
+                ]
+            }
+        ]
+    },
     "admin_pin":  "1234"
 }

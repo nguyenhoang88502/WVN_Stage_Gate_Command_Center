@@ -275,7 +275,13 @@ $Stores = [ordered]@{
   # v11 appended revision_no, is_active, change_reason, superseded_utc. Only
   # change_reason is authored; the other three are DERIVED on every read (see
   # Set-DerivedRevisions) and written to the base file only by the backfill.
-  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week','revision_no','is_active','change_reason','superseded_utc')
+  # v11.1 appended part_id: one document type can need a different file per
+  # BOM part (e.g. a DWG per part on a multi-part FG). Set-DerivedRevisions
+  # groups by project+step+doc_code+part_id, so two parts filed under the same
+  # doc_code are independent "active" slots instead of one superseding the
+  # other. Blank (the default for every pre-v11.1 row) means "the one part",
+  # which reproduces today's behaviour exactly.
+  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week','revision_no','is_active','change_reason','superseded_utc','part_id')
   lb_doc_comments = @('comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc')
   # v2.3 — shared with the standalone WVN_Ticketing_Center, which points at
   # this same tracking folder. lb_ticket_events is append-only by convention:
@@ -295,11 +301,16 @@ $Stores = [ordered]@{
   # is no longer a gate condition anywhere, so nothing reads or writes it.
   lb_mwer         = @('mwer_id','project_id','step_key','meeting_type','meeting_date','attendees','summary','evidence_file','evidence_body','decision','conditions','logged_by','logged_utc')
   lb_audit        = @('log_id','timestamp_utc','user','action','project_id','object_type','object_id','change_from','change_to','detail','result')
+  # v11.1 — a file someone pasted straight into the vault, bypassing the app
+  # entirely, is never deleted or moved automatically (see /api/vault/orphans).
+  # "Ignore" just means "I looked, it is not a deliverable" and needs to be
+  # remembered so the same file does not keep reappearing on the Input tab.
+  lb_vault_ignored = @('ignore_id','file_path','ignored_by','ignored_utc','reason')
 }
 $IdPrefix = @{
   lb_gates='GATE'; lb_deliverables='DEL'; lb_approvals='APR'; lb_bypasses='BYP'; lb_issues='LFI';
   lb_ppap='PPAP'; lb_mwer='MWER'; lb_audit='LOG'; lb_doc_comments='CMT'
-  lb_tickets='TKT'; lb_ticket_events='EVT'; lb_sp_issues='SPI'
+  lb_tickets='TKT'; lb_ticket_events='EVT'; lb_sp_issues='SPI'; lb_vault_ignored='IGN'
 }
 
 function CsvPath { param([string]$Store) Join-Path $TrackingDir ($Store + '.csv') }
@@ -726,7 +737,12 @@ function Set-DerivedRevisions { param($Rows)
       $r.revision_no = ''; $r.is_active = ''; $r.superseded_utc = ''
       continue
     }
-    $k = [string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code
+    # v11.1: part_id joins the key so two BOM parts filed under the same
+    # doc_code are two independent revision chains, each with its own active
+    # row - not one superseding the other. Blank part_id (every row before
+    # v11.1, and every doc that only ever has one file) behaves exactly as
+    # before: one chain, one active revision.
+    $k = [string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code + '|' + [string]$r.part_id
     if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.Generic.List[object]; $order.Add($k) }
     $groups[$k].Add($r)
   }
@@ -948,23 +964,19 @@ function ConvertTo-NamePart {
   return $v.Trim('_', ' ', '.')
 }
 
-function Get-StandardFileName {
+function Get-LegacyStandardFileName {
+  # The two shapes that shipped hard-coded from v2.1 through v11.0 (see
+  # config.json deployment_defaults.filename_conventions for the human
+  # description). Kept as the built-in fallback for an install whose
+  # config.json has no naming.rules yet, and as what a "Reset to default"
+  # button in Settings restores.
   param([string]$DocType, [string]$Model, [string]$WvnId, [string]$WnbId, [string]$Description, [string]$OriginalName)
   $ext = ([System.IO.Path]::GetExtension($OriginalName)).ToLowerInvariant()
-  # fall back to the original stem when no description was given, so a file is
-  # never reduced to just its codes
   if (-not $Description) { $Description = [System.IO.Path]::GetFileNameWithoutExtension($OriginalName) }
-
-  # The drawing pattern is only meaningful with a WVN code — without one it
-  # degenerates to "PD_01 name.pdf", which reads like a real part code and is
-  # not. Fall through to the generic shape instead of minting a fake one.
   if ($DocType -eq 'DWG' -and (ConvertTo-NamePart $WvnId)) {
     $wvn  = ConvertTo-NamePart $WvnId
     $wnb  = ConvertTo-NamePart $WnbId
     $desc = ConvertTo-NamePart $Description -KeepSpaces
-    # Build from non-empty suffix segments, each carrying its own separator so
-    # every combination of blank inputs is provably safe — no orphaned space,
-    # no dangling underscore, no double separator.
     $name = 'PD' + $wvn + '_01'
     $suffix = @()
     if ($desc) { $suffix += [pscustomobject]@{ text = $desc; sep = ' ' } }
@@ -972,16 +984,137 @@ function Get-StandardFileName {
     foreach ($part in $suffix) { $name += $part.sep + $part.text }
     return $name + $ext
   }
-
   $parts = @($DocType, $Model, $WvnId, $WnbId, $Description) |
            ForEach-Object { ConvertTo-NamePart $_ } |
            Where-Object { $_ }
   if (-not $parts.Count) { return (ConvertTo-NamePart $OriginalName) + $ext }
-  # ConvertTo-NamePart already trims '_', ' ', '.' from every part and
-  # collapses internal runs of underscores, so the join can never produce a
-  # leading/trailing separator or a double underscore. The outer Trim is a
-  # belt-and-suspenders guard against a single-element array edge case.
   return (($parts -join '_').Trim('_', ' ', '.')) + $ext
+}
+
+# ------------------------------------------- v11.1 configurable naming -----
+# Non-technical admins edit this from Settings -> File naming standard: an
+# ordered list of rules, each an ordered list of "segments" (a fixed field
+# like doc_code/description, or literal text), rather than a format string —
+# the whole point is that nobody has to type punctuation-sensitive syntax.
+# The first rule whose doc_codes list contains the document wins; a rule with
+# an empty doc_codes list is the default and only one of those should exist
+# (Test-NamingRules warns, doesn't enforce, since "last one wins" is still a
+# well-defined and recoverable outcome).
+function ConvertTo-NamingLiteral {
+  # A literal segment is admin-typed, on purpose (a separator, a prefix like
+  # "PD") - unlike ConvertTo-NamePart/Get-SafeName, it must come back
+  # UNCHANGED except for characters Windows genuinely cannot put in a file
+  # name at all, or a whitespace-only or underscore-only literal (a perfectly
+  # normal separator) would be trimmed away to nothing.
+  param([string]$Value)
+  $v = if ($null -eq $Value) { '' } else { [string]$Value }
+  foreach ($c in [System.IO.Path]::GetInvalidFileNameChars()) { $v = $v.Replace($c, '_') }
+  return $v
+}
+function Get-NamingFieldValue {
+  param([string]$Key, [hashtable]$Values, [string]$OriginalName)
+  if ($Values.ContainsKey($Key)) { return [string]$Values[$Key] }
+  if ($Key -eq 'description') { return [System.IO.Path]::GetFileNameWithoutExtension($OriginalName) }
+  return ''
+}
+function Format-NamingTemplate {
+  param($Rule, [hashtable]$Values, [string]$OriginalName)
+  $ext = ([System.IO.Path]::GetExtension($OriginalName)).ToLowerInvariant()
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($seg in @($Rule.segments)) {
+    if ([string]$seg.type -eq 'text') { [void]$sb.Append((ConvertTo-NamingLiteral ([string]$seg.value))); continue }
+    $raw = Get-NamingFieldValue -Key ([string]$seg.key) -Values $Values -OriginalName $OriginalName
+    [void]$sb.Append((ConvertTo-NamePart $raw -KeepSpaces:([bool]$seg.keep_spaces)))
+  }
+  # A blank field leaves its neighbouring "_" separators doubled up (e.g. no
+  # WNB code between two underscore segments) - collapsed here exactly like
+  # the pre-v11.1 hard-coded shapes did, so "empty segments are dropped"
+  # keeps holding without every admin-authored rule having to special-case it.
+  $name = ($sb.ToString() -replace '_{2,}', '_').Trim('_', ' ', '.')
+  if (-not $name) { $name = ConvertTo-NamePart ([System.IO.Path]::GetFileNameWithoutExtension($OriginalName)) }
+  return $name + $ext
+}
+function Get-NamingRule {
+  param($Config, [string]$DocCode)
+  $rules = @($Config.naming.rules)
+  if (-not $rules -or -not $rules.Count) { return $null }
+  $code = ([string]$DocCode).ToUpperInvariant()
+  foreach ($r in $rules) {
+    $codes = @($r.doc_codes) | ForEach-Object { ([string]$_).ToUpperInvariant() }
+    if ($codes -and $codes.Count -and ($codes -contains $code)) { return $r }
+  }
+  foreach ($r in $rules) {
+    $codes = @($r.doc_codes)
+    if (-not $codes -or -not $codes.Count) { return $r }
+  }
+  return $null
+}
+# Every field a naming rule segment can reference, with a one-line label for
+# the Settings UI. Kept here (not just in app.js) so the server-rendered
+# preview endpoint and the validator both stay in sync with the real list.
+$NamingFieldDefs = @(
+  @{ key = 'doc_code';   label = 'Document code (e.g. DWG)' }
+  @{ key = 'model';      label = 'Model / family (e.g. 9649LP)' }
+  @{ key = 'wvn_id';     label = 'WVN code' }
+  @{ key = 'wnb_id';     label = 'WNB / customer number' }
+  @{ key = 'description';label = 'Description (falls back to the original file name)' }
+  @{ key = 'project_id'; label = 'Project ID' }
+  @{ key = 'part';       label = 'Part / category' }
+  @{ key = 'date';       label = 'Today''s date (YYYYMMDD)' }
+  @{ key = 'time';       label = 'Time of upload (HHMMSS)' }
+)
+
+function Get-StandardFileName {
+  param([string]$DocType, [string]$Model, [string]$WvnId, [string]$WnbId, [string]$Description, [string]$OriginalName, [string]$Category, [string]$ProjectId, $Config)
+  $cfg = if ($Config) { $Config } else { try { Get-Config } catch { $null } }
+  $rule = Get-NamingRule -Config $cfg -DocCode $DocType
+  if (-not $rule) { return Get-LegacyStandardFileName -DocType $DocType -Model $Model -WvnId $WvnId -WnbId $WnbId -Description $Description -OriginalName $OriginalName }
+  $now = [DateTime]::UtcNow
+  $values = @{
+    doc_code = $DocType; model = $Model; wvn_id = $WvnId; wnb_id = $WnbId
+    description = $Description; project_id = $ProjectId; part = $Category
+    date = $now.ToString('yyyyMMdd'); time = $now.ToString('HHmmss')
+  }
+  return Format-NamingTemplate -Rule $rule -Values $values -OriginalName $OriginalName
+}
+
+# Validates a whole draft rule list before it is saved. Returns error strings;
+# empty means the list is acceptable. Deliberately permissive about overlap
+# (first match wins, so ordering resolves it) but catches the mistakes that
+# would actually break filing: no segments, an unknown field key, two default
+# rules (silently ambiguous - whichever the admin listed last would win and
+# they would have no way to tell from the editor which one that is).
+function Test-NamingRules {
+  param($Rules)
+  $errs = @()
+  $list = @($Rules)
+  if (-not $list.Count) { return @('At least one naming rule is required.') }
+  $validKeys = @($script:NamingFieldDefs | ForEach-Object { $_.key })
+  $seenIds = @{}
+  $defaults = 0
+  foreach ($r in $list) {
+    $id = [string]$r.id
+    if (-not $id) { $errs += 'Every naming rule needs an id.'; continue }
+    if ($seenIds.ContainsKey($id)) { $errs += ("Naming rule id '" + $id + "' is used twice."); continue }
+    $seenIds[$id] = $true
+    if (-not ([string]$r.label).Trim()) { $errs += ("Naming rule " + $id + ": a label is required.") }
+    $codes = @($r.doc_codes)
+    if (-not $codes -or -not $codes.Count) { $defaults++ }
+    $segs = @($r.segments)
+    if (-not $segs.Count) { $errs += ("Naming rule " + $id + ": needs at least one segment (a field or literal text)."); continue }
+    $hasField = $false
+    foreach ($s in $segs) {
+      if ([string]$s.type -eq 'text') {
+        if (-not ([string]$s.value)) { $errs += ("Naming rule " + $id + ": a text segment cannot be empty - remove it or fill it in.") }
+        continue
+      }
+      $hasField = $true
+      if ($validKeys -notcontains [string]$s.key) { $errs += ("Naming rule " + $id + ": '" + [string]$s.key + "' is not a field this tool knows about.") }
+    }
+    if (-not $hasField) { $errs += ("Naming rule " + $id + ": needs at least one field, or every file with this rule gets the same name.") }
+  }
+  if ($defaults -gt 1) { $errs += ('More than one rule applies to "everything else" (an empty document-code list) - only the last one in the list would ever be used. Give every rule but one a specific document list.') }
+  return $errs
 }
 
 function Save-Evidence {
@@ -1964,21 +2097,33 @@ $script:VaultIndexCache = @{ sig = ''; docs = @() }
 function Get-VaultIndex { param($Config)
   # Signature first (Get-MergedStore is cheap when nothing changed), so a
   # 15 s poll with unchanged data never re-materialises a single row.
-  foreach ($s in @('lb_deliverables', 'lb_projects', 'lb_approvals')) { [void](Get-MergedStore $s) }
+  foreach ($s in @('lb_deliverables', 'lb_projects', 'lb_approvals', 'lb_bypasses')) { [void](Get-MergedStore $s) }
   $cfgStamp = ''
   try { $ci = Get-Item -LiteralPath $ConfigPath; $cfgStamp = [string]$ci.Length + '|' + [string]$ci.LastWriteTimeUtc.Ticks } catch { }
-  $sig = ((@('lb_deliverables', 'lb_projects', 'lb_approvals') | ForEach-Object { [string]$script:MergeCache[$_].sig }) -join '#') + '#' + $cfgStamp
+  $sig = ((@('lb_deliverables', 'lb_projects', 'lb_approvals', 'lb_bypasses') | ForEach-Object { [string]$script:MergeCache[$_].sig }) -join '#') + '#' + $cfgStamp
   if ($script:VaultIndexCache.sig -eq $sig) { return $script:VaultIndexCache.docs }
   $delivs = @(Read-Store 'lb_deliverables')
   $projects = @(Read-Store 'lb_projects')
   $approvals = @(Read-Store 'lb_approvals')
+  $bypasses = @(Read-Store 'lb_bypasses')
   $projById = @{}; foreach ($pr in $projects) { $projById[[string]$pr.project_id] = $pr }
   $docInfo = @{}; foreach ($dt in (Get-AllDocTypes $Config)) { $docInfo[[string]$dt.doctype_id] = $dt }
   $stale = Get-StaleApprovalMap -Config $Config -Approvals $approvals -Deliverables $delivs
+  # v11.1: a step whose gate is signed (or bypassed and still open) promotes
+  # every document filed under it from "Filed" to "Approved" - the same rule
+  # cellStateFor() applies client-side (an approved gate promotes filed to
+  # done). Vault had never carried this before; every document read either
+  # "Active" or "Removed" regardless of whether anyone had actually signed
+  # off on it, which is the bug the naming asked to fix.
+  $gateDone = @{}
+  foreach ($a in $approvals) { $gateDone[[string]$a.project_id + '|' + [string]$a.step_key] = $true }
+  foreach ($b in $bypasses) { if (-not $b.closed_utc) { $gateDone[[string]$b.project_id + '|' + [string]$b.step_key] = $true } }
   $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
   $order = New-Object System.Collections.Generic.List[string]
   foreach ($r in $delivs) {
-    $k = [string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code
+    # v11.1: part_id joins the key - see Set-DerivedRevisions for why. Each
+    # BOM part filed under the same doc_code becomes its own Vault row.
+    $k = [string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code + '|' + [string]$r.part_id
     if (-not $groups.ContainsKey($k)) { $groups[$k] = @{ revs = 0; active = $null; removed = $false }; $order.Add($k) }
     $g = $groups[$k]
     if ($r.status -eq 'Removed') { $g.removed = $true }
@@ -1995,15 +2140,18 @@ function Get-VaultIndex { param($Config)
     $st = Get-StepDef -Config $Config -StepKey $parts[1]
     $staleEntry = $stale[$parts[0] + '|' + $parts[1]]
     $isStale = [bool]($staleEntry -and (@($staleEntry.docs) -contains $parts[2]))
+    $status = if ($g.removed) { 'Removed' }
+              elseif ($gateDone.ContainsKey($parts[0] + '|' + $parts[1])) { 'Approved' }
+              else { 'Filed' }
     $o = @{
-      project_id = $parts[0]; step_key = $parts[1]; doc_code = $parts[2]
+      project_id = $parts[0]; step_key = $parts[1]; doc_code = $parts[2]; part_id = $parts[3]
       process = if ($pr) { [string]$pr.process } else { ($parts[1] -replace '-[^-]*$', '') }
       family = if ($pr) { [string]$pr.family } else { '' }
       prod_family = if ($pr) { [string]$pr.prod_family } else { '' }
       step_name = if ($st) { [string]$st.step_name } else { '' }
       doc_name = if ($dt) { [string]$dt.name } else { $parts[2] }
       owner_dept = if ($dt) { [string]$dt.owner_dept } else { '' }
-      status = if ($g.removed) { 'Removed' } else { 'Active' }
+      status = $status
       revisions = $g.revs
       rev = if ($a) { [string]$a.revision_no } else { '' }
       pic = if ($a) { [string]$a.uploaded_by } else { '' }
@@ -2016,7 +2164,7 @@ function Get-VaultIndex { param($Config)
       change_reason = if ($a) { [string]$a.change_reason } else { '' }
       stale = $isStale
     }
-    $o.search = (@($o.project_id, $o.doc_code, $o.doc_name, $o.file_name, $o.family, $o.step_name, $o.pic,
+    $o.search = (@($o.project_id, $o.doc_code, $o.doc_name, $o.file_name, $o.family, $o.step_name, $o.pic, $o.part_id,
       $(if ($a) { [string]$a.original_name + ' ' + [string]$a.description } else { '' })) -join ' ').ToLowerInvariant()
     $docs.Add($o)
   }
@@ -2240,16 +2388,20 @@ try {
         # the browser never filters the whole store for this, and the contract
         # stays the same when lb_deliverables is partitioned later.
         $qp = [string]$req.QueryString['project_id']; $qs = [string]$req.QueryString['step_key']; $qd = [string]$req.QueryString['doc_code']
+        # v11.1: optional - defaults to '' (the one part every pre-v11.1 row
+        # and every single-file document has), so an old caller that never
+        # heard of parts still gets exactly the rows it used to get.
+        $qpart = [string]$req.QueryString['part_id']
         if (-not $qp -or -not $qs -or -not $qd) {
           New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'project_id, step_key and doc_code are all required.' }
         } else {
-          $docRows = @(Read-Store 'lb_deliverables' | Where-Object { $_.project_id -ceq $qp -and $_.step_key -ceq $qs -and $_.doc_code -ceq $qd })
+          $docRows = @(Read-Store 'lb_deliverables' | Where-Object { $_.project_id -ceq $qp -and $_.step_key -ceq $qs -and $_.doc_code -ceq $qd -and [string]$_.part_id -ceq $qpart })
           $revs = @($docRows | Where-Object { $_.revision_no } | Sort-Object { [int]$_.revision_no } -Descending)
           $apprs = @(Read-Store 'lb_approvals' | Where-Object { $_.project_id -ceq $qp -and $_.step_key -ceq $qs })
           $appr = if ($apprs.Count) { $apprs[$apprs.Count - 1] } else { $null }
           $stale = Get-StaleApprovalMap -Config (Get-Config) -Approvals $apprs -Deliverables $docRows
           New-JsonResponse -Response $res -StatusCode 200 -Body @{
-            project_id = $qp; step_key = $qs; doc_code = $qd
+            project_id = $qp; step_key = $qs; doc_code = $qd; part_id = $qpart
             revisions = $revs
             removed = [bool](@($docRows | Where-Object { $_.status -eq 'Removed' }).Count)
             approval = $appr
@@ -2274,7 +2426,10 @@ try {
         } else {
           $activeSha = @{}
           foreach ($r in @(Read-Store 'lb_deliverables')) {
-            if ($r.is_active -eq 'YES' -and $r.sha256) { $activeSha[[string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code] = @{ sha = [string]$r.sha256; id = [string]$r.deliverable_id } }
+            # v11.1: keyed by part_id too - two parts of the same doc_code have
+            # independent active revisions, so a duplicate check must compare
+            # against the SAME part's active file, not just any part's.
+            if ($r.is_active -eq 'YES' -and $r.sha256) { $activeSha[[string]$r.project_id + '|' + [string]$r.step_key + '|' + [string]$r.doc_code + '|' + [string]$r.part_id] = @{ sha = [string]$r.sha256; id = [string]$r.deliverable_id } }
           }
           $results = New-Object System.Collections.Generic.List[object]
           $toAdd = New-Object System.Collections.Generic.List[object]
@@ -2282,7 +2437,7 @@ try {
           foreach ($row in $inRows) {
             $h = ConvertTo-Hashtable $row
             $h.Remove('deliverable_id')
-            $k = [string]$h['project_id'] + '|' + [string]$h['step_key'] + '|' + [string]$h['doc_code']
+            $k = [string]$h['project_id'] + '|' + [string]$h['step_key'] + '|' + [string]$h['doc_code'] + '|' + [string]$h['part_id']
             if (-not $h['project_id'] -or -not $h['step_key'] -or -not $h['doc_code']) {
               $results.Add(@{ ok = $false; error = 'project_id, step_key and doc_code are required.' }); continue
             }
@@ -2310,9 +2465,15 @@ try {
         }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/vault/orphans') {
-        # v11 R2: files in the vault that no tracking row points at - the
-        # "file saved, row never written" failure the upload queue exists to
-        # prevent. Read-only; nothing is moved or deleted.
+        # v11 R2 (surfaced on the Input tab in v11.1): files in the vault that
+        # no tracking row points at - either the "file saved, row never
+        # written" failure the upload queue exists to prevent, or someone
+        # pasting a file straight into the vault folder in Explorer, bypassing
+        # the app (and its audit trail) entirely. Read-only; nothing here is
+        # moved, renamed or deleted - "Categorize" (POST /api/action on
+        # lb_deliverables with this exact path) registers it in place, and
+        # "Ignore" (POST /api/action on lb_vault_ignored) just remembers that
+        # a human looked at it and it is not a deliverable.
         $refs = @{}
         foreach ($pair in @(@('lb_deliverables', 'file_path'), @('lb_issues', 'evidence_path'), @('lb_sp_issues', 'attachment_path'), @('lb_mwer', 'evidence_file'))) {
           foreach ($r in @(Read-Store $pair[0])) {
@@ -2320,14 +2481,33 @@ try {
             if ($v -and -not ($v -match '^[a-zA-Z][a-zA-Z0-9+.-]*://')) { try { $refs[[System.IO.Path]::GetFullPath((ConvertFrom-StoredPath $v))] = $true } catch { } }
           }
         }
+        $ignored = @{}
+        foreach ($r in @(Read-Store 'lb_vault_ignored')) { if ($r.file_path) { $ignored[[string]$r.file_path] = $r } }
         $all = @(if (Test-Path -LiteralPath $EvidenceDir) { Get-ChildItem -LiteralPath $EvidenceDir -Recurse -File -ErrorAction SilentlyContinue })
         $orph = New-Object System.Collections.Generic.List[object]
+        $ignoredCount = 0
         foreach ($f in $all) {
-          if (-not $refs.ContainsKey($f.FullName)) {
-            $orph.Add(@{ path = $f.FullName.Substring($EvidenceDir.TrimEnd('\').Length).TrimStart('\'); bytes = $f.Length; modified_utc = $f.LastWriteTimeUtc.ToString('o') })
+          if ($refs.ContainsKey($f.FullName)) { continue }
+          $rel = $f.FullName.Substring($EvidenceDir.TrimEnd('\').Length).TrimStart('\')
+          if ($ignored.ContainsKey($rel)) { $ignoredCount++; continue }
+          $owner = ''
+          try { $owner = (Get-Acl -LiteralPath $f.FullName).Owner } catch { }
+          $sha = ''
+          # A hash is nice-to-have (lets "Categorize" dedupe like a normal
+          # upload) but not worth stalling the whole list over one huge file.
+          if ($f.Length -le 50MB) {
+            try {
+              $shaAlg = [System.Security.Cryptography.SHA256]::Create()
+              try { $sha = ([BitConverter]::ToString($shaAlg.ComputeHash([System.IO.File]::ReadAllBytes($f.FullName)))).Replace('-', '').ToLowerInvariant() }
+              finally { $shaAlg.Dispose() }
+            } catch { }
           }
+          $orph.Add(@{
+            path = $rel; bytes = $f.Length; modified_utc = $f.LastWriteTimeUtc.ToString('o')
+            created_utc = $f.CreationTimeUtc.ToString('o'); owner = $owner; sha256 = $sha
+          })
         }
-        New-JsonResponse -Response $res -StatusCode 200 -Body @{ vault = $EvidenceDir; files = $all.Count; orphans = $orph.ToArray() }
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ vault = $EvidenceDir; files = $all.Count; ignored = $ignoredCount; orphans = $orph.ToArray() }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/vault/search') {
         # v11 R3: one row per DOCUMENT (project + step + doc type), its active
@@ -2389,6 +2569,36 @@ try {
             New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; pillars = $incoming }
           }
         }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/naming') {
+        # v11.1: admin edits the file-naming rules from Settings. Validated as
+        # a whole, same pattern as pillars above - nothing is saved unless
+        # every rule passes, so a half-edited rule list never reaches disk.
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if ($actor.ToLowerInvariant() -ne 'admin') {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the naming standard.' }
+        } else {
+          $cfg = Get-Config
+          $incoming = @($body.rules)
+          $errs = @(Test-NamingRules -Rules $incoming)
+          if ($errs.Count) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = ($errs -join ' '); errors = $errs }
+          } else {
+            $before = @($cfg.naming.rules | ForEach-Object { [string]$_.id }) -join ','
+            $namingObj = [pscustomobject]@{ rules = $incoming }
+            $cfg | Add-Member -NotePropertyName naming -NotePropertyValue $namingObj -Force
+            Save-Config $cfg
+            Add-Audit -User $actor -Action 'Config_Naming_Update' -ProjectId '' -ObjType 'Config' -ObjId 'naming' -From $before -To (($incoming | ForEach-Object { [string]$_.id }) -join ',') -Detail ''
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; naming = $namingObj }
+          }
+        }
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/config/naming/fields') {
+        # The vocabulary the Settings naming-rule builder offers - kept
+        # server-side ($NamingFieldDefs) so it can never drift from what
+        # Get-StandardFileName actually understands.
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{ fields = $script:NamingFieldDefs }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/config') {
         New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
@@ -3265,7 +3475,8 @@ try {
         # v2.2: the server names the file, so the convention holds even when
         # somebody uploads "final FINAL v3 (2).xlsx" from their desktop.
         $stdName = Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
-                     -WnbId $body.wnbId -Description $body.description -OriginalName $original
+                     -WnbId $body.wnbId -Description $body.description -OriginalName $original `
+                     -Category $body.partId -ProjectId $body.projectId -Config (Get-Config)
         $saved = Save-Evidence -DocType $body.docType -Family $body.family -PartId $body.partId -FileName $stdName -Bytes $bytes
         $saved | Add-Member -NotePropertyName originalName -NotePropertyValue $original -Force
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved
@@ -3371,7 +3582,8 @@ try {
         # lets the browser show the name before anything is written
         $body = Read-JsonBody -Request $req
         $n = Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
-               -WnbId $body.wnbId -Description $body.description -OriginalName ([string]$body.fileName)
+               -WnbId $body.wnbId -Description $body.description -OriginalName ([string]$body.fileName) `
+               -Category $body.partId -ProjectId $body.projectId -Config (Get-Config)
         New-JsonResponse -Response $res -StatusCode 200 -Body @{ fileName = $n }
       }
       elseif ($method -eq 'GET' -and $path -like '/api/package/*') {

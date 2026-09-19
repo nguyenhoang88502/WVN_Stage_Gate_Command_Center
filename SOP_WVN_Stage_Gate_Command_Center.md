@@ -144,6 +144,30 @@ Files are copied into the evidence vault under a standardised name (ending in
 a short fingerprint of the file's content) and hashed. A byte-identical
 re-upload is detected and skipped rather than duplicated.
 
+**More than one file for the same document type (v11.1).** Some documents need
+a different file per BOM part — a drawing per part, for instance. Dropping
+several files straight onto a dropzone still just files them as fast as
+before (useful for a quick multi-file re-file — the last one filed is the
+active one, same as always). To give files DIFFERENT parts instead, use one
+of:
+- **+ Add part** — appears once a document already has at least one part
+  filed; opens a small window asking each newly chosen file's **part /
+  category** (a part number, a component name — anything that tells them
+  apart) before filing.
+- The **Input tab → B. File evidence** batch table, which asks for a part per
+  row in the same table where you already set the document type and step —
+  the natural place for filing a whole BOM's worth of documents at once. It
+  also has an **Uncategorized files** card underneath it — see §5.4b.
+
+Two files filed under the same document type AND the same part (including
+both left blank) supersede one another as revisions of one document, not two
+separate ones — the app warns before that happens in the batch table.
+
+**Dropping a folder.** Dropping a whole folder (from the Input tab, or a
+drawer dropzone) files every file inside it, including subfolders. If the
+folder itself is named after a project — `9944`, `NPI-9944`, `NPI_9944` all
+match — that project is picked automatically on the Input tab.
+
 **Upload panel.** Every upload — one file or a hundred — goes through the panel
 at the bottom right: one file at a time, retried automatically. A line reading
 *Failed (row – file is saved)* means the file is safely in the vault but its
@@ -157,6 +181,29 @@ revision is the one gates and reports use; older ones stay on record.
 **Cannot copy the file?** Use *Or cite a network path / link* on the Input tab.
 The gate counts it as filed, but nothing is copied and there is no hash to
 verify against later — prefer uploading wherever possible.
+
+**Dropping a folder (v11.1).** Dropping a whole folder — on the Input tab's
+batch dropzone, or a drawer dropzone — files every file inside it, including
+subfolders. If the folder itself is named after a project (`9944`, `NPI-9944`
+and `NPI_9944` all match), that project is picked automatically on the Input
+tab instead of you having to type or find it.
+
+### 5.4b Uncategorized files (v11.1)
+
+Anyone with access to the vault folder in Explorer can paste a file straight
+into it, bypassing the app entirely — no project, no step, no document type,
+no record of who did it or when. The Input tab has a permanent
+**Uncategorized files in the vault** card that lists every one of these, with
+the Windows account that owns the file and when it was created — the most
+this tool can say about a file it never saw arrive.
+
+For each one, either:
+- **Categorize** — pick the project, document type, step and (optionally) a
+  part, and it is registered exactly where it already sits. Nothing is
+  renamed or moved; use **New revision** afterwards if it should be re-filed
+  under the standard naming convention.
+- **Not a deliverable** — dismiss it with a reason (a stray screenshot, a
+  leftover draft). It will not be listed again.
 
 ### 5.5 Raise and resolve issues
 
@@ -298,6 +345,15 @@ work from any row.
   document types and name for the responsible person. It gets its own tab,
   dashboard matrix and Vault search at once. A pillar with projects cannot be
   deleted. Pillar IDs become the project-ID prefix and cannot be changed later.
+- **File naming standard** (v11.1) — how an uploaded file is renamed before it
+  is saved, edited without touching any code. Each rule is built from pieces
+  in order: a **field** (document code, model, WVN/WNB code, description,
+  project ID, part, date, time) or fixed **text**. Add, remove and reorder
+  pieces with the buttons; the example line updates as you go. A rule can
+  apply to specific document codes only (e.g. drawings, which by default keep
+  the old `PD<wvn>_01 <description>_<wnb>` shape), or to everything else via
+  the one rule left with a blank document-code list. **This changes file
+  names for every future upload** — existing files on disk are never renamed.
 
 A change type still referenced by a project cannot be deleted.
 
@@ -329,10 +385,11 @@ journal under `system/tracking/journal/`:
 | `lb_projects.csv` | Registered projects |
 | `lb_gates.csv` | Gate status, ownership, target weeks |
 | `lb_approvals.csv` | Signed approvals |
-| `lb_deliverables.csv` | Filed documents with hashes |
+| `lb_deliverables.csv` | Filed documents with hashes and, since v11.1, a part / category |
 | `lb_issues.csv` | Issues and resolutions |
 | `lb_doc_comments.csv` | Notes |
 | `lb_audit.csv` | Full audit trail: who, what, when, from → to |
+| `lb_vault_ignored.csv` | v11.1 — vault files marked "not a deliverable", with who and why |
 
 These are the record. Back up `system/tracking/` and the evidence vault on the
 same schedule as any other quality record.
@@ -344,4 +401,6 @@ PC's journal; an edited file can be silently outvoted or flagged as a conflict.
 
 *Prepared for WAHL Vietnam Early Product Management. Screens shown in the
 accompanying deck are from v10; v11 adds the Document Vault tab, revision
-history, the upload panel and Settings → Pillars.*
+history, the upload panel and Settings → Pillars; v11.1 adds BOM parts,
+Settings → File naming standard, folder drop and uncategorized-file
+detection.*

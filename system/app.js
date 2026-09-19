@@ -1699,7 +1699,7 @@ function evidenceFor(pid, stepKey, docCode) {
   });
   // A 'Removed' marker row means the requirement was deliberately excluded.
   var removedRow = rows.find(function(r) { return r.status === 'Removed'; });
-  if (removedRow) return { level: 'REMOVED', del: removedRow };
+  if (removedRow) return { level: 'REMOVED', del: removedRow, parts: [] };
   // Skip custom-doc marker rows that carry no actual evidence — those exist
   // only to declare a per-model requirement, not to represent a filed file.
   var realRows = rows.filter(function(r) {
@@ -1708,14 +1708,22 @@ function evidenceFor(pid, stepKey, docCode) {
   // v11 R1: the ACTIVE revision (is_active is derived by the server on every
   // read). Rows from an older server carry no flag - fall back to the last
   // row, which is exactly what the active revision was defined to reproduce.
-  var del = realRows.length
-    ? (realRows.find(function(r) { return r.is_active === 'YES'; }) || realRows[realRows.length - 1])
+  // v11.1: a doc_code can have MORE THAN ONE active row at once — one per BOM
+  // part (part_id), each its own independent revision chain server-side (see
+  // Set-DerivedRevisions). `del` stays a single row for every caller that only
+  // ever wanted "the" evidence (a matrix cell, the PDF, a badge); `parts`
+  // carries every active row for the places that need to show all of them —
+  // the drawer's filed table and the Vault.
+  var activeRows = realRows.filter(function(r) { return r.is_active === 'YES'; });
+  if (!activeRows.length && realRows.length) activeRows = [realRows[realRows.length - 1]];
+  var del = activeRows.length
+    ? activeRows.slice().sort(function(a, b) { return (Date.parse(a.uploaded_utc) || 0) - (Date.parse(b.uploaded_utc) || 0); })[activeRows.length - 1]
     : null;
-  if (del && del.approved === 'YES') return { level: 'APPROVED', del };
-  if (del) return { level: 'FILED', del };
+  if (del && del.approved === 'YES') return { level: 'APPROVED', del: del, parts: activeRows };
+  if (del) return { level: 'FILED', del: del, parts: activeRows };
   // No file — check if someone has claimed, been assigned, or is supporting
-  if (isDeliverableClaimed(pid, stepKey, docCode)) return { level: 'ON_GOING', del: null };
-  return { level: 'MISSING', del: null };
+  if (isDeliverableClaimed(pid, stepKey, docCode)) return { level: 'ON_GOING', del: null, parts: [] };
+  return { level: 'MISSING', del: null, parts: [] };
 }
 function gateRowOf(pid, stepKey) { return TRK.lb_gates.find(g => g.project_id === pid && g.step_key === stepKey); }
 
@@ -3663,7 +3671,7 @@ async function uqSendBytes(q) {
   var body = {
     fileName: it.file.name, contentBase64: b64, docType: it.docCode,
     family: it.project.family, wvnId: it.project.family, wnbId: it.project.customer_number || '',
-    description: it.docCode, partId: ''
+    description: it.docCode, partId: '', projectId: it.project.project_id
   };
   if (it.uploadExtra) Object.keys(it.uploadExtra).forEach(function(k) { body[k] = it.uploadExtra[k]; });
   return API.upload(body);
@@ -3766,6 +3774,171 @@ function renderUploadPanel() {
   panel.querySelector('.uq-toggle').onclick = function() { UPQ.collapsed = !UPQ.collapsed; renderUploadPanel(); };
   var r = panel.querySelector('.uq-retry'); if (r) r.onclick = uqRetryFailed;
   var c = panel.querySelector('.uq-clear'); if (c) c.onclick = function() { UPQ.items = []; renderUploadPanel(); };
+}
+
+/* ===================================================================== */
+/* v11.1 - folder drop + multi-file "which part is this" categorisation  */
+/* ===================================================================== */
+/* A folder dropped from Explorer arrives as one DataTransferItem whose
+   webkitGetAsEntry() is a directory entry, not a File — dataTransfer.files
+   silently has zero entries for it. This walks every dropped item, expanding
+   directories (recursively — a project folder is often DocType\file.ext two
+   levels deep) into their files, and returns a flat list of
+   { file, topFolder } — topFolder is the name of the top-level dropped
+   directory a file came from, used to guess which project a whole folder
+   belongs to. A plain (non-directory) drop degrades to the DataTransfer's
+   own files list, so this is always safe to call. */
+function filesFromDataTransfer(dataTransfer) {
+  function readAllEntries(reader) {
+    return new Promise(function(resolve, reject) {
+      var out = [];
+      (function next() {
+        reader.readEntries(function(batch) {
+          if (!batch.length) { resolve(out); return; }
+          out = out.concat(batch);
+          next();
+        }, reject);
+      })();
+    });
+  }
+  function walk(entry, topFolder) {
+    if (entry.isFile) {
+      return new Promise(function(resolve) {
+        entry.file(function(file) { resolve([{ file: file, topFolder: topFolder }]); }, function() { resolve([]); });
+      });
+    }
+    if (entry.isDirectory) {
+      var reader = entry.createReader();
+      return readAllEntries(reader).then(function(entries) {
+        return Promise.all(entries.map(function(e) { return walk(e, topFolder); }));
+      }).then(function(lists) { return lists.reduce(function(a, b) { return a.concat(b); }, []); });
+    }
+    return Promise.resolve([]);
+  }
+  var items = dataTransfer.items;
+  if (!items || !items.length || typeof items[0].webkitGetAsEntry !== 'function') {
+    return Promise.resolve(Array.prototype.map.call(dataTransfer.files, function(f) { return { file: f, topFolder: '' }; }));
+  }
+  var roots = [];
+  for (var i = 0; i < items.length; i++) {
+    var entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+    if (entry) roots.push(entry);
+  }
+  if (!roots.length) {
+    return Promise.resolve(Array.prototype.map.call(dataTransfer.files, function(f) { return { file: f, topFolder: '' }; }));
+  }
+  return Promise.all(roots.map(function(entry) { return walk(entry, entry.isDirectory ? entry.name : ''); }))
+    .then(function(lists) { return lists.reduce(function(a, b) { return a.concat(b); }, []); });
+}
+
+/* Given a folder name (or any free text) and the project list, guesses the
+   one project it names — matched against the project_id and the family code,
+   ignoring case and punctuation, since a person's folder is usually named
+   "9944" or "NPI-9944" or "NPI_9944", not the exact project_id string. Returns
+   null rather than guess when nothing or more than one project matches. */
+function guessProjectFromFolderName(name) {
+  if (!name) return null;
+  var norm = function(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+  var target = norm(name);
+  if (!target) return null;
+  var hits = (TRK.lb_projects || []).filter(function(p) {
+    return norm(p.project_id) === target || norm(p.family) === target ||
+      norm(p.project_id).indexOf(target) >= 0 && target.length >= 3;
+  });
+  // exact project_id/family match wins outright even if a looser contains-match
+  // also matched something else
+  var exact = hits.filter(function(p) { return norm(p.project_id) === target || norm(p.family) === target; });
+  if (exact.length === 1) return exact[0];
+  if (!exact.length && hits.length === 1) return hits[0];
+  return null;
+}
+
+/* Small modal used whenever more than one file is about to be filed under the
+   SAME (project, step, doc_code): each file needs its own "part / category"
+   so a DWG-per-BOM-part upload does not turn into 5 revisions of one slot
+   with 4 of them silently superseded. A single-file drop skips this entirely
+   (part stays blank, exactly the pre-v11.1 behaviour) — this only appears
+   when it is actually needed. `existingParts` seeds the autocomplete with
+   part names already used for this doc, so people re-use "Bracket" rather
+   than minting "bracket", "Bracket ", "BRACKET". Calls onConfirm([{file,
+   part}]) or nothing on cancel. */
+function openCategorizeFilesModal(files, existingParts, onConfirm) {
+  var scrim = el('div', 'modal-scrim');
+  var box = el('div', 'modal categorize-modal');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  var dlId = 'cfPartList' + (++_modalSeq);
+  box.innerHTML = '<h2>Which part is each file?</h2>' +
+    '<p class="note">' + files.length + ' files are about to be filed under the same document. ' +
+    'Give each one a part / category (a BOM part number, a component name — anything that tells them apart) ' +
+    'so they file as separate documents instead of one replacing another.</p>' +
+    '<datalist id="' + dlId + '">' + existingParts.map(function(p) { return '<option value="' + esc(p) + '">'; }).join('') + '</datalist>' +
+    '<div class="filters" style="margin-bottom:8px"><input id="cfAll" list="' + dlId + '" placeholder="Same part for all…" style="min-width:220px">' +
+    '<button id="cfApplyAll" class="sm">Apply to all</button></div>' +
+    '<div class="scroll"><table><thead><tr><th>File</th><th>Part / category</th></tr></thead><tbody id="cfRows"></tbody></table></div>' +
+    '<div class="acts"><button id="cfGo" class="primary">File ' + files.length + ' file' + (files.length === 1 ? '' : 's') + '</button>' +
+    '<button id="cfCancel">Cancel</button></div>';
+  var rows = $('#cfRows', box);
+  files.forEach(function(f, i) {
+    var tr = el('tr');
+    tr.innerHTML = '<td><code>' + esc(f.name) + '</code></td>' +
+      '<td><input data-i="' + i + '" list="' + dlId + '" style="width:100%" placeholder="e.g. Bracket, Motor, Handle…"></td>';
+    rows.appendChild(tr);
+  });
+  scrim.appendChild(box); document.body.appendChild(scrim);
+  $('#cfApplyAll', box).onclick = function() {
+    var v = $('#cfAll', box).value;
+    rows.querySelectorAll('input').forEach(function(inp) { inp.value = v; });
+  };
+  var close = function() { scrim.remove(); };
+  $('#cfCancel', box).onclick = close;
+  $('#cfGo', box).onclick = function() {
+    var out = files.map(function(f, i) {
+      var inp = rows.querySelector('input[data-i="' + i + '"]');
+      return { file: f, part: (inp ? inp.value : '').trim() };
+    });
+    var seen = {}, dupes = [];
+    out.forEach(function(o) {
+      var k = o.part.toLowerCase();
+      if (seen[k]) dupes.push(o.part || '(blank)'); else seen[k] = true;
+    });
+    if (dupes.length && !confirm(
+      'More than one file has the same part ("' + dupes.join('", "') + '") — the later one will supersede the earlier one ' +
+      'as a new revision of the same slot, rather than filing separately. Continue anyway?')) return;
+    close();
+    onConfirm(out);
+  };
+}
+var _modalSeq = 0;
+
+/* Existing part / category labels already used for one document at one
+   project+step, offered as autocomplete suggestions so a second BOM part
+   doesn't get filed under a slightly different spelling of the first one's
+   name. */
+function existingPartsFor(pid, stepKey, docCode) {
+  var seen = {}, out = [];
+  (TRK.lb_deliverables || []).forEach(function(r) {
+    if (r.project_id === pid && r.step_key === stepKey && r.doc_code === docCode && r.part_id && !seen[r.part_id]) {
+      seen[r.part_id] = true; out.push(r.part_id);
+    }
+  });
+  return out;
+}
+
+/* Native multi-file picker for "+ Add part" (drawer) and a locked/missing
+   dropzone with more than one file dropped at once — always routes through
+   the categorize modal, since the whole reason to call this instead of
+   enqueueUploads directly is that each file needs its own part label. */
+function pickFilesForDoc(project, stepKey, docCode, onDone) {
+  var inp = el('input'); inp.type = 'file'; inp.multiple = true; inp.style.display = 'none';
+  inp.onchange = function() {
+    if (!inp.files.length) return;
+    openCategorizeFilesModal(Array.prototype.slice.call(inp.files), existingPartsFor(project.project_id, stepKey, docCode), function(picked) {
+      enqueueUploads(picked.map(function(p) {
+        return { project: project, stepKey: stepKey, docCode: docCode, file: p.file, uploadExtra: { partId: p.part }, rowExtra: { part_id: p.part } };
+      }), onDone);
+    });
+  };
+  document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
 }
 
 /* Renders a filed document's location two ways: a link that streams it from
@@ -3989,6 +4162,10 @@ function openDrawer(project, step, focusDocCode) {
     const t = el('table');
     t.innerHTML = '<thead><tr><th>Type</th><th>File</th><th>Filed by</th><th></th></tr></thead>';
     const tb = el('tbody');
+    // v11.1: a doc_code can have several active rows at once, one per BOM
+    // part — "+ Add part" only needs to appear once per doc_code, not once
+    // per row, or filing 4 parts would show it 4 times in a row.
+    const addPartShown = {};
     dels.forEach(x => {
       const tr = el('tr');
       if (focusDocCode && x.doc_code === focusDocCode) {
@@ -4004,7 +4181,8 @@ function openDrawer(project, step, focusDocCode) {
         : '<span class="note">—</span>';
       var removedMark = isDelRemoved ? ' <span class="badge bg-secondary" style="text-decoration:line-through;opacity:0.7">Removed</span>' : '';
       const revMark = x.revision_no ? ' <span class="badge bg-secondary rev-badge" title="Revision ' + esc(x.revision_no) + ' is the active one">rev ' + esc(x.revision_no) + '</span>' : '';
-      tr.innerHTML = '<td>' + dcEl + removedMark + revMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
+      const partMark = x.part_id ? ' <span class="badge part-badge" title="Part / category">' + esc(x.part_id) + '</span>' : '';
+      tr.innerHTML = '<td>' + dcEl + removedMark + revMark + partMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
         '<td><code>' + esc(x.file_name) + '</code><div class="note">' + pathHtml + '</div>' +
         (x.change_reason ? '<div class="note">Change: ' + esc(x.change_reason) + '</div>' : '') + '</td>' +
         '<td>' + esc(x.uploaded_by) + '<div class="note">' + esc(fmtStamp(x.uploaded_utc)) + '</div></td><td></td>';
@@ -4021,20 +4199,37 @@ function openDrawer(project, step, focusDocCode) {
         tr.lastChild.appendChild(openBtn);
       }
       // v11 R1: history + an explicit new revision (with a change reason).
+      // v11.1: both are scoped to this row's own part — History for "DWG
+      // (Bracket)" must not mix in "DWG (Motor)"'s revisions, and New revision
+      // must supersede THIS part, not create a third, unlabelled one.
       if (x.revision_no) {
         const histBtn = el('button', '', 'History');
         histBtn.style.marginLeft = '4px';
-        histBtn.onclick = function(e) { e.stopPropagation(); openHistoryModal(project, step, x.doc_code); };
+        histBtn.onclick = function(e) { e.stopPropagation(); openHistoryModal(project, step, x.doc_code, x.part_id); };
         tr.lastChild.appendChild(histBtn);
         if (!isLink) {
           const revBtn = el('button', '', 'New revision');
           revBtn.style.marginLeft = '4px';
           revBtn.onclick = function(e) {
             e.stopPropagation();
-            pickNewRevision(project, sk, x.doc_code, function() { openDrawer(project, step, x.doc_code); });
+            pickNewRevision(project, sk, x.doc_code, function() { openDrawer(project, step, x.doc_code); }, x.part_id);
           };
           tr.lastChild.appendChild(revBtn);
         }
+      }
+      // "+ Add part": files another BOM part under this SAME doc_code, once
+      // it already has at least one part filed (before that it still shows
+      // as missing/on-going and has its own dropzone below).
+      if (!isDelRemoved && !isLink && !addPartShown[x.doc_code]) {
+        addPartShown[x.doc_code] = true;
+        const addPartBtn = el('button', '', '+ Add part');
+        addPartBtn.style.marginLeft = '4px';
+        addPartBtn.title = 'File another BOM part / category under ' + x.doc_code;
+        addPartBtn.onclick = function(e) {
+          e.stopPropagation();
+          pickFilesForDoc(project, sk, x.doc_code, function() { openDrawer(project, step, x.doc_code); });
+        };
+        tr.lastChild.appendChild(addPartBtn);
       }
       // No Claim/Assign button here — every row in this table already has a
       // file or an approval (see the filter above), so there is nothing left
@@ -4233,15 +4428,21 @@ function openDrawer(project, step, focusDocCode) {
         const newDrawer = $('#drawer');
         if (newDrawer) newDrawer.scrollTop = drawerScroll;
       };
+      // v11.1: dropping straight onto this dropzone still files every file as
+      // fast as before — a folder is expanded to the files inside it, but
+      // nothing here forces a "which part" prompt, since a quick drag-drop of
+      // many files (re-filing a whole revision history, a bulk correction) is
+      // exactly as common as BOM-part filing and must not be interrupted.
+      // "+ Add part" below (and the Input tab's batch table) are the explicit,
+      // deliberate way to give several files different parts — see
+      // pickFilesForDoc / openCategorizeFilesModal.
       dz.ondrop = async e => {
         e.preventDefault();
         dz.style.borderColor = ''; dz.style.background = '';
-        const files = e.dataTransfer.files;
-        if (!files.length) return;
-        // v11 R2: queued - per-file status in the upload panel, retries, and
-        // the drawer redraws once when the whole drop is done.
-        enqueueUploads(Array.prototype.map.call(files, function(file) {
-          return { project: project, stepKey: sk, docCode: code, file: file };
+        const entries = await filesFromDataTransfer(e.dataTransfer);
+        if (!entries.length) return;
+        enqueueUploads(entries.map(function(fe) {
+          return { project: project, stepKey: sk, docCode: code, file: fe.file };
         }), function() { afterUpload(); });
       };
       dz.onclick = (e) => {
@@ -4253,10 +4454,12 @@ function openDrawer(project, step, focusDocCode) {
         // by ancestry here is robust to both cases without relying on every
         // future control remembering to call stopPropagation itself.
         if (e.target.closest('button, a, input, select, label, .target-week-editor, .claim-badge, .dz-note-wrap')) return;
-        const inp = el('input'); inp.type = 'file'; inp.style.display = 'none';
+        const inp = el('input'); inp.type = 'file'; inp.multiple = true; inp.style.display = 'none';
         inp.onchange = () => {
-          if (!inp.files[0]) return;
-          enqueueUploads([{ project: project, stepKey: sk, docCode: code, file: inp.files[0] }], function() { afterUpload(); });
+          if (!inp.files.length) return;
+          enqueueUploads(Array.prototype.map.call(inp.files, function(file) {
+            return { project: project, stepKey: sk, docCode: code, file: file };
+          }), function() { afterUpload(); });
         };
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
@@ -5164,34 +5367,59 @@ function viewInput(root) {
   dz.onclick = () => fin.click();
   dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--blue)'; };
   dz.ondragleave = () => dz.style.borderColor = '';
-  dz.ondrop = e => { e.preventDefault(); dz.style.borderColor = ''; if (e.dataTransfer.files.length) pick([...e.dataTransfer.files]); };
+  // v11.1: folder-aware. Dropping a whole project folder expands to every
+  // file inside it, and if the folder's own name matches a registered
+  // project (by project_id or family — "9944", "NPI-9944", "NPI_9944" all
+  // match), that project is pre-selected below instead of making the user
+  // type or pick it.
+  dz.ondrop = async e => {
+    e.preventDefault(); dz.style.borderColor = '';
+    const entries = await filesFromDataTransfer(e.dataTransfer);
+    if (!entries.length) return;
+    const folderHit = entries.map(en => en.topFolder).filter(Boolean).map(guessProjectFromFolderName).find(Boolean);
+    pick(entries.map(en => en.file), folderHit);
+  };
   fin.onchange = () => { if (fin.files.length) pick([...fin.files]); };
 
   /* Batch confirm table: one row per dropped file, each pre-filled by guessing
      from the filename, each individually overridable. Nothing is uploaded
      until File all is clicked. */
-  function pick(files) {
+  function pick(files, folderProject) {
     if (!TRK.lb_projects.length) { alert('Register a project first.'); return; }
-    const projOpts = TRK.lb_projects.map(r => '<option value="' + esc(r.project_id) + '">' + esc(r.project_id) +
-      (r.prod_family ? ' — ' + esc((familyById(r.prod_family) || {}).prod_family_name || r.prod_family) : '') + '</option>').join('');
+    const projLabel = r => r.project_id + (r.prod_family ? ' — ' + ((familyById(r.prod_family) || {}).prod_family_name || r.prod_family) : '');
+    const projOpts = TRK.lb_projects.map(r => '<option value="' + esc(r.project_id) + '">' + esc(projLabel(r)) + '</option>').join('');
     // combobox format: value shown to user is "DOCTYPE_ID — Name", normalised at read time
     const docDlOpts = allDocTypes().map(d => '<option value="' + esc(d.doctype_id) + ' — ' + esc(d.name) + '">').join('');
+    // v11.1: suggestions only, reused across every part input in the batch -
+    // every part label used anywhere, so people re-use "Bracket" rather than
+    // minting a slightly different spelling of it.
+    const partOpts = (function() {
+      const seen = {}, out = [];
+      (TRK.lb_deliverables || []).forEach(r => { if (r.part_id && !seen[r.part_id]) { seen[r.part_id] = true; out.push(r.part_id); } });
+      return out;
+    })();
 
     form.className = '';
     form.innerHTML = '<h3>Confirm before filing — ' + files.length + ' file' + (files.length === 1 ? '' : 's') + '</h3>' +
       '<div class="filters">' +
-      '<label>Project (all)</label><select id="bProj">' + projOpts + '</select>' +
+      // v11.1: type-in AND pick — a searchable combobox (datalist), not a
+      // plain <select> that only jump-to-letter searches.
+      '<label>Project (all)</label><input id="bProj" list="bProjList" style="min-width:200px" placeholder="Type or pick a project…">' +
+      '<datalist id="bProjList">' + projOpts + '</datalist>' +
       '<label>WVN code</label><input id="bWvn" style="width:100px" placeholder="1010523">' +
       '<label>WNB code</label><input id="bWnb" style="width:100px" placeholder="3025015">' +
-      '<label>Part ID</label><input id="bPart" style="width:90px">' +
       '</div>' +
-      '<p class="note">Document type and step are guessed from each filename — check them. ' +
+      '<p class="note">Document type, step and part are guessed where possible — check them. ' +
+      'Give two files the same document type but a DIFFERENT part when they are different BOM parts of the same document ' +
+      '(e.g. a drawing per part) — otherwise the second one supersedes the first instead of filing alongside it. ' +
       'The WVN and WNB codes apply to every file in this batch and feed the standardised name.</p>' +
+      '<datalist id="bPartList">' + partOpts.map(p => '<option value="' + esc(p) + '">').join('') + '</datalist>' +
       '<div class="scroll"><table><thead><tr><th>Dropped file</th><th>Document type</th><th>Step</th>' +
-      '<th>Description</th><th>Will be saved as</th><th>Skip</th></tr></thead><tbody id="bRows"></tbody></table></div>' +
+      '<th>Description</th><th>Part / category</th><th>Will be saved as</th><th>Skip</th></tr></thead><tbody id="bRows"></tbody></table></div>' +
       '<button id="bGo" class="primary" style="margin-top:8px">File all</button> ' +
       '<button id="bCancel" style="margin-top:8px">Cancel</button>' +
       '<div id="bLog" class="note"></div>';
+    if (folderProject) $('#bProj', form).value = folderProject.project_id;
 
     const rowsHost = $('#bRows', form);
     /* An unconfident guess is discarded outright rather than carried in state.
@@ -5202,7 +5430,7 @@ function viewInput(root) {
     const state = files.map((f, i) => {
       const guess = guessFromName(f.name);
       return {
-        file: f, idx: i, desc: guess.desc, skip: false, confident: guess.confident,
+        file: f, idx: i, desc: guess.desc, part: '', skip: false, confident: guess.confident,
         doc: guess.confident ? guess.doc : '', step: guess.confident ? guess.step : null
       };
     });
@@ -5226,6 +5454,7 @@ function viewInput(root) {
             '<datalist id="stepList' + st.idx + '"></datalist>' +
             '<div class="note" data-why="' + st.idx + '"></div></td>' +
           '<td><input data-k="desc" data-i="' + st.idx + '" style="width:150px" value="' + esc(st.desc) + '"></td>' +
+          '<td><input data-k="part" data-i="' + st.idx + '" list="bPartList" style="width:120px" placeholder="e.g. Bracket" value="' + esc(st.part) + '"></td>' +
           '<td class="note" data-name="' + st.idx + '">…</td>' +
           '<td><input type="checkbox" data-k="skip" data-i="' + st.idx + '"' + (st.skip ? ' checked' : '') + '></td>';
         rowsHost.appendChild(tr);
@@ -5310,13 +5539,17 @@ function viewInput(root) {
         try {
           const r = await API.previewName({
             docType: st.doc, family: p ? p.family : '', wvnId: $('#bWvn', form).value.trim(),
-            wnbId: $('#bWnb', form).value.trim(), description: st.desc, fileName: st.file.name
+            wnbId: $('#bWnb', form).value.trim(), description: st.desc, fileName: st.file.name,
+            partId: st.part, projectId: p ? p.project_id : ''
           });
           cell.innerHTML = '<code>' + esc(r.fileName) + '</code>';
         } catch (e) { cell.textContent = st.file.name; }
       }
     };
 
+    // input, not just change: typing a project id (rather than picking one
+    // from the datalist popup) still has to refresh the step guesses.
+    $('#bProj', form).oninput = drawRows;
     $('#bProj', form).onchange = drawRows;
     $('#bWvn', form).onchange = previewNames;
     $('#bWnb', form).onchange = previewNames;
@@ -5340,13 +5573,31 @@ function viewInput(root) {
       const btn = $('#bGo', form); btn.disabled = true;
       const log = $('#bLog', form);
       const todo = state.filter(s => !s.skip);
-      const part = $('#bPart', form).value.trim(), wvn = $('#bWvn', form).value.trim(), wnb = $('#bWnb', form).value.trim();
+      const wvn = $('#bWvn', form).value.trim(), wnb = $('#bWnb', form).value.trim();
+      // v11.1: two files with the same doc_code AND the same (non-blank) part
+      // would file as revisions of one another, which is only right when that
+      // is actually intended (re-filing the same part). Flag it up front
+      // rather than let it happen silently.
+      const byDocPart = {};
+      todo.forEach(function(st) {
+        const k = st.doc + '|' + (st.part || '').trim().toLowerCase();
+        (byDocPart[k] = byDocPart[k] || []).push(st);
+      });
+      const clashes = Object.keys(byDocPart).filter(k => byDocPart[k].length > 1);
+      if (clashes.length && !confirm(
+        clashes.map(k => byDocPart[k].length + ' files share document type "' + k.split('|')[0] +
+          '"' + (k.split('|')[1] ? ' and part "' + k.split('|')[1] + '"' : ' with no part set')).join('\n') +
+        '\n\nEach later file will supersede the earlier one as a new revision of the SAME slot, rather than filing separately. ' +
+        'Give them different parts first if that is not what you want. Continue anyway?')) {
+        btn.disabled = false; return;
+      }
       // v11 R2: the whole batch goes through the upload queue - sequential
       // bytes, rows in chunks of 20, retries, per-file status in the panel.
       // The staged rows are cleared at once, so the queue owns the files and
       // auto-reload stays paused only while it is actually working.
       const items = todo.map(function(st) {
         const step = stepsOf(p.process, p).find(s => s.step_id === Number(st.step));
+        const part = (st.part || '').trim();
         return {
           project: p, stepKey: stepKeyOf(p.process, step), docCode: st.doc, file: st.file,
           uploadExtra: { docType: st.doc, family: p.family, partId: part, wvnId: wvn, wnbId: wnb, description: st.desc },
@@ -5354,7 +5605,7 @@ function viewInput(root) {
             return {
               status: up.duplicate ? 'Already filed' : 'Filed', approved: 'NO', suspect_template: 'NO',
               notes: up.duplicate ? 'byte-identical file already present, no copy written' : '',
-              wvn_id: wvn, wnb_id: wnb, description: st.desc
+              wvn_id: wvn, wnb_id: wnb, description: st.desc, part_id: part
             };
           }
         };
@@ -5370,7 +5621,129 @@ function viewInput(root) {
     };
   }
 
+  /* ---- C. Uncategorized files in the vault (v11.1) ----
+     A file that reaches the vault by any route other than this app — someone
+     pasting it straight into Explorer, or a folder synced in from elsewhere —
+     carries no project, no step, no doc_code and no audit trail. It has to be
+     impossible to miss rather than merely visible somewhere, so it gets its
+     own always-present card here rather than a badge tucked into the Vault
+     tab. "Put there by" is the Windows file owner and the creation time —
+     the most the filesystem can say about a file the app never saw arrive;
+     there is no in-app audit trail for an action the app was bypassed for. */
+  const orph = el('div', 'card');
+  const orphHdr = el('div', 'card-header'); orphHdr.appendChild(el('h3', 'card-title', 'C. Uncategorized files in the vault')); orph.appendChild(orphHdr);
+  const orphBody = el('div', 'card-body');
+  orphBody.appendChild(el('p', 'note', 'Checking the vault for files nobody filed through this app…'));
+  orph.appendChild(orphBody); root.appendChild(orph);
+  (async () => {
+    let data;
+    try {
+      const r = await fetch('/api/vault/orphans', { cache: 'no-store' });
+      if (!r.ok) throw await API.err(r);
+      data = await r.json();
+    } catch (e) {
+      orphBody.innerHTML = '<p class="note" style="color:var(--bad)">Could not check the vault: ' + esc(e.message) + '</p>';
+      return;
+    }
+    const list = data.orphans || [];
+    orphBody.innerHTML = '';
+    if (!list.length) {
+      orphBody.appendChild(el('p', 'note', 'Every file in the vault is accounted for.' +
+        (data.ignored ? ' (' + data.ignored + ' previously marked "not a deliverable".)' : '')));
+      return;
+    }
+    const banner = el('div', 'banner bad');
+    banner.innerHTML = '<b>' + list.length + ' file' + (list.length === 1 ? '' : 's') + ' in the vault ' + (list.length === 1 ? 'was' : 'were') +
+      ' not filed through this app.</b> Someone put ' + (list.length === 1 ? 'it' : 'them') +
+      ' straight into the vault folder — Categorize each one so it shows up on the dashboard and in the Vault, or mark it as not a deliverable.';
+    orphBody.appendChild(banner);
+    const t = el('table');
+    t.innerHTML = '<thead><tr><th>File</th><th>Size</th><th>Put there by</th><th>When</th><th></th></tr></thead>';
+    const tb = el('tbody');
+    list.forEach(o => {
+      const tr = el('tr');
+      tr.innerHTML = '<td><code>' + esc(o.path) + '</code></td>' +
+        '<td>' + Math.round(o.bytes / 1024) + ' KB</td>' +
+        '<td>' + esc(o.owner || '(unknown)') + '</td>' +
+        '<td>' + esc(fmtStamp(o.created_utc)) + '<div class="note">modified ' + esc(fmtStamp(o.modified_utc)) + '</div></td>' +
+        '<td></td>';
+      const acts = tr.lastChild;
+      const catBtn = el('button', 'primary sm', 'Categorize');
+      catBtn.onclick = () => openOrphanCategorizeModal(o);
+      acts.appendChild(catBtn);
+      const ignBtn = el('button', 'sm', 'Not a deliverable');
+      ignBtn.style.marginLeft = '4px';
+      ignBtn.onclick = async () => {
+        const who = requireName(); if (!who) return;
+        const reason = prompt('Why is this not a deliverable? (optional)', '') || '';
+        await API.action('lb_vault_ignored', { file_path: o.path, ignored_by: who, ignored_utc: new Date().toISOString(), reason: reason },
+          { audit: { user: who, action: 'Vault_Ignore_Orphan', projectId: '', objType: 'VaultFile', objId: o.path, from: 'Uncategorized', to: 'Ignored', detail: reason } });
+        await redrawAfterWrite();
+      };
+      acts.appendChild(ignBtn);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    const scroll = el('div', 'scroll'); scroll.appendChild(t); orphBody.appendChild(scroll);
+  })();
+}
 
+/* v11.1 — registers an orphan file found already sitting in the vault as a
+   real deliverable, IN PLACE: nothing is renamed, moved or re-uploaded, only
+   a lb_deliverables row is written pointing at the file exactly where it
+   already is. Renaming it to the standard naming convention too is left as a
+   deliberate non-goal for now — moving files around inside a folder that
+   OneDrive is actively syncing is its own can of worms, and "New revision"
+   already gives an easy path to re-file it properly later if wanted. */
+function openOrphanCategorizeModal(orphan) {
+  const scrim = el('div', 'modal-scrim');
+  const box = el('div', 'modal');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  const projOpts = TRK.lb_projects.map(r => '<option value="' + esc(r.project_id) + '">').join('');
+  box.innerHTML = '<h2>Categorize file</h2><p class="note"><code>' + esc(orphan.path) + '</code></p>' +
+    '<div class="filters" style="flex-direction:column;align-items:stretch;gap:8px">' +
+    '<label>Project</label><input id="ocProj" list="ocProjList"><datalist id="ocProjList">' + projOpts + '</datalist>' +
+    '<label>Document type</label><input id="ocDoc" list="ocDocList" placeholder="— pick document type —"><datalist id="ocDocList"></datalist>' +
+    '<label>Step</label><input id="ocStep" list="ocStepList" placeholder="— pick step —"><datalist id="ocStepList"></datalist>' +
+    '<label>Part / category (optional)</label><input id="ocPart" placeholder="e.g. Bracket">' +
+    '</div><div class="acts"><button id="ocCancel">Cancel</button><button id="ocGo" class="primary">File it</button></div>';
+  scrim.appendChild(box); document.body.appendChild(scrim);
+  const refill = (keepDoc) => {
+    const p = projById($('#ocProj', box).value);
+    const doc = normaliseDoctypeInput($('#ocDoc', box).value);
+    const stepId = resolveStepInput($('#ocStep', box).value, p);
+    $('#ocDocList', box).innerHTML = docDatalistOptionsForStep(p, stepId);
+    $('#ocStepList', box).innerHTML = stepDatalistOptions(p, doc);
+    if (!keepDoc && doc && p) {
+      const best = bestStepForDoc(p, doc);
+      if (best && !$('#ocStep', box).value.trim()) $('#ocStep', box).value = best.step.step_id + ' — ' + best.step.step_name;
+    }
+  };
+  $('#ocProj', box).onchange = () => refill(false);
+  $('#ocDoc', box).onchange = () => refill(false);
+  $('#ocStep', box).onchange = () => refill(true);
+  const close = () => scrim.remove();
+  $('#ocCancel', box).onclick = close;
+  $('#ocGo', box).onclick = async () => {
+    const who = requireName(); if (!who) return;
+    const p = projById($('#ocProj', box).value);
+    if (!p) { alert('Pick a registered project first.'); return; }
+    const doc = normaliseDoctypeInput($('#ocDoc', box).value);
+    if (!doc) { alert('Pick a document type first.'); return; }
+    const stepId = resolveStepInput($('#ocStep', box).value, p);
+    if (stepId == null) { alert('Pick a valid step first.'); return; }
+    const step = stepsOf(p.process, p).find(s => s.step_id === stepId);
+    const part = $('#ocPart', box).value.trim();
+    const filePath = (PATHS.vault ? PATHS.vault.replace(/\\$/, '') + '\\' : '') + orphan.path;
+    await API.action('lb_deliverables', {
+      project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: doc,
+      file_name: orphan.path.split(/[\\/]/).pop(), file_path: filePath, sha256: orphan.sha256 || '',
+      status: 'Filed', kind: 'file', uploaded_by: who, uploaded_utc: new Date().toISOString(),
+      notes: 'Found already in the vault, not filed through this app — categorized in place.', part_id: part
+    }, { audit: { user: who, action: 'Categorize_Orphan', projectId: p.project_id, objType: 'Deliverable', objId: doc, from: 'Uncategorized', to: 'Filed', detail: orphan.path } });
+    close();
+    await redrawAfterWrite();
+  };
 }
 
 /* ===================================================================== */
@@ -5388,7 +5761,8 @@ function viewVault(root) {
   bar.innerHTML =
     '<input id="vq" type="search" placeholder="Search file name, description, project, document…" style="min-width:260px">' +
     sel('vPillar', 'Pillar') + sel('vFam', 'Family') + sel('vDoc', 'Doc type') + sel('vPic', 'PIC') + sel('vDept', 'Dept') +
-    '<label for="vStatus">Status</label><select id="vStatus"><option value="">Any</option><option value="Active">Active</option><option value="Removed">Removed</option></select>' +
+    '<label for="vStatus">Status</label><select id="vStatus"><option value="">Any</option><option value="Filed">Filed</option>' +
+      '<option value="Approved">Approved</option><option value="Removed">Removed</option></select>' +
     '<label for="vFrom">From</label><input id="vFrom" type="date"><label for="vTo">To</label><input id="vTo" type="date">' +
     '<label class="vault-stale-chk"><input id="vStale" type="checkbox"> stale approvals only</label>' +
     '<button id="vReset" type="button">Reset</button>';
@@ -5459,11 +5833,16 @@ function renderVaultResults(out, res, rerun) {
   const tb = el('tbody');
   res.rows.forEach(r => {
     const tr = el('tr');
-    const statusCls = r.status === 'Removed' ? badgeClass('NO_DATA') : badgeClass('COMPLETE');
+    // v11.1: status is now the document's real lifecycle state - Filed,
+    // Approved (its step's gate has been signed or bypassed) or Removed -
+    // instead of the old binary Active/Removed that never told anyone
+    // whether a filed document had actually been signed off.
+    const statusCls = badgeClass(String(r.status || '').toUpperCase());
+    const partBadge = r.part_id ? ' <span class="badge part-badge" title="Part / category">' + esc(r.part_id) + '</span>' : '';
     tr.innerHTML =
       '<td><b>' + esc(r.project_id) + '</b><div class="note">' + esc(r.family || '') + '</div></td>' +
       '<td>' + esc(pillarName(r.process)) + '</td>' +
-      '<td><b>' + esc(r.doc_code) + '</b><div class="note">' + esc(r.doc_name || '') + (r.owner_dept ? ' · ' + esc(r.owner_dept) : '') + '</div>' +
+      '<td><b>' + esc(r.doc_code) + '</b>' + partBadge + '<div class="note">' + esc(r.doc_name || '') + (r.owner_dept ? ' · ' + esc(r.owner_dept) : '') + '</div>' +
         (r.file_name ? '<div class="note"><code>' + esc(r.file_name) + '</code></div>' : '') +
         (r.change_reason ? '<div class="note">Change: ' + esc(r.change_reason) + '</div>' : '') + '</td>' +
       '<td>' + esc(r.step_key) + '<div class="note">' + esc(r.step_name || '') + '</div></td>' +
@@ -5483,11 +5862,11 @@ function renderVaultResults(out, res, rerun) {
     }
     if (project && step && r.rev) {
       const h = el('button', 'sm', 'History');
-      h.onclick = () => openHistoryModal(project, step, r.doc_code);
+      h.onclick = () => openHistoryModal(project, step, r.doc_code, r.part_id);
       acts.appendChild(h);
       if (r.kind !== 'link' && r.status !== 'Removed') {
         const nr = el('button', 'sm', 'New revision');
-        nr.onclick = () => pickNewRevision(project, r.step_key, r.doc_code, rerun);
+        nr.onclick = () => pickNewRevision(project, r.step_key, r.doc_code, rerun, r.part_id);
         acts.appendChild(nr);
       }
     }
@@ -5515,6 +5894,201 @@ const PILLAR_FEATURES = [
   ['gate_grouped_matrix', 'Dashboard matrix grouped by gate'],
   ['stage_completion', 'Stage-completion cards on the dashboard']
 ];
+/* ===================================================================== */
+/* v11.1 — Settings: File naming standard (no-code, Excel-style builder) */
+/* ===================================================================== */
+/* Mirrors Get-NamingFieldValue / the field list launcher.ps1 keeps in
+   $NamingFieldDefs — kept here too so Settings can preview a DRAFT rule
+   (one not yet saved) without a server round trip on every keystroke. The
+   real, authoritative render always happens server-side at upload time via
+   Get-StandardFileName / /api/filename/preview; this is only ever a hint. */
+const NAMING_FIELDS = [
+  ['doc_code', 'Document code (e.g. DWG)'],
+  ['model', 'Model / family (e.g. 9649LP)'],
+  ['wvn_id', 'WVN code'],
+  ['wnb_id', 'WNB / customer number'],
+  ['description', "Description (falls back to the original file's name)"],
+  ['project_id', 'Project ID'],
+  ['part', 'Part / category'],
+  ['date', "Today's date (YYYYMMDD)"],
+  ['time', 'Time of upload (HHMMSS)']
+];
+const NAMING_FIELD_LABEL = {}; NAMING_FIELDS.forEach(f => { NAMING_FIELD_LABEL[f[0]] = f[1]; });
+const NAMING_SAMPLE = {
+  doc_code: 'DWG', model: 'CL-CORDLESS', wvn_id: '1010523', wnb_id: '3025015',
+  description: 'Motor with PCBA', project_id: 'NPI-9649LP', part: 'Bracket', date: '20260101', time: '120000'
+};
+// Sanitises a DATA value: strips characters Windows forbids in a file name,
+// then either keeps its internal spaces (collapsed to one) or turns them into
+// underscores, and trims '_'/' '/'.' off both ends. Mirrors ConvertTo-NamePart.
+function namingPart(v, keepSpaces) {
+  v = String(v == null ? '' : v).replace(/[\\/:*?"<>|]/g, '_');
+  v = keepSpaces ? v.replace(/\s+/g, ' ').trim() : v.replace(/\s+/g, '_');
+  v = v.replace(/_{2,}/g, '_');
+  return v.replace(/^[_ .]+|[_ .]+$/g, '');
+}
+// A literal piece is admin-typed, on purpose (a separator, a prefix like
+// "PD") — it comes back UNCHANGED except for characters Windows forbids in a
+// file name; anything that trims it, the way namingPart() does, would erase
+// a whitespace- or underscore-only separator to nothing. Mirrors
+// ConvertTo-NamingLiteral.
+function namingLiteral(v) {
+  return String(v == null ? '' : v).replace(/[\\/:*?"<>|]/g, '_');
+}
+function previewNamingSegments(segments, sample, originalName) {
+  const ext = ((originalName || '').match(/\.[^.]*$/) || [''])[0].toLowerCase();
+  const stem = (originalName || '').replace(/\.[^.]*$/, '');
+  let out = (segments || []).map(seg => {
+    if (seg.type === 'text') return namingLiteral(seg.value);
+    const raw = (sample[seg.key] != null && sample[seg.key] !== '') ? sample[seg.key] : (seg.key === 'description' ? stem : '');
+    return namingPart(raw, !!seg.keep_spaces);
+  }).join('');
+  // A blank field leaves its neighbouring "_" separators doubled — collapsed
+  // here exactly like Format-NamingTemplate does server-side.
+  out = out.replace(/_{2,}/g, '_').replace(/^[_ .]+|[_ .]+$/g, '');
+  if (!out) out = namingPart(stem, false);
+  return out + ext;
+}
+function rawNamingRules() {
+  return JSON.parse(JSON.stringify((CFG.naming && CFG.naming.rules && CFG.naming.rules.length) ? CFG.naming.rules : []));
+}
+async function postNaming(rules) {
+  try { await API.post('/api/config/naming', { user: getUser(), rules }); }
+  catch (e) { alert('Could not save: ' + e.message); return; }
+  await refreshSilently();
+  show('settings');
+}
+function namingCard() {
+  const card = el('div', 'card naming-card');
+  const hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'File naming standard')); card.appendChild(hdr);
+  const body = el('div', 'card-body');
+  body.appendChild(el('p', 'note', 'How an uploaded file is renamed before it is saved. Build each rule by picking fields and text in ' +
+    'the order they should appear on the file name — no code, no punctuation to get right. The first rule whose document code list ' +
+    'matches wins; one rule with a blank list is the default that catches everything else.'));
+  const rules = rawNamingRules();
+  const t = el('table', 'naming-table');
+  t.innerHTML = '<thead><tr><th>Label</th><th>Applies to</th><th>Example</th><th></th></tr></thead>';
+  const tb = el('tbody');
+  rules.forEach((r, i) => {
+    const tr = el('tr');
+    const applies = (r.doc_codes && r.doc_codes.length) ? r.doc_codes.join(', ') : '(default — everything else)';
+    const example = previewNamingSegments(r.segments, NAMING_SAMPLE, 'original.pdf');
+    tr.innerHTML = '<td><b>' + esc(r.label || r.id) + '</b></td><td class="note">' + esc(applies) + '</td>' +
+      '<td><code>' + esc(example) + '</code></td><td></td>';
+    const acts = tr.lastChild;
+    const up = el('button', 'sm', '↑'); up.disabled = i === 0; up.title = 'Move up';
+    up.onclick = () => { const l = rawNamingRules(); const t2 = l[i - 1]; l[i - 1] = l[i]; l[i] = t2; postNaming(l); };
+    const down = el('button', 'sm', '↓'); down.disabled = i === rules.length - 1; down.title = 'Move down';
+    down.onclick = () => { const l = rawNamingRules(); const t2 = l[i + 1]; l[i + 1] = l[i]; l[i] = t2; postNaming(l); };
+    const edit = el('button', 'sm', 'Edit'); edit.onclick = () => editNamingRuleModal(r, i);
+    acts.appendChild(up); acts.appendChild(down); acts.appendChild(edit);
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  const scroll = el('div', 'scroll'); scroll.appendChild(t); body.appendChild(scroll);
+  const add = el('button', 'primary', 'Add rule'); add.style.marginTop = '8px';
+  add.onclick = () => editNamingRuleModal(null, -1);
+  body.appendChild(add);
+  card.appendChild(body);
+  return card;
+}
+function editNamingRuleModal(rule, index) {
+  const isNew = !rule;
+  const raw = rule ? JSON.parse(JSON.stringify(rule)) : { id: 'rule_' + Date.now().toString(36), label: '', doc_codes: [], segments: [] };
+  const scrim = el('div', 'modal-scrim');
+  const box = el('div', 'modal naming-modal');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'nrTitle');
+  const v = x => esc(x == null ? '' : String(x));
+  box.innerHTML = '<h2 id="nrTitle">' + (isNew ? 'Add naming rule' : 'Edit naming rule') + '</h2>' +
+    '<div class="fld"><span>Label</span><input id="nrLabel" value="' + v(raw.label) + '" placeholder="e.g. Drawings"></div>' +
+    '<div class="fld"><span>Applies to these document codes (comma-separated — leave blank for "everything else")</span>' +
+    '<input id="nrCodes" value="' + v((raw.doc_codes || []).join(', ')) + '" placeholder="e.g. DWG, PFMEA"></div>' +
+    '<h3 style="margin-bottom:4px">The file name is built from, in this order:</h3>' +
+    '<table class="naming-seg-table"><thead><tr><th style="width:40px"></th><th>Piece</th><th style="width:80px"></th></tr></thead><tbody id="nrSegs"></tbody></table>' +
+    '<div class="filters" style="margin-top:6px"><button id="nrAddField" type="button" class="sm">+ Add a field</button>' +
+    '<button id="nrAddText" type="button" class="sm">+ Add fixed text</button></div>' +
+    '<p class="note" style="margin-top:8px">Example with sample data: <code id="nrPreview"></code></p>' +
+    '<p class="nr-err" style="color:var(--bad);display:none"></p>' +
+    '<div class="acts"></div>';
+  scrim.appendChild(box); document.body.appendChild(scrim);
+  const segs = (raw.segments || []).map(s => Object.assign({}, s));
+  const segBody = box.querySelector('#nrSegs');
+  const preview = box.querySelector('#nrPreview');
+  const refreshPreview = () => { preview.textContent = previewNamingSegments(segs, NAMING_SAMPLE, 'original.pdf'); };
+  const drawSegs = () => {
+    segBody.innerHTML = '';
+    segs.forEach((seg, i) => {
+      const tr = el('tr');
+      const handle = '<div class="naming-seg-handle"><button type="button" class="sm" data-mv="up" data-i="' + i + '"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+        '<button type="button" class="sm" data-mv="down" data-i="' + i + '"' + (i === segs.length - 1 ? ' disabled' : '') + '>↓</button></div>';
+      let piece;
+      if (seg.type === 'text') {
+        piece = '<span class="note">Text:</span> <input data-k="value" data-i="' + i + '" value="' + v(seg.value) + '" placeholder="e.g. _ or PD" style="width:160px">';
+      } else {
+        piece = '<span class="note">Field:</span> <select data-k="key" data-i="' + i + '">' +
+          NAMING_FIELDS.map(f => '<option value="' + f[0] + '"' + (seg.key === f[0] ? ' selected' : '') + '>' + esc(f[1]) + '</option>').join('') +
+          '</select> <label class="note" style="font-weight:400"><input type="checkbox" data-k="keep_spaces" data-i="' + i + '"' +
+          (seg.keep_spaces ? ' checked' : '') + '> keep spaces</label>';
+      }
+      const rm = '<button type="button" class="sm" data-rm="' + i + '">Remove</button>';
+      tr.innerHTML = '<td>' + handle + '</td><td>' + piece + '</td><td>' + rm + '</td>';
+      segBody.appendChild(tr);
+    });
+    segBody.querySelectorAll('[data-mv]').forEach(btn => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.i), j = btn.dataset.mv === 'up' ? i - 1 : i + 1;
+        const t2 = segs[j]; segs[j] = segs[i]; segs[i] = t2;
+        drawSegs(); refreshPreview();
+      };
+    });
+    segBody.querySelectorAll('[data-rm]').forEach(btn => {
+      btn.onclick = () => { segs.splice(Number(btn.dataset.rm), 1); drawSegs(); refreshPreview(); };
+    });
+    segBody.querySelectorAll('[data-k]').forEach(inp => {
+      const ev = inp.type === 'checkbox' ? 'onchange' : 'oninput';
+      inp[ev] = () => {
+        const seg = segs[Number(inp.dataset.i)];
+        if (inp.dataset.k === 'keep_spaces') seg.keep_spaces = inp.checked;
+        else seg[inp.dataset.k] = inp.value;
+        refreshPreview();
+      };
+    });
+    refreshPreview();
+  };
+  drawSegs();
+  box.querySelector('#nrAddField').onclick = () => { segs.push({ type: 'field', key: NAMING_FIELDS[0][0], keep_spaces: false }); drawSegs(); refreshPreview(); };
+  box.querySelector('#nrAddText').onclick = () => { segs.push({ type: 'text', value: '_' }); drawSegs(); refreshPreview(); };
+
+  const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
+  const onEsc = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onEsc);
+  const err = msg => { const e = box.querySelector('.nr-err'); e.textContent = msg; e.style.display = msg ? '' : 'none'; };
+  const acts = box.querySelector('.acts');
+  if (!isNew) {
+    const del = el('button', 'danger', 'Delete rule');
+    del.onclick = () => { const l = rawNamingRules(); l.splice(index, 1); close(); postNaming(l); };
+    acts.appendChild(del);
+  }
+  const no = el('button', '', 'Cancel'); no.onclick = close;
+  const yes = el('button', 'primary', isNew ? 'Add rule' : 'Save rule');
+  yes.onclick = () => {
+    const out = {
+      id: raw.id, label: box.querySelector('#nrLabel').value.trim(),
+      doc_codes: box.querySelector('#nrCodes').value.split(/[,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean),
+      segments: segs
+    };
+    if (!out.label) { err('A label is required.'); return; }
+    if (!segs.length) { err('Add at least one field or piece of text.'); return; }
+    if (!segs.some(s => s.type === 'field')) { err('Add at least one field, or every file with this rule gets the same name.'); return; }
+    const l = rawNamingRules();
+    if (isNew) l.push(out); else l[index] = out;
+    close();
+    postNaming(l);
+  };
+  acts.appendChild(no); acts.appendChild(yes);
+}
+
 function rawPillarList() {
   const src = (CFG.pillars && CFG.pillars.length) ? CFG.pillars : LEGACY_PILLARS;
   return JSON.parse(JSON.stringify(src));
@@ -7254,6 +7828,9 @@ function viewSettings(root) {
   /* ---- pillars (v11 R4) ---- */
   if (isAdmin()) root.appendChild(pillarsCard());
 
+  /* ---- file naming standard (v11.1) ---- */
+  if (isAdmin()) root.appendChild(namingCard());
+
   /* ---- admin security PIN (v8.3 Section 4) ---- */
   if (isAdmin()) {
     const pinp = el('div', 'card admin-pin-card');
@@ -7466,7 +8043,7 @@ function viewSettings(root) {
 /* v11 R1 - revision history of one document, newest first. Served by the
    scoped /api/document-history endpoint rather than filtered out of the full
    store, so it stays fast when lb_deliverables is large. */
-async function openHistoryModal(project, step, docCode) {
+async function openHistoryModal(project, step, docCode, partId) {
   const sk = stepKeyOf(project.process, step);
   const scrim = el('div', 'modal-scrim');
   const box = el('div', 'modal history-modal');
@@ -7474,7 +8051,7 @@ async function openHistoryModal(project, step, docCode) {
   box.setAttribute('aria-modal', 'true');
   box.setAttribute('aria-labelledby', 'histTitle');
   const doc = docTypeById(docCode);
-  box.innerHTML = '<h2 id="histTitle">History - ' + esc(docCode) + '</h2><p class="note">' + esc(project.project_id) + ' · ' +
+  box.innerHTML = '<h2 id="histTitle">History - ' + esc(docCode) + (partId ? ' (' + esc(partId) + ')' : '') + '</h2><p class="note">' + esc(project.project_id) + ' · ' +
     esc(sk) + (doc && doc.name && doc.name !== docCode ? ' · ' + esc(doc.name) : '') + '</p><div class="history-body"><p class="note">Loading…</p></div>';
   const acts = el('div', 'acts');
   const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); };
@@ -7492,7 +8069,8 @@ async function openHistoryModal(project, step, docCode) {
   let h;
   try {
     const r = await fetch('/api/document-history?project_id=' + encodeURIComponent(project.project_id) +
-      '&step_key=' + encodeURIComponent(sk) + '&doc_code=' + encodeURIComponent(docCode), { cache: 'no-store' });
+      '&step_key=' + encodeURIComponent(sk) + '&doc_code=' + encodeURIComponent(docCode) +
+      '&part_id=' + encodeURIComponent(partId || ''), { cache: 'no-store' });
     if (!r.ok) throw await API.err(r);
     h = await r.json();
   } catch (e) { body.innerHTML = '<p class="note" style="color:var(--bad)">Could not load history: ' + esc(e.message) + '</p>'; return; }
@@ -7525,7 +8103,7 @@ async function openHistoryModal(project, step, docCode) {
 /* v11 R1 - an explicit new revision of an already-filed document: pick the
    file, then give a change reason. Goes through the same upload queue as
    every other upload, so the file and its row are written the same way. */
-function pickNewRevision(project, stepKey, docCode, onDone) {
+function pickNewRevision(project, stepKey, docCode, onDone, partId) {
   const fin = document.createElement('input');
   fin.type = 'file';
   fin.style.display = 'none';
@@ -7533,8 +8111,14 @@ function pickNewRevision(project, stepKey, docCode, onDone) {
     const file = fin.files && fin.files[0];
     fin.remove();
     if (!file) return;
-    reasonModal('New revision of ' + docCode, file.name, function(reason) {
-      enqueueUploads([{ project: project, stepKey: stepKey, docCode: docCode, file: file, changeReason: reason }], onDone);
+    reasonModal('New revision of ' + docCode + (partId ? ' (' + partId + ')' : ''), file.name, function(reason) {
+      // partId keeps this revision in the SAME part's chain — omitting it
+      // here would silently create a third, unlabelled slot instead of
+      // superseding the part the button was clicked on.
+      enqueueUploads([{
+        project: project, stepKey: stepKey, docCode: docCode, file: file, changeReason: reason,
+        uploadExtra: { partId: partId || '' }, rowExtra: { part_id: partId || '' }
+      }], onDone);
     });
   };
   document.body.appendChild(fin);
