@@ -1839,9 +1839,16 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
   font-weight: 600; background: var(--soft) !important; color: var(--ink) !important;
   border: 1px solid var(--line-strong);
 }
+.part-badge-btn { cursor: pointer; }
+.part-badge-btn:hover { filter: brightness(0.94); }
 .categorize-modal, .naming-modal { width: min(720px, calc(100vw - 32px)); max-width: none; }
 .categorize-modal .scroll, .naming-modal .scroll { max-height: 50vh; overflow: auto; }
 .naming-seg-table td { vertical-align: middle; padding: 4px 6px; }
 .naming-seg-handle { display: flex; gap: 2px; }
 .naming-seg-handle button { padding: 2px 6px; }
 .naming-table td, .pillar-table td { vertical-align: top; }
+.naming-code-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 10px;
+  max-height: 160px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r1); padding: 6px 8px;
+}
+.naming-code-list label { display: flex; align-items: center; gap: 4px; font-weight: 400; }

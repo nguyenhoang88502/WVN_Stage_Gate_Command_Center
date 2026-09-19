@@ -2094,6 +2094,43 @@ function Get-ReportData {
 # Removed), with its active revision inline. Cached until a contributing
 # store (deliverables, projects, approvals) or config changes.
 $script:VaultIndexCache = @{ sig = ''; docs = @() }
+# v11.1 - guesses a stray vault file's project/doc/part from where it
+# ALREADY sits, when that location matches Save-Evidence's own folder
+# pattern ([Family]\[DocType]\[Part]\file or [Family]\[DocType]\file). Lets
+# the Input tab offer a one-click "looks like X - confirm?" instead of a
+# blank form for the common case: a file dragged into the right folder by
+# hand instead of through the app. Returns $null when the path does not
+# look like the pattern at all, or the DocType segment is not a real one.
+function Get-OrphanGuess {
+  param($Config, [string]$RelPath)
+  $parts = @($RelPath -split '\\')
+  if ($parts.Count -lt 3 -or $parts.Count -gt 4) { return $null }
+  $family = $parts[0]
+  $docCode = $parts[1].ToUpperInvariant()
+  $part = if ($parts.Count -eq 4) { $parts[2] } else { '' }
+  $dt = @(Get-AllDocTypes $Config) | Where-Object { ([string]$_.doctype_id).ToUpperInvariant() -eq $docCode } | Select-Object -First 1
+  if (-not $dt) { return $null }
+  $projects = @(Read-Store 'lb_projects' | Where-Object { [string]$_.family -eq $family })
+  if (-not $projects.Count) { return $null }
+  $ambiguous = $projects.Count -gt 1
+  $projectId = if (-not $ambiguous) { [string]$projects[0].project_id } else { '' }
+  $stepKey = ''
+  if (-not $ambiguous) {
+    $pdef = Get-ProcessDef -Config $Config -ProcessId ([string]$projects[0].process)
+    if ($pdef) {
+      foreach ($s in @($pdef.steps)) {
+        if ((@($s.required_evidence_doctypes) + @($s.conditional_evidence_doctypes)) -contains [string]$dt.doctype_id) { $stepKey = [string]$projects[0].process + '-' + [string]$s.step_id; break }
+      }
+    }
+  }
+  return @{
+    family = $family; doc_code = [string]$dt.doctype_id; doc_name = [string]$dt.name; part_id = $part
+    project_id = $projectId; step_key = $stepKey
+    ambiguous_projects = @($projects | ForEach-Object { [string]$_.project_id })
+    confident = [bool]($projectId -and $stepKey)
+  }
+}
+
 function Get-VaultIndex { param($Config)
   # Signature first (Get-MergedStore is cheap when nothing changed), so a
   # 15 s poll with unchanged data never re-materialises a single row.
@@ -2483,6 +2520,7 @@ try {
         }
         $ignored = @{}
         foreach ($r in @(Read-Store 'lb_vault_ignored')) { if ($r.file_path) { $ignored[[string]$r.file_path] = $r } }
+        $cfg = Get-Config
         $all = @(if (Test-Path -LiteralPath $EvidenceDir) { Get-ChildItem -LiteralPath $EvidenceDir -Recurse -File -ErrorAction SilentlyContinue })
         $orph = New-Object System.Collections.Generic.List[object]
         $ignoredCount = 0
@@ -2505,9 +2543,78 @@ try {
           $orph.Add(@{
             path = $rel; bytes = $f.Length; modified_utc = $f.LastWriteTimeUtc.ToString('o')
             created_utc = $f.CreationTimeUtc.ToString('o'); owner = $owner; sha256 = $sha
+            guess = Get-OrphanGuess -Config $cfg -RelPath $rel
           })
         }
         New-JsonResponse -Response $res -StatusCode 200 -Body @{ vault = $EvidenceDir; files = $all.Count; ignored = $ignoredCount; orphans = $orph.ToArray() }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/vault/orphans/adopt') {
+        # v11.1: registers a stray vault file as a deliverable, exactly the
+        # way /api/action on lb_deliverables always could - EXCEPT this also
+        # renames the file to the current naming standard first, when asked
+        # (standardize=true). "Keep original name" (standardize=false) is the
+        # same as before: register it exactly where it sits, untouched.
+        # Standardizing renames it IN PLACE (Move-Item within the same
+        # folder - the folder is already right, or the client would not have
+        # been able to guess a doc type from it) rather than routing back
+        # through Save-Evidence, so a stray file that is not byte-identical
+        # to anything already filed can never be treated as a duplicate of
+        # itself and silently skipped.
+        $body = Read-JsonBody -Request $req
+        $who = [string]$body.user
+        if (-not $who) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'A name is required.' }
+        } else {
+        $relPath = [string]$body.path
+        $projectId = [string]$body.project_id; $stepKey = [string]$body.step_key; $docCode = [string]$body.doc_code
+        $partId = [string]$body.part_id
+        if (-not $relPath -or -not $projectId -or -not $stepKey -or -not $docCode) {
+          New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'path, project_id, step_key and doc_code are all required.' }
+        } else {
+          $srcPath = Join-Path $EvidenceDir $relPath
+          if (-not (Test-Path -LiteralPath $srcPath)) {
+            New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'That file is no longer in the vault - it may already have been categorized or removed.' }
+          } else {
+            $proj = @(Read-Store 'lb_projects' | Where-Object { $_.project_id -eq $projectId }) | Select-Object -First 1
+            $family = if ($proj) { [string]$proj.family } else { '' }
+            $sha = [string]$body.sha256
+            if (-not $sha) {
+              $shaAlg = [System.Security.Cryptography.SHA256]::Create()
+              try { $sha = ([BitConverter]::ToString($shaAlg.ComputeHash([System.IO.File]::ReadAllBytes($srcPath)))).Replace('-', '').ToLowerInvariant() } finally { $shaAlg.Dispose() }
+            }
+            $finalPath = $srcPath
+            $finalName = [System.IO.Path]::GetFileName($srcPath)
+            if ($body.standardize) {
+              $stdName = Get-StandardFileName -DocType $docCode -Model $family -WvnId '' -WnbId '' -Description '' `
+                           -OriginalName $finalName -Category $partId -ProjectId $projectId -Config (Get-Config)
+              $ext = [System.IO.Path]::GetExtension($stdName)
+              $stem = [System.IO.Path]::GetFileNameWithoutExtension($stdName)
+              $finalName = (Get-SafeName $stem) + '_' + $sha.Substring(0, [Math]::Min(8, $sha.Length)) + $ext
+              $newPath = Join-Path (Split-Path -Parent $srcPath) $finalName
+              if ($newPath -ne $srcPath) {
+                if (Test-Path -LiteralPath $newPath) {
+                  New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = "A file named '$finalName' already exists there - resolve that by hand first." }
+                  $finalPath = $null
+                } else {
+                  Move-Item -LiteralPath $srcPath -Destination $newPath
+                  $finalPath = $newPath
+                }
+              }
+            }
+            if ($finalPath) {
+              $row = @{
+                project_id = $projectId; step_key = $stepKey; doc_code = $docCode; part_id = $partId
+                file_name = $finalName; file_path = $finalPath; sha256 = $sha; status = 'Filed'; kind = 'file'
+                uploaded_by = $who; uploaded_utc = (Get-Date).ToUniversalTime().ToString('o')
+                notes = 'Found already in the vault, not filed through this app - categorized' + $(if ($body.standardize) { ' and renamed to the naming standard.' } else { ' in place.' })
+              }
+              $saved = Add-StoreRow -Store 'lb_deliverables' -Row $row -IdField 'deliverable_id'
+              Add-Audit -User $who -Action 'Categorize_Orphan' -ProjectId $projectId -ObjType 'Deliverable' -ObjId $docCode -From 'Uncategorized' -To 'Filed' -Detail $relPath
+              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; deliverable_id = $saved.deliverable_id; file_name = $finalName; file_path = $finalPath }
+            }
+          }
+        }
+        }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/vault/search') {
         # v11 R3: one row per DOCUMENT (project + step + doc type), its active
@@ -2599,6 +2706,73 @@ try {
         # server-side ($NamingFieldDefs) so it can never drift from what
         # Get-StandardFileName actually understands.
         New-JsonResponse -Response $res -StatusCode 200 -Body @{ fields = $script:NamingFieldDefs }
+      }
+      elseif (($method -eq 'GET' -or $method -eq 'POST') -and $path -eq '/api/config/naming/apply') {
+        # v11.1: after saving a naming rule, offer to re-name every EXISTING
+        # active document the rule now covers, not just future uploads. GET
+        # previews the count (used to word the confirmation dialog); POST
+        # actually renames.
+        #
+        # "Covers" is resolved fresh against the CURRENT rule list, not just
+        # the rule's own doc_codes: every doc_code actually in use is run
+        # through Get-NamingRule and only the ones that land on THIS rule id
+        # are in scope. That is what makes editing the one default rule (an
+        # empty doc_codes list) safe - a document whose code is still claimed
+        # by a more specific rule is never touched.
+        $cfg = Get-Config
+        $postBody = $null
+        if ($method -eq 'POST') { $postBody = Read-JsonBody -Request $req }
+        $ruleId = if ($method -eq 'GET') { [string]$req.QueryString['rule_id'] } else { [string]$postBody.rule_id }
+        $rule = @($cfg.naming.rules) | Where-Object { [string]$_.id -eq $ruleId } | Select-Object -First 1
+        if (-not $rule) {
+          New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = "Naming rule '$ruleId' not found." }
+        } else {
+          $delivs = @(Read-Store 'lb_deliverables' | Where-Object { $_.is_active -eq 'YES' -and $_.kind -ne 'link' -and $_.file_name })
+          $inUse = @($delivs | ForEach-Object { [string]$_.doc_code } | Select-Object -Unique)
+          $affectedCodes = @{}
+          foreach ($code in $inUse) {
+            $r2 = Get-NamingRule -Config $cfg -DocCode $code
+            if ($r2 -and [string]$r2.id -eq $ruleId) { $affectedCodes[$code] = $true }
+          }
+          $rows = @($delivs | Where-Object { $affectedCodes.ContainsKey([string]$_.doc_code) })
+          if ($method -eq 'GET') {
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ rule_id = $ruleId; documents = $rows.Count }
+          } else {
+            $actor = [string]$postBody.user
+            if ($actor.ToLowerInvariant() -ne 'admin') {
+              New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can rename existing documents.' }
+            } else {
+              $projects = @(Read-Store 'lb_projects'); $projById = @{}
+              foreach ($p in $projects) { $projById[[string]$p.project_id] = $p }
+              $renamed = 0; $skipped = 0; $errs = New-Object System.Collections.Generic.List[string]
+              foreach ($r in $rows) {
+                try {
+                  $proj = $projById[[string]$r.project_id]
+                  $family = if ($proj) { [string]$proj.family } else { '' }
+                  $newStd = Get-StandardFileName -DocType $r.doc_code -Model $family -WvnId $r.wvn_id -WnbId $r.wnb_id `
+                              -Description $r.description -OriginalName $r.file_name -Category $r.part_id -ProjectId $r.project_id -Config $cfg
+                  $oldPath = [string]$r.file_path
+                  if (-not $oldPath -or -not (Test-Path -LiteralPath $oldPath)) { $skipped++; continue }
+                  $ext = [System.IO.Path]::GetExtension($oldPath)
+                  $stem = [System.IO.Path]::GetFileNameWithoutExtension($newStd)
+                  # the content-hash suffix Save-Evidence appended stays - it is
+                  # what keeps two PCs filing the same bytes from colliding, and
+                  # a rename is not a new upload so nothing re-derives it.
+                  $suffix = if ($r.sha256) { '_' + $r.sha256.Substring(0, [Math]::Min(8, $r.sha256.Length)) } else { '' }
+                  $finalName = (Get-SafeName $stem) + $suffix + $ext
+                  if ($finalName -eq [System.IO.Path]::GetFileName($oldPath)) { $skipped++; continue }
+                  $newPath = Join-Path (Split-Path -Parent $oldPath) $finalName
+                  if (Test-Path -LiteralPath $newPath) { $skipped++; continue }
+                  Move-Item -LiteralPath $oldPath -Destination $newPath
+                  Set-StoreRow -Store 'lb_deliverables' -Row @{ deliverable_id = [string]$r.deliverable_id; file_name = $finalName; file_path = $newPath } -KeyFields @('deliverable_id') | Out-Null
+                  $renamed++
+                } catch { $errs.Add(([string]$r.deliverable_id) + ': ' + $_.Exception.Message) }
+              }
+              Add-Audit -User $actor -Action 'Naming_Apply_Existing' -ProjectId '' -ObjType 'Config' -ObjId $ruleId -From '' -To '' -Detail ("renamed=$renamed skipped=$skipped errors=$($errs.Count)")
+              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; scanned = $rows.Count; renamed = $renamed; skipped = $skipped; errors = $errs.ToArray() }
+            }
+          }
+        }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/config') {
         New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
@@ -2811,6 +2985,21 @@ try {
           $relative   = ([string]$body.evidence_vault_relative_to_root).Trim()
           if (-not $folderName) { $folderName = 'NPI_EPM_Documents_Control' }
           if (-not $relative)   { $relative = '..' }
+          # v11.1: the vault MUST stay under the same site as the app - a
+          # SharePoint library synced by OneDrive to every PC, per the v11
+          # storage design (see Test-StorageHealth and $JournalRoot above).
+          # A vault pointed outside that tree exists on only ONE PC, which
+          # silently breaks every other PC's uploads/history the moment they
+          # save evidence nobody else's copy can see. Nothing enforced this
+          # before v11.1 - the field just accepted arbitrary text.
+          $siteRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $RootDir))
+          $resolved = ''
+          try { $resolved = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $RootDir $relative) $folderName)) } catch { }
+          if (-not $resolved -or -not $resolved.StartsWith($siteRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{
+              error = "The vault location must stay under the same site as the app ($siteRoot) - it is deployed as one shared app folder synced to every PC, and a vault outside that tree would only exist on this one machine."
+            }
+          } else {
           $cfg = Get-Config
           $beforeFolder = [string]$cfg.deployment_defaults.evidence_vault_folder_name
           $beforeRelative = [string]$cfg.deployment_defaults.evidence_vault_relative_to_root
@@ -2826,6 +3015,35 @@ try {
           Save-Config $cfg
           Add-Audit -User $actor -Action 'Config_Vault_Update' -ProjectId '' -ObjType 'Config' -ObjId 'evidence_vault' -From ($beforeFolder + ' @ ' + $beforeRelative) -To ($folderName + ' @ ' + $relative) -Detail 'Takes effect on next server restart'
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; evidence_vault_folder_name = $folderName; evidence_vault_relative_to_root = $relative }
+          }
+        }
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/api/browse-folders') {
+        # v11.1: a real folder browser for Settings -> Evidence vault
+        # location, instead of typing a folder name and a relative path
+        # blind. Deliberately fenced to the "site" - the app root's own
+        # parent folder - the same boundary /api/config/vault now enforces,
+        # so nothing reachable here can end up producing a vault path that
+        # would break every other PC's sync. ?path= is relative to that site
+        # root; missing or outside it snaps back to the root itself.
+        $siteRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $RootDir))
+        $reqPath = [string]$req.QueryString['path']
+        $target = $siteRoot
+        if ($reqPath) {
+          try { $target = [System.IO.Path]::GetFullPath((Join-Path $siteRoot $reqPath)) } catch { $target = $siteRoot }
+          if (-not $target.StartsWith($siteRoot, [StringComparison]::OrdinalIgnoreCase)) { $target = $siteRoot }
+        }
+        $folders = @()
+        $errMsg = ''
+        try {
+          $folders = @(Get-ChildItem -LiteralPath $target -Directory -ErrorAction Stop |
+            Where-Object { $_.Name -ne 'journal' -and $_.Name -notlike '.*' } |
+            Sort-Object Name | ForEach-Object { $_.Name })
+        } catch { $errMsg = $_.Exception.Message }
+        $rel = $target.Substring($siteRoot.Length).TrimStart('\')
+        New-JsonResponse -Response $res -StatusCode 200 -Body @{
+          site_root = $siteRoot; path = $rel; folders = $folders
+          can_go_up = [bool]$rel; error = $errMsg
         }
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/issue-headers') {
@@ -3474,9 +3692,15 @@ try {
         $original = [string]$body.fileName
         # v2.2: the server names the file, so the convention holds even when
         # somebody uploads "final FINAL v3 (2).xlsx" from their desktop.
-        $stdName = Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
-                     -WnbId $body.wnbId -Description $body.description -OriginalName $original `
-                     -Category $body.partId -ProjectId $body.projectId -Config (Get-Config)
+        # v11.1: "keep original name" opts a single upload out of that and
+        # only sanitises the name Windows was already given - still
+        # content-addressed by Save-Evidence's SHA suffix, so two uploads of
+        # the same bytes still dedupe the same way either way.
+        $stdName = if ($body.keepOriginalName) { Get-SafeName $original } else {
+          Get-StandardFileName -DocType $body.docType -Model $body.family -WvnId $body.wvnId `
+            -WnbId $body.wnbId -Description $body.description -OriginalName $original `
+            -Category $body.partId -ProjectId $body.projectId -Config (Get-Config)
+        }
         $saved = Save-Evidence -DocType $body.docType -Family $body.family -PartId $body.partId -FileName $stdName -Bytes $bytes
         $saved | Add-Member -NotePropertyName originalName -NotePropertyValue $original -Force
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved

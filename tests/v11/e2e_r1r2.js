@@ -139,10 +139,26 @@ async function api(p) { const r = await fetch(BASE + p); return r.json(); }
     check('R2 retry re-sent only the rows (no file re-uploaded)', uploads === uploadsBeforeRetry, (uploads - uploadsBeforeRetry) + ' re-uploads');
     const after = await api('/api/vault/orphans');
     check('R2 zero orphaned files after the whole session', after.orphans.length === before.orphans.length, (after.orphans.length - before.orphans.length) + ' new orphans');
-    const dh = await api('/api/document-history?project_id=' + encodeURIComponent(pid) + '&step_key=' + skey + '&doc_code=' + encodeURIComponent(target.code));
-    const shas = dh.revisions.map(r => r.sha256);
-    check('R2 108 revisions recorded, no duplicate rows, one active', dh.revisions.length === 108 && new Set(shas).size === 108 && dh.revisions.filter(r => r.is_active === 'YES').length === 1,
-      'revs=' + dh.revisions.length + ' unique=' + new Set(shas).size);
+    // v11.1: dropping several files onto one dropzone at once files them as
+    // INDEPENDENT documents by default (one per file, part guessed from its
+    // own name) rather than a revision chain with only the last one active -
+    // that "only the last survives" behaviour was itself the bug v11.1 fixed
+    // (a real user report: "when tested, this ver count the last load up one
+    // is the active one, that's not right"). So all 108 here are expected to
+    // be active, each its own single-revision document, not 108 revisions of
+    // one document with only 1 active.
+    const data = await api('/api/data');
+    // .filter(r => r.revision_no) excludes the claim-marker row the "Claim
+    // Task" click at the top of this section may have left behind — a
+    // marker carries no file, so it is not one of the 108 documents this
+    // check is counting (see evidenceFor()'s own identical filter).
+    const docRows = data.tracking.lb_deliverables.filter(r => r.project_id === pid && r.step_key === skey && r.doc_code === target.code && r.revision_no);
+    const shas = docRows.map(r => r.sha256);
+    const parts = docRows.map(r => r.part_id);
+    check('R2 108 independent documents filed, no duplicate content, all active, all distinct parts',
+      docRows.length === 108 && new Set(shas).size === 108 && docRows.every(r => r.is_active === 'YES') &&
+      docRows.every(r => r.revision_no === '1') && new Set(parts).size === 108,
+      'rows=' + docRows.length + ' unique_sha=' + new Set(shas).size + ' active=' + docRows.filter(r => r.is_active === 'YES').length + ' unique_parts=' + new Set(parts).size);
     check('no uncaught page errors', errors.length === 0, errors.join(' | '));
   } catch (e) {
     fail++; console.log('FAIL exception: ' + (e && e.stack || e));

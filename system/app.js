@@ -381,11 +381,18 @@ function pageHeader(title, subtitle) {
 }
 
 async function redrawAfterWrite() {
-  const pageY = window.scrollY;
+  // v11.1 fix: this used to redraw the WHOLE current view unconditionally
+  // (show(current, true)) after every single write anywhere in the app —
+  // register a project, cite a link, categorize an orphan, anything. If the
+  // user had half-typed something in an unrelated field on the same tab (the
+  // next project's Family ID while filing evidence for this one, say), it was
+  // silently wiped the moment any write completed. Now goes through the same
+  // capture/restore the 15 s auto-reload already used, so typed-but-unsent
+  // text, focus and scroll all survive a redraw regardless of what triggered it.
+  const state = captureUiState();
   await refresh();
   populateWhoSelect();
-  show(current, true);
-  window.scrollTo(0, pageY);
+  restoreUiState(state);
 }
 async function refreshSilently() {
   const d = await API.data();
@@ -3880,8 +3887,12 @@ function openCategorizeFilesModal(files, existingParts, onConfirm) {
   var rows = $('#cfRows', box);
   files.forEach(function(f, i) {
     var tr = el('tr');
+    // v11.1: pre-filled from the file's own name, not blank — most files are
+    // already named after the part they show ("Bracket.pdf"), so this is
+    // usually a confirm rather than a typing task, and it can never come out
+    // blank-and-colliding with another file in the same batch by accident.
     tr.innerHTML = '<td><code>' + esc(f.name) + '</code></td>' +
-      '<td><input data-i="' + i + '" list="' + dlId + '" style="width:100%" placeholder="e.g. Bracket, Motor, Handle…"></td>';
+      '<td><input data-i="' + i + '" list="' + dlId + '" style="width:100%" placeholder="e.g. Bracket, Motor, Handle…" value="' + esc(partLabelFromFileName(f.name)) + '"></td>';
     rows.appendChild(tr);
   });
   scrim.appendChild(box); document.body.appendChild(scrim);
@@ -3924,10 +3935,10 @@ function existingPartsFor(pid, stepKey, docCode) {
   return out;
 }
 
-/* Native multi-file picker for "+ Add part" (drawer) and a locked/missing
-   dropzone with more than one file dropped at once — always routes through
-   the categorize modal, since the whole reason to call this instead of
-   enqueueUploads directly is that each file needs its own part label. */
+/* Native multi-file picker for "+ Add part" (drawer) — always routes through
+   the categorize modal so each file's suggested part is easy to check before
+   it files, since the whole reason to call this instead of enqueueUploads
+   directly is that each file needs its own part label. */
 function pickFilesForDoc(project, stepKey, docCode, onDone) {
   var inp = el('input'); inp.type = 'file'; inp.multiple = true; inp.style.display = 'none';
   inp.onchange = function() {
@@ -3939,6 +3950,43 @@ function pickFilesForDoc(project, stepKey, docCode, onDone) {
     });
   };
   document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
+}
+
+/* A sensible default part / category from a file's own name — "Bracket.pdf"
+   -> "Bracket" — so several files dropped for one document come out as
+   several independently-active documents by default (this is the actual
+   v11.1 fix: before, the LAST of several files dropped at once silently
+   superseded all the others). A single file dropped alone still gets a
+   blank part, unchanged from pre-v11.1 behaviour — see callers. */
+function partLabelFromFileName(name) {
+  var stem = String(name || '').replace(/\.[^.]*$/, '');
+  return stem.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 60);
+}
+
+/* Renames a part across its WHOLE history (every revision, not just the
+   active one) — a part label is metadata about the slot, not about one
+   file, so renaming only the active row would silently orphan its
+   superseded revisions into a stale "part" of their own and make them
+   reappear as active. Lets someone fix "bracket" to "Bracket - Left Hinge"
+   after the fact, per the BOM, without re-uploading anything. */
+async function renamePart(project, stepKey, docCode, oldPart, onDone) {
+  var who = requireName(); if (!who) return;
+  var next = prompt('Rename part "' + (oldPart || '(none)') + '" to:', oldPart || '');
+  if (next === null) return;
+  next = next.trim();
+  if (next === (oldPart || '')) return;
+  var rows = (TRK.lb_deliverables || []).filter(function(r) {
+    return r.project_id === project.project_id && r.step_key === stepKey && r.doc_code === docCode && (r.part_id || '') === (oldPart || '');
+  });
+  if (!rows.length) return;
+  for (var i = 0; i < rows.length; i++) {
+    await API.action('lb_deliverables', { deliverable_id: rows[i].deliverable_id, part_id: next }, {
+      upsertKeys: ['deliverable_id'],
+      audit: { user: who, action: 'Rename_Part', projectId: project.project_id, objType: 'Deliverable', objId: docCode, from: oldPart || '(none)', to: next, detail: rows[i].deliverable_id }
+    });
+  }
+  await redrawAfterWrite();
+  if (onDone) onDone();
 }
 
 /* Renders a filed document's location two ways: a link that streams it from
@@ -4181,7 +4229,13 @@ function openDrawer(project, step, focusDocCode) {
         : '<span class="note">—</span>';
       var removedMark = isDelRemoved ? ' <span class="badge bg-secondary" style="text-decoration:line-through;opacity:0.7">Removed</span>' : '';
       const revMark = x.revision_no ? ' <span class="badge bg-secondary rev-badge" title="Revision ' + esc(x.revision_no) + ' is the active one">rev ' + esc(x.revision_no) + '</span>' : '';
-      const partMark = x.part_id ? ' <span class="badge part-badge" title="Part / category">' + esc(x.part_id) + '</span>' : '';
+      // v11.1: the part badge doubles as an "Edit part" button — the whole
+      // reason a badge exists is that the filename-derived guess is often
+      // right but not always ("BOM.pdf" might really be the BOM for just one
+      // part), so relabelling it needs to be one click, not a modal.
+      const partMark = x.part_id
+        ? ' <span class="badge part-badge part-badge-btn" title="Click to rename this part">' + esc(x.part_id) + '</span>'
+        : (!isDelRemoved && !isLink ? ' <span class="badge bg-secondary part-badge part-badge-btn" title="Click to give this a part / category">+ part</span>' : '');
       tr.innerHTML = '<td>' + dcEl + removedMark + revMark + partMark + (x.custom_doc === 'YES' ? ' <span class="note custom-mark">model custom</span>' : '') + (isLink ? ' <span class="note">cited</span>' : '') + '</td>' +
         '<td><code>' + esc(x.file_name) + '</code><div class="note">' + pathHtml + '</div>' +
         (x.change_reason ? '<div class="note">Change: ' + esc(x.change_reason) + '</div>' : '') + '</td>' +
@@ -4190,6 +4244,8 @@ function openDrawer(project, step, focusDocCode) {
       // doc_code click → re-open drawer focused on this doc
       const dcLink = tr.querySelector('.doc-link');
       if (dcLink) dcLink.onclick = () => openDrawerForDoc(project, step, x.doc_code);
+      const partBtn = tr.querySelector('.part-badge-btn');
+      if (partBtn) partBtn.onclick = () => renamePart(project, sk, x.doc_code, x.part_id, () => openDrawer(project, step, x.doc_code));
       // A link_url isn't a filesystem path — nothing for Explorer to open.
       if (path && !isLink) {
         const openBtn = el('button', 'primary', 'Open in Explorer');
@@ -4428,22 +4484,31 @@ function openDrawer(project, step, focusDocCode) {
         const newDrawer = $('#drawer');
         if (newDrawer) newDrawer.scrollTop = drawerScroll;
       };
-      // v11.1: dropping straight onto this dropzone still files every file as
-      // fast as before — a folder is expanded to the files inside it, but
-      // nothing here forces a "which part" prompt, since a quick drag-drop of
-      // many files (re-filing a whole revision history, a bulk correction) is
-      // exactly as common as BOM-part filing and must not be interrupted.
-      // "+ Add part" below (and the Input tab's batch table) are the explicit,
-      // deliberate way to give several files different parts — see
-      // pickFilesForDoc / openCategorizeFilesModal.
+      // v11.1: dropping N files here at once must not end with only the LAST
+      // one active and the rest silently superseded — that was the actual
+      // bug report. A single file dropped alone still gets a blank part
+      // (unchanged). More than one gets each file its own part, taken from
+      // its own file name ("Bracket.pdf" -> part "Bracket") so no prompt is
+      // needed and nothing collides by accident; a folder drop is expanded
+      // to its files first. Wrong guesses (this is really the BOM drawing for
+      // one part, not the whole document) are fixed afterwards by clicking
+      // the part badge on the filed row — see renamePart().
+      const filesToItems = list => {
+        const multi = list.length > 1;
+        return list.map(function(file) {
+          return {
+            project: project, stepKey: sk, docCode: code, file: file,
+            uploadExtra: multi ? { partId: partLabelFromFileName(file.name) } : undefined,
+            rowExtra: multi ? { part_id: partLabelFromFileName(file.name) } : undefined
+          };
+        });
+      };
       dz.ondrop = async e => {
         e.preventDefault();
         dz.style.borderColor = ''; dz.style.background = '';
         const entries = await filesFromDataTransfer(e.dataTransfer);
         if (!entries.length) return;
-        enqueueUploads(entries.map(function(fe) {
-          return { project: project, stepKey: sk, docCode: code, file: fe.file };
-        }), function() { afterUpload(); });
+        enqueueUploads(filesToItems(entries.map(fe => fe.file)), function() { afterUpload(); });
       };
       dz.onclick = (e) => {
         // Any interactive control inside the dropzone (buttons, the template
@@ -4457,9 +4522,7 @@ function openDrawer(project, step, focusDocCode) {
         const inp = el('input'); inp.type = 'file'; inp.multiple = true; inp.style.display = 'none';
         inp.onchange = () => {
           if (!inp.files.length) return;
-          enqueueUploads(Array.prototype.map.call(inp.files, function(file) {
-            return { project: project, stepKey: sk, docCode: code, file: file };
-          }), function() { afterUpload(); });
+          enqueueUploads(filesToItems(Array.prototype.slice.call(inp.files)), function() { afterUpload(); });
         };
         document.body.appendChild(inp); inp.click(); document.body.removeChild(inp);
       };
@@ -5408,11 +5471,13 @@ function viewInput(root) {
       '<datalist id="bProjList">' + projOpts + '</datalist>' +
       '<label>WVN code</label><input id="bWvn" style="width:100px" placeholder="1010523">' +
       '<label>WNB code</label><input id="bWnb" style="width:100px" placeholder="3025015">' +
+      '<label class="note" style="font-weight:400;display:flex;align-items:center;gap:4px"><input type="checkbox" id="bKeepName"> keep the original file name</label>' +
       '</div>' +
       '<p class="note">Document type, step and part are guessed where possible — check them. ' +
       'Give two files the same document type but a DIFFERENT part when they are different BOM parts of the same document ' +
       '(e.g. a drawing per part) — otherwise the second one supersedes the first instead of filing alongside it. ' +
-      'The WVN and WNB codes apply to every file in this batch and feed the standardised name.</p>' +
+      'The WVN and WNB codes apply to every file in this batch and feed the standardised name — unless "keep the original ' +
+      'file name" is ticked, which files every one of them under its own name instead.</p>' +
       '<datalist id="bPartList">' + partOpts.map(p => '<option value="' + esc(p) + '">').join('') + '</datalist>' +
       '<div class="scroll"><table><thead><tr><th>Dropped file</th><th>Document type</th><th>Step</th>' +
       '<th>Description</th><th>Part / category</th><th>Will be saved as</th><th>Skip</th></tr></thead><tbody id="bRows"></tbody></table></div>' +
@@ -5433,6 +5498,17 @@ function viewInput(root) {
         file: f, idx: i, desc: guess.desc, part: '', skip: false, confident: guess.confident,
         doc: guess.confident ? guess.doc : '', step: guess.confident ? guess.step : null
       };
+    });
+    // v11.1: two files that guessed the SAME document type would otherwise
+    // both default to a blank part — the second one then supersedes the
+    // first as soon as they're both filed. Give each a part from its own
+    // file name up front, so a batch of "one drawing per BOM part" comes out
+    // as several independent documents by default; still freely editable
+    // per row afterwards.
+    const byGuessedDoc = {};
+    state.forEach(st => { if (st.doc) (byGuessedDoc[st.doc] = byGuessedDoc[st.doc] || []).push(st); });
+    Object.keys(byGuessedDoc).forEach(doc => {
+      if (byGuessedDoc[doc].length > 1) byGuessedDoc[doc].forEach(st => { st.part = partLabelFromFileName(st.file.name); });
     });
 
     /* Rows are redrawn whenever Skip or the project changes, so every draw
@@ -5532,10 +5608,15 @@ function viewInput(root) {
        reimplementing the rules here and letting the two drift apart */
     const previewNames = async () => {
       const p = projById($('#bProj', form).value);
+      const keepName = $('#bKeepName', form).checked;
       for (const st of state) {
         const cell = rowsHost.querySelector('[data-name="' + st.idx + '"]');
         if (!cell) continue;
         if (st.skip) { cell.textContent = '—'; continue; }
+        // "Keep the original name" skips the naming standard entirely — no
+        // server round trip needed, it is just the file's own name, made
+        // filesystem-safe.
+        if (keepName) { cell.innerHTML = '<code>' + esc(st.file.name.replace(/[\\/:*?"<>|]/g, '_')) + '</code>'; continue; }
         try {
           const r = await API.previewName({
             docType: st.doc, family: p ? p.family : '', wvnId: $('#bWvn', form).value.trim(),
@@ -5553,6 +5634,7 @@ function viewInput(root) {
     $('#bProj', form).onchange = drawRows;
     $('#bWvn', form).onchange = previewNames;
     $('#bWnb', form).onchange = previewNames;
+    $('#bKeepName', form).onchange = previewNames;
     drawRows();
 
     $('#bCancel', form).onclick = () => { form.className = 'hide'; form.innerHTML = ''; fin.value = ''; };
@@ -5595,12 +5677,13 @@ function viewInput(root) {
       // bytes, rows in chunks of 20, retries, per-file status in the panel.
       // The staged rows are cleared at once, so the queue owns the files and
       // auto-reload stays paused only while it is actually working.
+      const keepName = $('#bKeepName', form).checked;
       const items = todo.map(function(st) {
         const step = stepsOf(p.process, p).find(s => s.step_id === Number(st.step));
         const part = (st.part || '').trim();
         return {
           project: p, stepKey: stepKeyOf(p.process, step), docCode: st.doc, file: st.file,
-          uploadExtra: { docType: st.doc, family: p.family, partId: part, wvnId: wvn, wnbId: wnb, description: st.desc },
+          uploadExtra: { docType: st.doc, family: p.family, partId: part, wvnId: wvn, wnbId: wnb, description: st.desc, keepOriginalName: keepName },
           rowExtra: function(up) {
             return {
               status: up.duplicate ? 'Already filed' : 'Filed', approved: 'NO', suspect_template: 'NO',
@@ -5658,19 +5741,54 @@ function viewInput(root) {
       ' straight into the vault folder — Categorize each one so it shows up on the dashboard and in the Vault, or mark it as not a deliverable.';
     orphBody.appendChild(banner);
     const t = el('table');
-    t.innerHTML = '<thead><tr><th>File</th><th>Size</th><th>Put there by</th><th>When</th><th></th></tr></thead>';
+    t.innerHTML = '<thead><tr><th>File</th><th>Looks like</th><th>Size</th><th>Put there by</th><th>When</th><th></th></tr></thead>';
     const tb = el('tbody');
     list.forEach(o => {
       const tr = el('tr');
+      const g = o.guess;
+      // v11.1: if the file already sits where the app itself would have put
+      // it ([Family]\[DocType]\[Part]\file), say so plainly instead of a
+      // blank form — the point of "aware where the user placed the doc" is
+      // that filing it becomes a one-click confirm, not a re-typed guess.
+      const guessCell = g
+        ? (g.confident
+            ? '<b>' + esc(g.project_id) + '</b> / ' + esc(g.doc_code) + (g.part_id ? ' (' + esc(g.part_id) + ')' : '') + '<div class="note">' + esc(g.doc_name || '') + '</div>'
+            : '<span class="note">' + esc(g.doc_code) + (g.part_id ? ' (' + esc(g.part_id) + ')' : '') + ', family "' + esc(g.family) + '"' +
+              (g.ambiguous_projects.length > 1 ? ' — matches ' + g.ambiguous_projects.length + ' projects, pick one' : ' — no step found, pick one') + '</span>')
+        : '<span class="note">not in a recognised folder structure</span>';
       tr.innerHTML = '<td><code>' + esc(o.path) + '</code></td>' +
+        '<td>' + guessCell + '</td>' +
         '<td>' + Math.round(o.bytes / 1024) + ' KB</td>' +
         '<td>' + esc(o.owner || '(unknown)') + '</td>' +
         '<td>' + esc(fmtStamp(o.created_utc)) + '<div class="note">modified ' + esc(fmtStamp(o.modified_utc)) + '</div></td>' +
         '<td></td>';
       const acts = tr.lastChild;
-      const catBtn = el('button', 'primary sm', 'Categorize');
-      catBtn.onclick = () => openOrphanCategorizeModal(o);
-      acts.appendChild(catBtn);
+      if (g && g.confident) {
+        const okBtn = el('button', 'primary sm', 'Confirm');
+        okBtn.title = 'File as ' + g.project_id + ' / ' + g.doc_code + (g.part_id ? ' (' + g.part_id + ')' : '') + ', renamed to the naming standard';
+        okBtn.onclick = async () => {
+          const who = requireName(); if (!who) return;
+          if (!confirm('File this as ' + g.project_id + ' / ' + g.doc_code + (g.part_id ? ' (' + g.part_id + ')' : '') +
+            ' and rename it to match the current naming standard?')) return;
+          okBtn.disabled = true;
+          try {
+            await API.post('/api/vault/orphans/adopt', {
+              user: who, path: o.path, sha256: o.sha256, standardize: true,
+              project_id: g.project_id, step_key: g.step_key, doc_code: g.doc_code, part_id: g.part_id
+            });
+            await redrawAfterWrite();
+          } catch (e) { alert('Could not file it: ' + e.message); okBtn.disabled = false; }
+        };
+        acts.appendChild(okBtn);
+        const adjBtn = el('button', 'sm', 'Adjust');
+        adjBtn.style.marginLeft = '4px';
+        adjBtn.onclick = () => openOrphanCategorizeModal(o);
+        acts.appendChild(adjBtn);
+      } else {
+        const catBtn = el('button', 'primary sm', 'Categorize');
+        catBtn.onclick = () => openOrphanCategorizeModal(o);
+        acts.appendChild(catBtn);
+      }
       const ignBtn = el('button', 'sm', 'Not a deliverable');
       ignBtn.style.marginLeft = '4px';
       ignBtn.onclick = async () => {
@@ -5689,23 +5807,28 @@ function viewInput(root) {
 }
 
 /* v11.1 — registers an orphan file found already sitting in the vault as a
-   real deliverable, IN PLACE: nothing is renamed, moved or re-uploaded, only
-   a lb_deliverables row is written pointing at the file exactly where it
-   already is. Renaming it to the standard naming convention too is left as a
-   deliberate non-goal for now — moving files around inside a folder that
-   OneDrive is actively syncing is its own can of worms, and "New revision"
-   already gives an easy path to re-file it properly later if wanted. */
+   real deliverable. Pre-fills project/document/step/part from the file's
+   own location when Get-OrphanGuess recognised it (the "aware where the
+   user placed the doc" case), otherwise opens blank for a fully manual pick.
+   "Standardize the name" (checked whenever the guess was confident, since
+   that is what being asked to confirm a guess implies) renames the file to
+   the current naming standard via POST /api/vault/orphans/adopt; unchecked
+   keeps the original name and location exactly as found. */
 function openOrphanCategorizeModal(orphan) {
+  const g = orphan.guess;
   const scrim = el('div', 'modal-scrim');
   const box = el('div', 'modal');
   box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
   const projOpts = TRK.lb_projects.map(r => '<option value="' + esc(r.project_id) + '">').join('');
   box.innerHTML = '<h2>Categorize file</h2><p class="note"><code>' + esc(orphan.path) + '</code></p>' +
+    (g ? '<p class="note">Guessed from its folder: ' + esc(g.doc_code) + (g.part_id ? ' (' + esc(g.part_id) + ')' : '') +
+      ' under family "' + esc(g.family) + '"' + (g.ambiguous_projects.length > 1 ? ' — matches several projects, pick the right one below' : '') + '.</p>' : '') +
     '<div class="filters" style="flex-direction:column;align-items:stretch;gap:8px">' +
-    '<label>Project</label><input id="ocProj" list="ocProjList"><datalist id="ocProjList">' + projOpts + '</datalist>' +
-    '<label>Document type</label><input id="ocDoc" list="ocDocList" placeholder="— pick document type —"><datalist id="ocDocList"></datalist>' +
+    '<label>Project</label><input id="ocProj" list="ocProjList" value="' + esc(g && g.ambiguous_projects.length <= 1 ? (g.project_id || '') : '') + '"><datalist id="ocProjList">' + projOpts + '</datalist>' +
+    '<label>Document type</label><input id="ocDoc" list="ocDocList" placeholder="— pick document type —" value="' + esc(g ? g.doc_code : '') + '"><datalist id="ocDocList"></datalist>' +
     '<label>Step</label><input id="ocStep" list="ocStepList" placeholder="— pick step —"><datalist id="ocStepList"></datalist>' +
-    '<label>Part / category (optional)</label><input id="ocPart" placeholder="e.g. Bracket">' +
+    '<label>Part / category (optional)</label><input id="ocPart" placeholder="e.g. Bracket" value="' + esc(g ? g.part_id || '' : '') + '">' +
+    '<label class="note" style="font-weight:400"><input type="checkbox" id="ocStd"' + (g && g.confident ? ' checked' : '') + '> Standardize the file name to the current naming standard (unchecked keeps its original name, in place)</label>' +
     '</div><div class="acts"><button id="ocCancel">Cancel</button><button id="ocGo" class="primary">File it</button></div>';
   scrim.appendChild(box); document.body.appendChild(scrim);
   const refill = (keepDoc) => {
@@ -5719,6 +5842,17 @@ function openOrphanCategorizeModal(orphan) {
       if (best && !$('#ocStep', box).value.trim()) $('#ocStep', box).value = best.step.step_id + ' — ' + best.step.step_name;
     }
   };
+  refill(false);
+  // A confident guess already knows the step key directly (it walked the
+  // process' own step list to find it) — resolve it to the "N — Name" label
+  // refill() expects, rather than re-deriving it from bestStepForDoc, which
+  // can legitimately disagree when a document is required at more than one step.
+  if (g && g.confident && g.step_key) {
+    const p = projById(g.project_id);
+    const stepId = g.step_key.split('-').pop();
+    const step = p && stepsOf(p.process, p).find(s => String(s.step_id) === stepId);
+    if (step) $('#ocStep', box).value = step.step_id + ' — ' + step.step_name;
+  }
   $('#ocProj', box).onchange = () => refill(false);
   $('#ocDoc', box).onchange = () => refill(false);
   $('#ocStep', box).onchange = () => refill(true);
@@ -5734,13 +5868,13 @@ function openOrphanCategorizeModal(orphan) {
     if (stepId == null) { alert('Pick a valid step first.'); return; }
     const step = stepsOf(p.process, p).find(s => s.step_id === stepId);
     const part = $('#ocPart', box).value.trim();
-    const filePath = (PATHS.vault ? PATHS.vault.replace(/\\$/, '') + '\\' : '') + orphan.path;
-    await API.action('lb_deliverables', {
-      project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: doc,
-      file_name: orphan.path.split(/[\\/]/).pop(), file_path: filePath, sha256: orphan.sha256 || '',
-      status: 'Filed', kind: 'file', uploaded_by: who, uploaded_utc: new Date().toISOString(),
-      notes: 'Found already in the vault, not filed through this app — categorized in place.', part_id: part
-    }, { audit: { user: who, action: 'Categorize_Orphan', projectId: p.project_id, objType: 'Deliverable', objId: doc, from: 'Uncategorized', to: 'Filed', detail: orphan.path } });
+    const btn = $('#ocGo', box); btn.disabled = true;
+    try {
+      await API.post('/api/vault/orphans/adopt', {
+        user: who, path: orphan.path, sha256: orphan.sha256, standardize: $('#ocStd', box).checked,
+        project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: doc, part_id: part
+      });
+    } catch (e) { alert('Could not file it: ' + e.message); btn.disabled = false; return; }
     close();
     await redrawAfterWrite();
   };
@@ -5838,7 +5972,7 @@ function renderVaultResults(out, res, rerun) {
     // instead of the old binary Active/Removed that never told anyone
     // whether a filed document had actually been signed off.
     const statusCls = badgeClass(String(r.status || '').toUpperCase());
-    const partBadge = r.part_id ? ' <span class="badge part-badge" title="Part / category">' + esc(r.part_id) + '</span>' : '';
+    const partBadge = r.part_id ? ' <span class="badge part-badge part-badge-btn" title="Click to rename this part">' + esc(r.part_id) + '</span>' : '';
     tr.innerHTML =
       '<td><b>' + esc(r.project_id) + '</b><div class="note">' + esc(r.family || '') + '</div></td>' +
       '<td>' + esc(pillarName(r.process)) + '</td>' +
@@ -5870,6 +6004,8 @@ function renderVaultResults(out, res, rerun) {
         acts.appendChild(nr);
       }
     }
+    const partBtn = tr.querySelector('.part-badge-btn');
+    if (partBtn && project) partBtn.onclick = () => renamePart(project, r.step_key, r.doc_code, r.part_id, rerun);
     tb.appendChild(tr);
   });
   t.appendChild(tb); wrap.appendChild(t); out.appendChild(wrap);
@@ -5952,11 +6088,29 @@ function previewNamingSegments(segments, sample, originalName) {
 function rawNamingRules() {
   return JSON.parse(JSON.stringify((CFG.naming && CFG.naming.rules && CFG.naming.rules.length) ? CFG.naming.rules : []));
 }
-async function postNaming(rules) {
+async function postNaming(rules, appliedRuleId) {
   try { await API.post('/api/config/naming', { user: getUser(), rules }); }
   catch (e) { alert('Could not save: ' + e.message); return; }
   await refreshSilently();
   show('settings');
+  // v11.1: offer to bring existing filed documents in line with the rule
+  // that was just saved — otherwise "the naming standard changed" only ever
+  // affects files uploaded from now on, and the vault ends up a mix of old
+  // and new names with no way to tell which is which without opening History.
+  if (!appliedRuleId) return;
+  let count = 0;
+  try { count = (await (await fetch('/api/config/naming/apply?rule_id=' + encodeURIComponent(appliedRuleId))).json()).documents || 0; }
+  catch (e) { return; }
+  if (!count) return;
+  if (!confirm('Rename ' + count + ' already-filed document' + (count === 1 ? '' : 's') + ' that this rule now covers, to match the new naming standard?\n\n' +
+    'Only the file name changes — the file\'s content, revision history and folder are untouched.')) return;
+  let result;
+  try { result = await API.post('/api/config/naming/apply', { user: getUser(), rule_id: appliedRuleId }); }
+  catch (e) { alert('Rename failed: ' + e.message); return; }
+  alert('Renamed ' + result.renamed + ' of ' + result.scanned + ' document(s).' +
+    (result.skipped ? ' ' + result.skipped + ' skipped (already correctly named, or the target name already exists).' : '') +
+    (result.errors && result.errors.length ? '\n\nErrors:\n' + result.errors.join('\n') : ''));
+  await redrawAfterWrite();
 }
 function namingCard() {
   const card = el('div', 'card naming-card');
@@ -6000,10 +6154,22 @@ function editNamingRuleModal(rule, index) {
   box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
   box.setAttribute('aria-labelledby', 'nrTitle');
   const v = x => esc(x == null ? '' : String(x));
+  // v11.1: a checkbox list of known document types to pick from, rather than
+  // typing codes by hand and hoping they're spelled the way the catalogue
+  // spells them. A "custom / other codes" box stays underneath for anything
+  // not in the shared catalogue (a per-pillar or per-project custom doc).
+  const knownCodes = allDocTypes().map(d => d.doctype_id).sort();
+  const rawCodes = (raw.doc_codes || []).map(c => String(c).toUpperCase());
+  const otherCodes = rawCodes.filter(c => knownCodes.indexOf(c) < 0);
   box.innerHTML = '<h2 id="nrTitle">' + (isNew ? 'Add naming rule' : 'Edit naming rule') + '</h2>' +
     '<div class="fld"><span>Label</span><input id="nrLabel" value="' + v(raw.label) + '" placeholder="e.g. Drawings"></div>' +
-    '<div class="fld"><span>Applies to these document codes (comma-separated — leave blank for "everything else")</span>' +
-    '<input id="nrCodes" value="' + v((raw.doc_codes || []).join(', ')) + '" placeholder="e.g. DWG, PFMEA"></div>' +
+    '<div class="fld"><span>Applies to (leave everything unchecked and blank for "everything else")</span>' +
+    '<div class="naming-code-list scroll">' + knownCodes.map(c => {
+      const dt = allDocTypes().find(d => d.doctype_id === c);
+      return '<label><input type="checkbox" data-code="' + esc(c) + '"' + (rawCodes.indexOf(c) >= 0 ? ' checked' : '') + '> ' +
+        esc(c) + (dt && dt.name && dt.name !== c ? ' <span class="note">— ' + esc(dt.name) + '</span>' : '') + '</label>';
+    }).join('') + '</div>' +
+    '<input id="nrOtherCodes" value="' + v(otherCodes.join(', ')) + '" placeholder="Other / custom codes, comma-separated" style="margin-top:6px"></div>' +
     '<h3 style="margin-bottom:4px">The file name is built from, in this order:</h3>' +
     '<table class="naming-seg-table"><thead><tr><th style="width:40px"></th><th>Piece</th><th style="width:80px"></th></tr></thead><tbody id="nrSegs"></tbody></table>' +
     '<div class="filters" style="margin-top:6px"><button id="nrAddField" type="button" class="sm">+ Add a field</button>' +
@@ -6012,6 +6178,12 @@ function editNamingRuleModal(rule, index) {
     '<p class="nr-err" style="color:var(--bad);display:none"></p>' +
     '<div class="acts"></div>';
   scrim.appendChild(box); document.body.appendChild(scrim);
+  // Common separators, offered as a pick-list on every "fixed text" input —
+  // still a free text box (a prefix like "PD" is legitimate too), just with
+  // suggestions so the usual case needs no typing.
+  const sepListId = 'nrSepList' + (++_modalSeq);
+  box.insertAdjacentHTML('beforeend', '<datalist id="' + sepListId + '">' +
+    ['_', '-', ' ', '.', 'PD'].map(s => '<option value="' + esc(s) + '">').join('') + '</datalist>');
   const segs = (raw.segments || []).map(s => Object.assign({}, s));
   const segBody = box.querySelector('#nrSegs');
   const preview = box.querySelector('#nrPreview');
@@ -6024,7 +6196,7 @@ function editNamingRuleModal(rule, index) {
         '<button type="button" class="sm" data-mv="down" data-i="' + i + '"' + (i === segs.length - 1 ? ' disabled' : '') + '>↓</button></div>';
       let piece;
       if (seg.type === 'text') {
-        piece = '<span class="note">Text:</span> <input data-k="value" data-i="' + i + '" value="' + v(seg.value) + '" placeholder="e.g. _ or PD" style="width:160px">';
+        piece = '<span class="note">Text:</span> <input list="' + sepListId + '" data-k="value" data-i="' + i + '" value="' + v(seg.value) + '" placeholder="e.g. _ or PD" style="width:160px">';
       } else {
         piece = '<span class="note">Field:</span> <select data-k="key" data-i="' + i + '">' +
           NAMING_FIELDS.map(f => '<option value="' + f[0] + '"' + (seg.key === f[0] ? ' selected' : '') + '>' + esc(f[1]) + '</option>').join('') +
@@ -6073,9 +6245,11 @@ function editNamingRuleModal(rule, index) {
   const no = el('button', '', 'Cancel'); no.onclick = close;
   const yes = el('button', 'primary', isNew ? 'Add rule' : 'Save rule');
   yes.onclick = () => {
+    const checked = $$('.naming-code-list input[type=checkbox]:checked', box).map(c => c.dataset.code);
+    const other = box.querySelector('#nrOtherCodes').value.split(/[,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
     const out = {
       id: raw.id, label: box.querySelector('#nrLabel').value.trim(),
-      doc_codes: box.querySelector('#nrCodes').value.split(/[,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean),
+      doc_codes: checked.concat(other).filter((c, i, a) => a.indexOf(c) === i),
       segments: segs
     };
     if (!out.label) { err('A label is required.'); return; }
@@ -6084,9 +6258,66 @@ function editNamingRuleModal(rule, index) {
     const l = rawNamingRules();
     if (isNew) l.push(out); else l[index] = out;
     close();
-    postNaming(l);
+    postNaming(l, out.id);
   };
   acts.appendChild(no); acts.appendChild(yes);
+}
+
+/* v11.1 — a folder browser fenced to the app's "site" (its own parent
+   folder), for Settings -> Evidence vault location. Backed by
+   GET /api/browse-folders, which enforces the same boundary server-side —
+   this is a convenience for picking a path that was always going to be
+   validated on save, not the only thing stopping someone leaving the site. */
+function openVaultFolderBrowser(onChoose) {
+  const scrim = el('div', 'modal-scrim');
+  const box = el('div', 'modal');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  box.innerHTML = '<h2>Choose the vault folder</h2>' +
+    '<p class="note" id="vbBreadcrumb"></p>' +
+    '<div class="scroll naming-code-list" id="vbList" style="max-height:280px;display:block"></div>' +
+    '<p class="vb-err note" style="color:var(--bad);display:none"></p>' +
+    '<div class="acts"><button id="vbUp" class="sm">↑ Up</button><button id="vbCancel">Cancel</button><button id="vbChoose" class="primary">Choose this folder</button></div>';
+  scrim.appendChild(box); document.body.appendChild(scrim);
+  let cwd = '';
+  const list = box.querySelector('#vbList');
+  const crumb = box.querySelector('#vbBreadcrumb');
+  const errEl = box.querySelector('.vb-err');
+  const load = async (path) => {
+    errEl.style.display = 'none';
+    list.innerHTML = '<p class="note">Loading…</p>';
+    let data;
+    try {
+      const r = await fetch('/api/browse-folders?path=' + encodeURIComponent(path || ''), { cache: 'no-store' });
+      data = await r.json();
+    } catch (e) { errEl.textContent = 'Could not list folders: ' + e.message; errEl.style.display = ''; return; }
+    cwd = data.path || '';
+    crumb.textContent = '(site root)/' + cwd;
+    box.querySelector('#vbUp').disabled = !data.can_go_up;
+    if (data.error) { errEl.textContent = data.error; errEl.style.display = ''; }
+    list.innerHTML = '';
+    if (!data.folders.length) { list.appendChild(el('p', 'note', '(no subfolders here)')); return; }
+    data.folders.forEach(name => {
+      const row = el('div');
+      row.style.cssText = 'padding:4px 2px;cursor:pointer';
+      row.innerHTML = iconHtml('folder-open') + ' ' + esc(name);
+      row.onclick = () => load(cwd ? cwd + '/' + name : name);
+      row.onmouseenter = () => row.style.background = 'var(--soft)';
+      row.onmouseleave = () => row.style.background = '';
+      list.appendChild(row);
+    });
+  };
+  box.querySelector('#vbUp').onclick = () => {
+    const parts = cwd.split('/').filter(Boolean); parts.pop();
+    load(parts.join('/'));
+  };
+  const close = () => scrim.remove();
+  box.querySelector('#vbCancel').onclick = close;
+  box.querySelector('#vbChoose').onclick = () => {
+    if (!cwd) { errEl.textContent = 'Pick a subfolder — the site root itself cannot be the vault.'; errEl.style.display = ''; return; }
+    close();
+    onChoose(cwd);
+  };
+  load('');
 }
 
 function rawPillarList() {
@@ -7874,6 +8105,7 @@ function viewSettings(root) {
   const vpHdr = el('div', 'card-header'); vpHdr.appendChild(el('h3', 'card-title', 'Evidence vault location')); vp.appendChild(vpHdr);
   const vpBody = el('div', 'card-body');
   vpBody.appendChild(el('p', 'note', 'Where uploaded evidence files are stored, as a folder name and a path relative to the app\'s install folder (default: one level up, named "NPI_EPM_Documents_Control"). Changing this does NOT move files already uploaded, and does not take effect until the server is restarted.'));
+  vpBody.appendChild(el('p', 'note', '⚠ Must stay under the same site as the app (the shared SharePoint/OneDrive folder this copy runs from) — this app is deployed as ONE app folder synced to every PC, and a vault outside that tree would exist on this machine only. "Browse…" only ever lets you pick from inside it.'));
   const dd = (CFG.deployment_defaults || {});
   const vpRow = el('div');
   vpRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end';
@@ -7891,6 +8123,23 @@ function viewSettings(root) {
   relInput.style.cssText = 'display:block;width:160px';
   relWrap.appendChild(relInput);
   vpRow.appendChild(relWrap);
+  if (isAdmin()) {
+    const browseBtn = el('button', '', 'Browse…');
+    browseBtn.type = 'button';
+    browseBtn.onclick = () => openVaultFolderBrowser(function(relPath) {
+      // relPath is relative to the site root (the app's own parent folder) —
+      // split into "relative path from app root" + "folder name" the same
+      // way the two saved fields already mean: relative_to_root climbs OUT
+      // of the app folder first (".." to reach the site root, then back
+      // down), folder_name is the leaf.
+      const parts = relPath.split('/').filter(Boolean);
+      const leaf = parts.pop() || 'NPI_EPM_Documents_Control';
+      const rest = parts.length ? '\\' + parts.join('\\') : '';
+      relInput.value = '..' + rest;
+      folderInput.value = leaf;
+    });
+    vpRow.appendChild(browseBtn);
+  }
   vpBody.appendChild(vpRow);
   if (isAdmin()) {
     const vpSaveBtn = el('button', 'primary', 'Save (restart required)');

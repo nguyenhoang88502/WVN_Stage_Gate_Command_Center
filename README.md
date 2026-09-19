@@ -565,28 +565,48 @@ Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) an
   `lb_deliverables`. `Set-DerivedRevisions` and `Get-VaultIndex` group by
   `project + step + doc_code + part_id`, not just `doc_code`, so filing a drawing per BOM part under
   one document type no longer supersedes every part but the last one — the exact failure this fixed.
-  Dropping more than one file at once (the drawer's dropzone, "+ Add part", or the Input tab's batch
-  table) prompts for each file's part / category before filing; a single file is unaffected (blank
-  part, same behaviour as before v11.1). History, New revision and the Vault are all part-scoped.
+  Dropping **more than one file at once files ALL of them as independently active by default** — each
+  gets a part derived from its own file name ("Bracket.pdf" → part "Bracket") rather than needing a
+  prompt; a single file dropped alone is unaffected (blank part, same as before v11.1). A wrong guess
+  is fixed afterwards with one click on the part badge (**renamePart** — renames the WHOLE history of
+  that part, not just the active revision, so a superseded file never reappears "active" under its old
+  label). "+ Add part" and the Input tab's batch table still ask per file, for when the default guess
+  needs a real answer instead. History, New revision and the Vault are all part-scoped.
 - **File naming standard, editable with no code** — `config.json` `naming.rules[]`: an ordered list of
   rules (first whose document-code list matches wins; a blank list is the default), each an ordered
   list of *segments* — a field (document code, model, WVN/WNB, description, project ID, part, date,
-  time) or literal text — built and previewed live in **Settings → File naming standard**, no format
-  string to get right. Shipped seeded with the exact pre-v11.1 hard-coded shapes (default + DWG), so
-  upgrading changes no file name until an admin edits it. `POST /api/config/naming` (admin-only,
-  validated as a whole, same pattern as Pillars).
+  time) or literal text — built with a checkbox list of known document codes (not free typing) and
+  previewed live in **Settings → File naming standard**. Shipped seeded with the exact pre-v11.1
+  hard-coded shapes (default + DWG), so upgrading changes no file name until an admin edits it.
+  Saving a rule offers to **rename every already-filed document it now covers** to match
+  (`GET`/`POST /api/config/naming/apply`) — resolved fresh against the current rule list, so editing
+  the one default rule never touches a document a more specific rule still owns. Any single upload can
+  opt out of the naming standard entirely with **keep the original file name** (the Input tab's batch
+  form, and orphan categorizing) — still content-addressed, so dedup is unaffected.
 - **Folder drop** — dropping a folder (Input tab, or a drawer dropzone) expands to every file inside it
   via `webkitGetAsEntry`; if the folder's own name matches a registered project (by project_id or
   family, ignoring case/punctuation), that project is pre-selected. The Input tab's project field is
   now a searchable combobox as well as a picker.
-- **Uncategorized vault files, surfaced** — `GET /api/vault/orphans` (built in R2, never wired to the
-  UI) now also reports each file's Windows owner, creation time and SHA-256, and excludes anything
-  recorded in the new append-only `lb_vault_ignored` store. The Input tab's new "Uncategorized files"
-  card lists every one prominently with who/when, **Categorize** (registers it in place — nothing is
-  renamed or moved) or **Not a deliverable** (dismisses it with a reason).
+- **Uncategorized vault files, surfaced and auto-detected** — `GET /api/vault/orphans` (built in R2,
+  never wired to the UI) now also reports each file's Windows owner, creation time, SHA-256 and — when
+  the file already sits in the app's own folder pattern (`[Family]\[DocType]\[Part]\file`) — a guessed
+  project/document/part (`Get-OrphanGuess`), excludes anything recorded in the new append-only
+  `lb_vault_ignored` store. The Input tab's "Uncategorized files" card shows the guess plainly and a
+  one-click **Confirm** (also renames it to the current naming standard) next to **Adjust** (opens the
+  full picker, pre-filled) and **Not a deliverable**. `POST /api/vault/orphans/adopt` does the actual
+  registering, with **standardize the name** (rename) as an explicit, opt-out checkbox — unchecked
+  keeps the file's original name and location exactly as found.
 - **Document Vault status fixed** — it read either `Active` or `Removed` regardless of whether anyone
   had actually signed off; now `Filed` / `Approved` (the step's gate is signed or bypassed) / `Removed`,
   the same promotion rule the dashboard already used. Vault rows also show the part badge.
+- **Evidence vault location gets a real folder browser** — `GET /api/browse-folders`, fenced to the
+  app's own site (its parent folder) — the same boundary `POST /api/config/vault` now actually
+  enforces server-side (it used to accept any text at all, silently allowing a vault outside the
+  synced folder that only that one PC could see).
+- **A real bug, not a missing feature:** `redrawAfterWrite()` — called after nearly every write in the
+  app — rebuilt the current view unconditionally, discarding anything typed but not yet submitted in
+  an unrelated field on the same page. Now goes through the same capture/restore the 15 s auto-reload
+  already used.
 - Tests: `tests\v11_1\e2e_parts_naming_vault.js` (31 checks); `tests\storage\test_storage.ps1` (32),
   `tests\v11\e2e_r1r2.js` (16) and `tests\v11\e2e_r3r4.js` (32) pass unchanged.
 
