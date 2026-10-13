@@ -184,8 +184,24 @@ function toWeek(value) {
    requests; the server (system\tracking\*.csv) is always the source of
    truth, so a second browser/user sees the same state after any refresh.
    ===================================================================== */
+/* v12: every /api/* call needs a signed-in session. A 401 means the session
+   has ended (the launcher restarted, or 12 idle hours passed), so the browser
+   goes back to the login page rather than leaving a screen full of failed
+   requests. Wrapped once here because several views call fetch() directly
+   instead of going through API.post. */
+(function guardSession() {
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async function(input, init) {
+    const r = await realFetch(input, init);
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (r.status === 401 && url.indexOf('/api/') !== -1 && url.indexOf('/api/auth/') === -1) location.href = '/login.html';
+    return r;
+  };
+})();
+
 const API = {
   async data() { const r = await fetch('/api/data', { cache: 'no-store' }); if (!r.ok) throw await API.err(r); return r.json(); },
+  async get(path) { const r = await fetch(path, { cache: 'no-store' }); if (!r.ok) throw await API.err(r); return r.json(); },
   async createProject(body) { return API.post('/api/projects', body); },
   async action(store, row, opts) { return API.post('/api/action', { store, row, upsertKeys: (opts || {}).upsertKeys, audit: (opts || {}).audit }); },
   async upload(body) { return API.post('/api/upload', body); },
@@ -200,8 +216,6 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
   async importIssues(csv, user) { return API.post('/api/issues/import', { csv, user }); },
   async batchProjects(csv, user) { return API.post('/api/projects/batch', { csv, user }); },
   async openPath(path) { return API.post('/api/open-path', { path }); },
-  async verifyPin(pin) { return API.post('/api/config/verify-pin', { pin }); },
-  async changePin(currentPin, newPin, user) { return API.post('/api/config/change-pin', { currentPin, newPin, user }); },
   async post(path, body) {
     // charset spelled out: without it the server used to decode as cp1252 (v11 fix).
     const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify(body) });
@@ -216,14 +230,15 @@ let CFG = null;                    // config.json (prod_families, change_types, 
 let TRK = {};                      // tracking store arrays, keyed by store name
 let PATHS = {};                    // resolved server-side paths (vault, templates, root)
 let TEMPLATES = [];                // blank company forms available for download
-const UK = 'wvn-epm-user';
-// sessionStorage, not localStorage — the admin PIN gate (v8.3 Section 4) is
-// meant to survive a reload within the same tab, but never a closed tab or
-// a fresh one, even though getUser()'s 'admin' value itself persists in
-// localStorage across both.
-const ADMIN_AUTH_KEY = 'wvn_admin_auth';
-function getUser() { try { return localStorage.getItem(UK) || ''; } catch (e) { return ''; } }
-function setUser(v) { try { localStorage.setItem(UK, v); } catch (e) { } }
+/* v12: who is using the app is whoever signed in on login.html. The server
+   reports it with every /api/data (session), and overwrites the `user` of
+   every request with it, so these are for display and for hiding controls a
+   person may not use - never the thing that grants a right. Before v12 this
+   was a name picked from a header dropdown and kept in localStorage, with a
+   PIN in front of "admin". */
+let SESSION = { user: '', role: '', department: '', is_admin: false };
+let FOLDER = { levels: [], tokens: [] };   // common vault folder structure (Settings)
+function getUser() { return SESSION.user || ''; }
 function isAdmin() { return (getUser() || '').toLowerCase() === 'admin'; }
 function isModerator() {
   const u = (getUser() || '').toLowerCase();
@@ -231,9 +246,13 @@ function isModerator() {
 }
 function isPrivileged() { return isAdmin() || isModerator(); }
 
-async function refresh() {
-  const d = await API.data();
+function takeData(d) {
   CFG = d.config; TRK = d.tracking; PATHS = d.paths || {};
+  if (d.session && d.session.user) SESSION = d.session;
+  FOLDER = { levels: d.folder_levels || [], tokens: d.folder_tokens || [] };
+}
+async function refresh() {
+  takeData(await API.data());
   try { TEMPLATES = (await API.templates()).templates || []; } catch (e) { TEMPLATES = []; }
 }
 
@@ -243,7 +262,7 @@ async function boot() {
   try {
     showLoader();
     await refresh();
-    populateWhoSelect();
+    renderUserChip();
     $('#srvState').textContent = 'connected'; $('#srvState').className = badgeClass('Connected');
     $('#stamp').textContent = CFG.system_info.app_name + ' v' + CFG.system_info.version + '  ·  ' + nowLocal();
     buildTabs(); show(current);
@@ -283,6 +302,7 @@ async function boot() {
       btn.onclick = () => {
         setLang(getLang() === 'vi' ? 'en' : 'vi');
         paint();
+        renderUserChip();
         show(current, true);
       };
     })();
@@ -391,12 +411,11 @@ async function redrawAfterWrite() {
   // text, focus and scroll all survive a redraw regardless of what triggered it.
   const state = captureUiState();
   await refresh();
-  populateWhoSelect();
+  renderUserChip();
   restoreUiState(state);
 }
 async function refreshSilently() {
-  const d = await API.data();
-  CFG = d.config; TRK = d.tracking; PATHS = d.paths || {};
+  takeData(await API.data());
   try { TEMPLATES = (await API.templates()).templates || []; } catch (e) { TEMPLATES = []; }
 }
 
@@ -595,10 +614,12 @@ function stopAutoReload() {
 
 /* ------------------------------------------------------------ helpers -- */
 function requireName() {
-  const v = ($('#whoSelect') && $('#whoSelect').value.trim()) ||
-            ($('#whoInput') && $('#whoInput').value.trim()) || getUser();
-  if (!v) { alert('Enter your name in the header first — every approval, bypass and clearance must name a person.'); return null; }
-  setUser(v); return v;
+  // v12: the name is the signed-in user. It can only be missing if the
+  // session ended under an open page, and then the next request sends the
+  // browser to the login page anyway.
+  const v = getUser();
+  if (!v) { alert('Your session has ended. Sign in again.'); location.href = '/login.html'; return null; }
+  return v;
 }
 
 /* ---- editable target week (Section 3) -----------------------------------
@@ -941,47 +962,89 @@ function userRegistrySelectModal(title, fields) {
     document.body.appendChild(scrim);
   });
 }
-/* ---- admin PIN prompt (v8.3 Section 4) ----------------------------------
-   Same scrim/modal/Escape/click-outside pattern as userRegistrySelectModal
-   above, but a single password-masked field instead of <select>s. Resolves
-   the typed PIN string, or null on Cancel/Escape/click-outside. */
-function promptAdminPinModal(title, message) {
-  return new Promise(function(resolve) {
-    const scrim = el('div', 'modal-scrim');
-    const box = el('div', 'modal');
-    box.setAttribute('role', 'dialog');
-    box.setAttribute('aria-modal', 'true');
-    box.setAttribute('aria-labelledby', 'pinModalTitle');
-    box.innerHTML = '<h2 id="pinModalTitle">' + esc(title) + '</h2>' + (message ? '<p class="note">' + esc(message) + '</p>' : '');
-    const inp = el('input');
-    inp.type = 'password';
-    inp.inputMode = 'numeric';
-    inp.autocomplete = 'off';
-    inp.style.cssText = 'width:100%;margin-top:8px';
-    box.appendChild(inp);
+/* ---- v12 account dialogs -------------------------------------------------
+   formModal is the one dialog shell for everything account-related: change
+   my password, re-enter the admin password, show a temporary password. Same
+   scrim / Escape / click-outside behaviour as confirmModal; the difference
+   is a real <form>, so Enter submits and the browser treats the password
+   boxes as password boxes. onOk may throw (the message is shown in the
+   dialog and it stays open) or return false (stay open, no message). */
+function formModal(opts) {
+  const scrim = el('div', 'modal-scrim');
+  const box = el('form', 'modal');
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'formModalTitle');
+  box.autocomplete = 'off';
+  box.innerHTML = '<h2 id="formModalTitle">' + esc(opts.title) + '</h2>' + (opts.html || '');
+  const err = el('p', 'note'); err.style.color = 'var(--bad)'; err.setAttribute('role', 'alert');
+  box.appendChild(err);
+  const acts = el('div', 'acts');
+  const no = el('button', '', opts.cancel || 'Cancel'); no.type = 'button';
+  const yes = el('button', opts.danger ? 'danger' : 'primary', opts.ok || 'Save'); yes.type = 'submit';
+  const close = () => { scrim.remove(); document.removeEventListener('keydown', onEsc); if (opts.onClose) opts.onClose(); };
+  const onEsc = ev => { if (ev.key === 'Escape') close(); };
+  no.onclick = close;
+  box.onsubmit = async ev => {
+    ev.preventDefault();
+    err.textContent = ''; yes.disabled = true;
+    try {
+      const r = opts.onOk ? await opts.onOk(box) : undefined;
+      if (r === false) { yes.disabled = false; return; }
+      close();
+    } catch (e) { err.textContent = e.message; yes.disabled = false; }
+  };
+  if (!opts.noCancel) acts.appendChild(no);
+  acts.appendChild(yes);
+  box.appendChild(acts);
+  scrim.appendChild(box);
+  scrim.onclick = ev => { if (ev.target === scrim) close(); };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(scrim);
+  const first = box.querySelector('input,select,textarea') || yes;
+  requestAnimationFrame(() => first.focus());
+}
+const pwField = (name, label) => '<label class="fld" style="margin-top:10px"><span>' + esc(label) + '</span><input type="password" name="' + name + '" style="width:100%"></label>';
 
-    const errMsg = el('p', 'note', '');
-    errMsg.style.color = 'var(--bad)';
-    box.appendChild(errMsg);
-
-    const acts = el('div', 'acts');
-    const no = el('button', '', 'Cancel');
-    const yes = el('button', 'primary', 'Unlock');
-    const close = () => { scrim.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (ev) => {
-      if (ev.key === 'Escape') { close(); resolve(null); }
-      if (ev.key === 'Enter') { close(); resolve(inp.value); }
-    };
-    no.onclick = () => { close(); resolve(null); };
-    yes.onclick = () => { close(); resolve(inp.value); };
-    acts.appendChild(no); acts.appendChild(yes);
-    box.appendChild(acts);
-    scrim.appendChild(box);
-    scrim.onclick = (ev) => { if (ev.target === scrim) { close(); resolve(null); } };
-    document.addEventListener('keydown', onKey);
-    document.body.appendChild(scrim);
-    requestAnimationFrame(() => inp.focus());
+function changePasswordModal() {
+  formModal({
+    title: 'Change my password',
+    html: pwField('cur', 'Current password') + pwField('new1', 'New password (at least 8 characters)') + pwField('new2', 'Type it again'),
+    ok: 'Save',
+    onOk: async box => {
+      const cur = box.elements.cur.value, a = box.elements.new1.value, b = box.elements.new2.value;
+      if (a.length < 8) throw new Error('Use at least 8 characters.');
+      if (a !== b) throw new Error('The two passwords are different.');
+      await API.post('/api/auth/change-password', { current: cur, new: a });
+      await redrawAfterWrite();
+    }
   });
+}
+/* Resolves the admin password typed in the dialog, or null on Cancel. The
+   caller sends it with the one request that needs it; it is not kept. */
+function askAdminPassword(title, message) {
+  return new Promise(resolve => {
+    let answered = false;
+    formModal({
+      title: title, html: '<p class="note">' + esc(message) + '</p>' + pwField('pw', 'Admin password'), ok: 'Continue',
+      onOk: box => { answered = true; resolve(box.elements.pw.value); },
+      onClose: () => { if (!answered) resolve(null); }
+    });
+  });
+}
+/* A temporary password is shown exactly once: the server keeps only its hash. */
+function tempPasswordModal(username, pw, issued) {
+  formModal({
+    title: 'Temporary password for ' + username,
+    html: '<p class="note">Shown once. Give it to the user in person. They must choose their own password at their next sign-in.</p>' +
+          '<div class="temp-pw" id="tempPwBox">' + esc(pw) + '</div>' +
+          '<p class="note">' + (issued ? 'This account had no password until now.' : 'Their old password has stopped working and any open session of theirs has been signed out.') + '</p>',
+    ok: 'Done', noCancel: true
+  });
+}
+async function signOut() {
+  try { await API.post('/api/auth/logout', {}); } catch (e) { }
+  location.href = '/login.html';
 }
 function makeEditAssignmentButton(objType, store, row, upsertKeys, onAfterEdit) {
   const currentOwner = row.owner_pic || row.claimed_by || '';
@@ -1187,7 +1250,9 @@ function issueResolveDropzone(project, onAfterResolve, issueRow) {
         const up = await API.upload({
           fileName: file.name, contentBase64: b64, docType: 'ISSUE-RESOLUTION',
           family: project.family, wvnId: project.family, wnbId: project.customer_number || '',
-          description: 'Issue Resolution', partId: ''
+          description: 'Issue Resolution', partId: '',
+          // v12: lets the admin's folder structure use [ProjectID] / [Process]
+          projectId: project.project_id
         });
         const rowData = Object.assign({}, issueRow);
         rowData.evidence_path = up.path;
@@ -3607,7 +3672,8 @@ async function uploadEvidence(project, stepKey, docCode, file, changeReason) {
       fileName: file.name, contentBase64: b64, docType: docCode,
       family: project.family,
       wvnId: project.family, wnbId: project.customer_number || '',
-      description: docCode, partId: ''
+      description: docCode, partId: '',
+      projectId: project.project_id, stepKey: stepKey
     });
     await API.action('lb_deliverables', {
       project_id: project.project_id, step_key: stepKey, doc_code: docCode,
@@ -3678,7 +3744,7 @@ async function uqSendBytes(q) {
   var body = {
     fileName: it.file.name, contentBase64: b64, docType: it.docCode,
     family: it.project.family, wvnId: it.project.family, wnbId: it.project.customer_number || '',
-    description: it.docCode, partId: '', projectId: it.project.project_id
+    description: it.docCode, partId: '', projectId: it.project.project_id, stepKey: it.stepKey || ''
   };
   if (it.uploadExtra) Object.keys(it.uploadExtra).forEach(function(k) { body[k] = it.uploadExtra[k]; });
   return API.upload(body);
@@ -4730,7 +4796,7 @@ function viewClaimed(root) {
   var who = getUser();
   var b = el('div', 'banner');
   if (!who) {
-    b.innerHTML = '<b>Enter your name in the header first.</b> The Claimed Work view shows tasks assigned to you — it needs a name to match against.';
+    b.innerHTML = '<b>Your session has ended.</b> <a href="/login.html">Sign in again</a> to see the tasks assigned to you.';
     root.appendChild(b);
     return;
   }
@@ -5499,17 +5565,22 @@ function viewInput(root) {
         doc: guess.confident ? guess.doc : '', step: guess.confident ? guess.step : null
       };
     });
-    // v11.1: two files that guessed the SAME document type would otherwise
+    // v11.1: two files that share the SAME document type would otherwise
     // both default to a blank part — the second one then supersedes the
     // first as soon as they're both filed. Give each a part from its own
     // file name up front, so a batch of "one drawing per BOM part" comes out
     // as several independent documents by default; still freely editable
-    // per row afterwards.
-    const byGuessedDoc = {};
-    state.forEach(st => { if (st.doc) (byGuessedDoc[st.doc] = byGuessedDoc[st.doc] || []).push(st); });
-    Object.keys(byGuessedDoc).forEach(doc => {
-      if (byGuessedDoc[doc].length > 1) byGuessedDoc[doc].forEach(st => { st.part = partLabelFromFileName(st.file.name); });
-    });
+    // per row afterwards. Re-run whenever a row's document type changes too
+    // (below) — an unconfident guess left blank at drop time still collides
+    // once the user manually picks the same doc type for two rows.
+    const fillCollidingParts = () => {
+      const byDoc = {};
+      state.forEach(st => { if (st.doc) (byDoc[st.doc] = byDoc[st.doc] || []).push(st); });
+      Object.keys(byDoc).forEach(doc => {
+        if (byDoc[doc].length > 1) byDoc[doc].forEach(st => { if (!st.part) st.part = partLabelFromFileName(st.file.name); });
+      });
+    };
+    fillCollidingParts();
 
     /* Rows are redrawn whenever Skip or the project changes, so every draw
        repopulates the inputs from `state` — which onchange keeps current. Reading
@@ -5552,8 +5623,9 @@ function viewInput(root) {
           if (node.dataset.k === 'skip') { st.skip = node.checked; drawRows(); return; }
           if (node.dataset.k === 'doc') {
             st.doc = normaliseDoctypeInput(node.value);
+            fillCollidingParts();
             syncStepSelect(node.closest('tr'), st, projById($('#bProj', form).value), true);
-            await previewNames();
+            drawRows();
             return;
           }
           if (node.dataset.k === 'step') {
@@ -5972,7 +6044,12 @@ function renderVaultResults(out, res, rerun) {
     // instead of the old binary Active/Removed that never told anyone
     // whether a filed document had actually been signed off.
     const statusCls = badgeClass(String(r.status || '').toUpperCase());
-    const partBadge = r.part_id ? ' <span class="badge part-badge part-badge-btn" title="Click to rename this part">' + esc(r.part_id) + '</span>' : '';
+    // v11.1: same "+ part" fallback as the drawer's filed-documents table —
+    // a document with no part yet still needs a one-click way to give it
+    // one, not just a rename once it already has one.
+    const partBadge = r.part_id
+      ? ' <span class="badge part-badge part-badge-btn" title="Click to rename this part">' + esc(r.part_id) + '</span>'
+      : (r.kind !== 'link' && r.status !== 'Removed' ? ' <span class="badge bg-secondary part-badge part-badge-btn" title="Click to give this a part / category">+ part</span>' : '');
     tr.innerHTML =
       '<td><b>' + esc(r.project_id) + '</b><div class="note">' + esc(r.family || '') + '</div></td>' +
       '<td>' + esc(pillarName(r.process)) + '</td>' +
@@ -7955,106 +8032,176 @@ function viewSettings(root) {
   }
   mp.appendChild(mpBody); root.appendChild(mp);
 
-  /* ---- user registry ---- */
+  /* ---- my account (v12) ---- */
+  const acct = el('div', 'card');
+  const acctHdr = el('div', 'card-header'); acctHdr.appendChild(el('h3', 'card-title', 'My account')); acct.appendChild(acctHdr);
+  const acctBody = el('div', 'card-body');
+  const acctRow = el('div', 'acct-row');
+  acctRow.innerHTML = '<span>' + iconHtml('user', 'icon-sm') + ' <b>' + esc(getUser()) + '</b></span><span class="badge bg-secondary">' + esc(SESSION.role || 'user') + '</span>' +
+    (SESSION.department ? '<span class="note" style="margin:0">' + esc(SESSION.department) + '</span>' : '');
+  const acctBtn = el('button', '', 'Change my password');
+  acctBtn.style.marginLeft = 'auto';
+  acctBtn.onclick = changePasswordModal;
+  acctRow.appendChild(acctBtn);
+  acctBody.appendChild(acctRow);
+  acct.appendChild(acctBody); root.appendChild(acct);
+
+  /* ---- users and passwords (v12) ---------------------------------------
+     Replaces the v8 "User Registry" and "Admin Security PIN" cards. The
+     roster itself (name, role, department) is still config.user_registry and
+     still saved through /api/config/user-registry; what is new is the
+     password column, which comes from /api/auth/users and is admin-only.
+     A non-admin sees the roster read-only, exactly as before. */
   const urp = el('div', 'card');
-  const urpHdr = el('div', 'card-header'); urpHdr.appendChild(el('h3', 'card-title', 'User Registry')); urp.appendChild(urpHdr);
+  const urpHdr = el('div', 'card-header'); urpHdr.appendChild(el('h3', 'card-title', 'Users and passwords')); urp.appendChild(urpHdr);
   const urpBody = el('div', 'card-body');
-  urpBody.appendChild(el('p', 'note', 'Identity roster for the header name picker. Administrators can add, edit and remove entries here.'));
-  var urEditable = isAdmin();
-  var urList = el('div', 'taglist');
-  (CFG.user_registry || []).forEach(function(u) {
-    var row = el('div', 'tagrow');
-    row.style.flexWrap = 'wrap';
-    row.innerHTML = '<span><b>' + esc(u.username) + '</b></span>';
-    var roleSel = el('select');
-    roleSel.style.cssText = 'height:26px;font-size:12px;min-width:88px';
-    roleSel.innerHTML = '<option value="admin">admin</option><option value="moderator">moderator</option><option value="user">user</option>';
-    roleSel.value = u.role || 'user';
-    var deptIn = el('input');
-    deptIn.placeholder = 'department';
-    deptIn.value = u.department || '';
-    deptIn.style.cssText = 'height:26px;font-size:12px;min-width:150px';
-    var isAdminRow = String(u.username).toLowerCase() === 'admin';
-    if (!urEditable || isAdminRow) {
-      roleSel.disabled = true;
-    } else {
-      roleSel.onchange = async function() {
-        try {
-          var updated = (CFG.user_registry || []).map(function(x) {
-            return x.username === u.username ? Object.assign({}, x, { role: roleSel.value }) : x;
-          });
-          await API.post('/api/config/user-registry', { user: getUser(), registry: updated });
-          await redrawAfterWrite();
-        } catch (e) { alert('Could not save: ' + e.message); }
+  urp.appendChild(urpBody); root.appendChild(urp);
+  const saveRegistry = async function(list) {
+    await API.post('/api/config/user-registry', { user: getUser(), registry: list });
+  };
+  if (!isAdmin()) {
+    urpBody.appendChild(el('p', 'note', 'Everyone who can sign in. Only the admin can add people, change roles or reset a password.'));
+    const roList = el('div', 'taglist');
+    (CFG.user_registry || []).forEach(function(u) {
+      const row = el('div', 'tagrow');
+      row.innerHTML = '<span><b>' + esc(u.username) + '</b> · ' + esc(u.role || 'user') + (u.department ? ' · ' + esc(u.department) : '') + '</span>';
+      roList.appendChild(row);
+    });
+    urpBody.appendChild(roList);
+  } else {
+    urpBody.appendChild(el('p', 'note', 'Passwords are stored only as salted hashes, one small file per user under system\\auth. Nobody can read a password back from a hash; a forgotten one is replaced with a temporary password that the user must change at their next sign-in.'));
+    const urTableWrap = el('div', 'scroll users-table');
+    urTableWrap.innerHTML = '<p class="note" style="padding:8px">Loading…</p>';
+    urpBody.appendChild(urTableWrap);
+    const viewWrap = el('div', 'users-view-toggle');
+
+    const drawUsers = function(data) {
+      const canView = !!data.admin_can_view;
+      const tbl = el('table');
+      tbl.innerHTML = '<thead><tr><th>User</th><th>Role</th><th>Department</th><th>Password</th><th>Stored on disk</th>' + (canView ? '<th>View</th>' : '') + '<th>Changed</th><th></th></tr></thead>';
+      const tb = el('tbody');
+      (data.users || []).forEach(function(u) {
+        const isAdminRow = String(u.username).toLowerCase() === 'admin';
+        const tr = el('tr');
+        tr.appendChild(el('td')).innerHTML = '<b>' + esc(u.username) + '</b>';
+        const roleSel = el('select');
+        roleSel.setAttribute('aria-label', 'Role of ' + u.username);
+        roleSel.innerHTML = '<option value="admin">admin</option><option value="moderator">moderator</option><option value="user">user</option>';
+        roleSel.value = u.role || 'user';
+        roleSel.disabled = isAdminRow;
+        roleSel.onchange = async function() {
+          try { await saveRegistry((CFG.user_registry || []).map(function(x) { return x.username === u.username ? Object.assign({}, x, { role: roleSel.value }) : x; })); await redrawAfterWrite(); }
+          catch (e) { alert('Could not save: ' + e.message); }
+        };
+        tr.appendChild(el('td')).appendChild(roleSel);
+        const deptIn = el('input');
+        deptIn.placeholder = 'department'; deptIn.value = u.department || '';
+        deptIn.setAttribute('aria-label', 'Department of ' + u.username);
+        deptIn.onchange = async function() {
+          try { await saveRegistry((CFG.user_registry || []).map(function(x) { return x.username === u.username ? Object.assign({}, x, { department: deptIn.value.trim() }) : x; })); await redrawAfterWrite(); }
+          catch (e) { alert('Could not save: ' + e.message); }
+        };
+        tr.appendChild(el('td')).appendChild(deptIn);
+        tr.appendChild(el('td')).innerHTML = !u.has_password ? '<span class="badge bg-danger-lt">No password yet</span>'
+          : u.must_change ? '<span class="badge bg-warning-lt">Temporary, must change</span>' : '<span class="badge bg-success-lt">Set</span>';
+        tr.appendChild(el('td')).innerHTML = u.stored ? '<code title="Salted PBKDF2-HMAC-SHA256, 100 000 rounds">' + esc(u.stored) + '</code>' : '<span class="note" style="margin:0">nothing</span>';
+        if (canView) {
+          const vTd = tr.appendChild(el('td'));
+          if (u.recoverable) {
+            const vBtn = el('button', 'btn-sm', 'View');
+            vBtn.onclick = async function() {
+              const pw = await askAdminPassword('Admin password required', 'Type the admin password again to view the password of ' + u.username + '. The view is written to the audit log.');
+              if (pw == null) return;
+              try {
+                const r = await API.post('/api/auth/reveal', { username: u.username, admin_password: pw });
+                formModal({ title: 'Password of ' + u.username, html: '<div class="temp-pw">' + esc(r.password) + '</div><p class="note">This view has been written to the audit log.</p>', ok: 'Done', noCancel: true });
+              } catch (e) { alert(e.message); }
+            };
+            vTd.appendChild(vBtn);
+          } else if (u.has_password) {
+            vTd.innerHTML = '<span class="note" style="margin:0" title="A viewable copy is saved the next time this user signs in or changes their password.">after next sign-in</span>';
+          }
+        }
+        tr.appendChild(el('td', null, u.changed_utc ? String(u.changed_utc).slice(0, 10) : ''));
+        const actTd = tr.appendChild(el('td'));
+        actTd.style.whiteSpace = 'nowrap';
+        if (!isAdminRow) {
+          const rsBtn = el('button', 'btn-sm', u.has_password ? 'Reset password' : 'Issue password');
+          rsBtn.onclick = function() {
+            const go = async function() {
+              try { const r = await API.post('/api/auth/reset-password', { username: u.username }); tempPasswordModal(u.username, r.temp_password, !u.has_password); await redrawAfterWrite(); }
+              catch (e) { alert('Could not reset: ' + e.message); }
+            };
+            if (u.has_password) confirmModal('Reset Password', 'Replace the password of <b>' + esc(u.username) + '</b> with a temporary one? Their current password stops working at once.', 'Reset', go);
+            else go();
+          };
+          actTd.appendChild(rsBtn);
+          const rmBtn = el('button', 'btn-sm', '×');
+          rmBtn.title = 'Remove user'; rmBtn.setAttribute('aria-label', 'Remove ' + u.username);
+          rmBtn.style.marginLeft = '6px';
+          rmBtn.onclick = function() {
+            confirmModal('Remove User', 'Remove <b>' + esc(u.username) + '</b>? They can no longer sign in, and their password is deleted.', 'Remove', async function() {
+              // redrawAfterWrite, NOT viewSettings(root) - viewSettings appends
+              // to root and never clears it, so calling it again stacks a second
+              // copy of the whole Settings page under the first.
+              try { await saveRegistry((CFG.user_registry || []).filter(function(x) { return x.username !== u.username; })); await redrawAfterWrite(); }
+              catch (e) { alert('Could not save: ' + e.message); }
+            });
+          };
+          actTd.appendChild(rmBtn);
+        }
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      urTableWrap.innerHTML = ''; urTableWrap.appendChild(tbl);
+
+      // "Admin can view passwords": off unless switched on here.
+      viewWrap.innerHTML = '';
+      const vLab = el('label', 'users-view-label');
+      const vChk = el('input'); vChk.type = 'checkbox'; vChk.checked = canView;
+      vLab.appendChild(vChk);
+      vLab.appendChild(document.createTextNode(' Let the admin view passwords'));
+      viewWrap.appendChild(vLab);
+      viewWrap.appendChild(el('p', 'note', canView
+        ? 'ON. Besides the hash, an encrypted copy of each password is kept that only the admin password can unlock. Whoever learns the admin password can read every password, so keep it strong and to yourself. Switching this off deletes those copies.'
+        : 'OFF (recommended). Only hashes are stored and nobody, including the admin, can see a password. Switch this on only if you really need to read passwords back; a copy is then saved the next time each user signs in.'));
+      vChk.onchange = async function() {
+        const want = vChk.checked;
+        const pw = await askAdminPassword(want ? 'Let the admin view passwords?' : 'Stop keeping viewable copies?',
+          want ? 'From now on an encrypted copy of every password is kept beside its hash. Type the admin password to confirm.'
+               : 'Every viewable copy is deleted; the hashes stay. Type the admin password to confirm.');
+        if (pw == null) { vChk.checked = !want; return; }
+        try { await API.post('/api/auth/recovery', { enable: want, admin_password: pw }); await redrawAfterWrite(); }
+        catch (e) { vChk.checked = !want; alert(e.message); }
       };
-    }
-    if (urEditable) {
-      deptIn.onchange = async function() {
-        try {
-          var updated = (CFG.user_registry || []).map(function(x) {
-            return x.username === u.username ? Object.assign({}, x, { department: deptIn.value.trim() }) : x;
-          });
-          await API.post('/api/config/user-registry', { user: getUser(), registry: updated });
-          await redrawAfterWrite();
-        } catch (e) { alert('Could not save: ' + e.message); }
-      };
-    } else {
-      deptIn.readOnly = true;
-    }
-    row.appendChild(roleSel);
-    row.appendChild(deptIn);
-    if (urEditable && !isAdminRow) {
-      var rmBtn = el('button', null, '×');
-      rmBtn.title = 'Remove user';
-      rmBtn.onclick = function() {
-        confirmModal('Remove User', 'Remove <b>' + esc(u.username) + '</b> from the registry?', 'Remove', async function() {
-          var newList = (CFG.user_registry || []).filter(function(x) { return x.username !== u.username; });
-          try {
-            await API.post('/api/config/user-registry', { user: getUser(), registry: newList });
-            // redrawAfterWrite, NOT viewSettings(root) - viewSettings appends
-            // to root and never clears it, so calling it again stacks a second
-            // copy of the whole Settings page under the first.
-            await redrawAfterWrite();
-          } catch (e) { alert('Could not save: ' + e.message); }
-        });
-      };
-      row.appendChild(rmBtn);
-    }
-    urList.appendChild(row);
-  });
-  urpBody.appendChild(urList);
-  if (urEditable) {
-    var urAddRow = el('div');
-    urAddRow.style.cssText = 'margin-top:8px;display:flex;gap:6px;flex-wrap:wrap';
-    var urNameIn = el('input');
-    urNameIn.placeholder = 'User name';
-    urNameIn.style.cssText = 'flex:1;min-width:120px';
-    var urAddRoleSel = el('select');
-    urAddRoleSel.style.cssText = 'height:26px';
+    };
+    API.get('/api/auth/users').then(drawUsers).catch(function(e) { urTableWrap.innerHTML = '<p class="note" style="padding:8px;color:var(--bad)">Could not load users: ' + esc(e.message) + '</p>'; });
+
+    var urAddRow = el('form', 'users-add');
+    var urNameIn = el('input'); urNameIn.placeholder = 'New user name'; urNameIn.setAttribute('aria-label', 'New user name');
+    var urAddRoleSel = el('select'); urAddRoleSel.setAttribute('aria-label', 'Role');
     urAddRoleSel.innerHTML = '<option value="user" selected>user</option><option value="moderator">moderator</option><option value="admin">admin</option>';
-    var urDeptIn = el('input');
-    urDeptIn.placeholder = 'Department';
-    urDeptIn.style.cssText = 'flex:1;min-width:120px';
-    var urAddBtn = el('button', 'primary', 'Add');
-    urAddBtn.onclick = async function() {
+    var urDeptIn = el('input'); urDeptIn.placeholder = 'Department'; urDeptIn.setAttribute('aria-label', 'Department');
+    var urAddBtn = el('button', 'primary', 'Add user'); urAddBtn.type = 'submit';
+    urAddRow.onsubmit = async function(ev) {
+      ev.preventDefault();
       var uname = urNameIn.value.trim();
       if (!uname) return;
+      if ((CFG.user_registry || []).some(function(x) { return String(x.username).toLowerCase() === uname.toLowerCase(); })) { alert('That user name already exists.'); return; }
       try {
-        var newList = (CFG.user_registry || []).concat([{ username: uname, role: urAddRoleSel.value, department: urDeptIn.value.trim() }]);
-        await API.post('/api/config/user-registry', { user: getUser(), registry: newList });
-        // The server trims, de-duplicates and always keeps exactly one 'admin'
-        // entry, so re-read the config rather than rendering the list we hoped
-        // it would store.
+        // Roster first (the server trims and de-duplicates it), then a
+        // temporary password, which is the only way the new person gets in.
+        await saveRegistry((CFG.user_registry || []).concat([{ username: uname, role: urAddRoleSel.value, department: urDeptIn.value.trim() }]));
+        const r = await API.post('/api/auth/reset-password', { username: uname });
+        tempPasswordModal(r.username, r.temp_password, true);
         await redrawAfterWrite();
-      } catch (e) { alert('Could not save: ' + e.message); }
+      } catch (e) { alert('Could not add the user: ' + e.message); }
     };
-    urAddRow.appendChild(urNameIn);
-    urAddRow.appendChild(urAddRoleSel);
-    urAddRow.appendChild(urDeptIn);
-    urAddRow.appendChild(urAddBtn);
+    urAddRow.appendChild(urNameIn); urAddRow.appendChild(urAddRoleSel); urAddRow.appendChild(urDeptIn); urAddRow.appendChild(urAddBtn);
     urpBody.appendChild(urAddRow);
+    urpBody.appendChild(el('p', 'note', 'A new user gets a temporary password, shown to you once.'));
+    urpBody.appendChild(viewWrap);
   }
-  urp.appendChild(urpBody); root.appendChild(urp);
 
   /* ---- pillars (v11 R4) ---- */
   if (isAdmin()) root.appendChild(pillarsCard());
@@ -8062,42 +8209,122 @@ function viewSettings(root) {
   /* ---- file naming standard (v11.1) ---- */
   if (isAdmin()) root.appendChild(namingCard());
 
-  /* ---- admin security PIN (v8.3 Section 4) ---- */
+  /* ---- common vault folder structure (v12) ------------------------------
+     The folder levels every upload to the common vault is filed under.
+     Before v12 they were hard-coded in launcher.ps1 as Model > DocType >
+     PartID, which is still what an install that never saves this card uses.
+     Only the admin can change them; everyone else sees them read-only. */
+  const fsp = el('div', 'card');
+  const fspHdr = el('div', 'card-header'); fspHdr.appendChild(el('h3', 'card-title', 'Common vault folder structure'));
+  fspHdr.appendChild(el('span', 'badge bg-primary-lt', 'Fixed by admin'));
+  fsp.appendChild(fspHdr);
+  const fspBody = el('div', 'card-body');
+  const fsGrid = el('div', 'folder-struct');
+  const fsLeft = el('div'), fsRight = el('div');
+  fsLeft.appendChild(el('p', 'note', 'Every file uploaded to the common vault is filed under these levels, top level first. A level that comes out blank for a file (no part, for example) is skipped.'));
+  let fsLevels = (FOLDER.levels || []).slice();
+  const fsList = el('div');
+  const fsTree = el('div', 'folder-tree');
+  const fsExample = { Model: '9649LP', Process: 'NPI', ProjectID: 'NPI-9649LP', Step: 'NPI-3', DocType: 'DWG', PartID: 'Blade' };
+  const drawFsTree = function() {
+    const names = fsLevels.map(function(l) { return String(l).replace(/\[([^\]]*)\]/g, function(m, k) { return fsExample[k] != null ? fsExample[k] : m; }).trim(); }).filter(Boolean);
+    fsTree.innerHTML = '<span class="lv">' + iconHtml('folder-open', 'icon-sm') + esc(String(PATHS.vault || '').split('\\').pop() || 'vault') + '</span>' +
+      names.map(function(n, i) { return '<span class="lv" style="padding-left:' + ((i + 1) * 16) + 'px">' + iconHtml('folder-open', 'icon-sm') + esc(n) + '</span>'; }).join('') +
+      '<span class="lv" style="padding-left:' + ((names.length + 1) * 16) + 'px">' + iconHtml('file-text', 'icon-sm') + 'PD9649LP_01 Blade.pdf</span>';
+  };
+  const drawFsList = function() {
+    fsList.innerHTML = '';
+    fsLevels.forEach(function(l, i) {
+      const row = el('div', 'folder-level');
+      row.appendChild(el('span', 'folder-level-n', 'Level ' + (i + 1)));
+      const inp = el('input'); inp.value = l; inp.disabled = !isAdmin();
+      inp.setAttribute('aria-label', 'Folder level ' + (i + 1));
+      inp.oninput = function() { fsLevels[i] = inp.value; drawFsTree(); };
+      row.appendChild(inp);
+      if (isAdmin()) {
+        const acts = el('span', 'folder-level-acts');
+        const upB = el('button', 'btn-sm', '↑'); upB.type = 'button'; upB.title = 'Move up'; upB.disabled = i === 0;
+        upB.onclick = function() { const t = fsLevels[i - 1]; fsLevels[i - 1] = fsLevels[i]; fsLevels[i] = t; drawFsList(); };
+        const dnB = el('button', 'btn-sm', '↓'); dnB.type = 'button'; dnB.title = 'Move down'; dnB.disabled = i === fsLevels.length - 1;
+        dnB.onclick = function() { const t = fsLevels[i + 1]; fsLevels[i + 1] = fsLevels[i]; fsLevels[i] = t; drawFsList(); };
+        const rmB = el('button', 'btn-sm', '×'); rmB.type = 'button'; rmB.title = 'Remove level'; rmB.setAttribute('aria-label', 'Remove level ' + (i + 1));
+        rmB.onclick = function() { fsLevels.splice(i, 1); drawFsList(); };
+        acts.appendChild(upB); acts.appendChild(dnB); acts.appendChild(rmB);
+        row.appendChild(acts);
+      }
+      fsList.appendChild(row);
+    });
+    drawFsTree();
+  };
+  fsLeft.appendChild(fsList);
   if (isAdmin()) {
-    const pinp = el('div', 'card admin-pin-card');
-    const pinpHdr = el('div', 'card-header'); pinpHdr.appendChild(el('h3', 'card-title', 'Admin Security PIN')); pinp.appendChild(pinpHdr);
-    const pinpBody = el('div', 'card-body');
-    pinpBody.appendChild(el('p', 'note', 'Required to switch the header identity to admin on a new browser tab. Changing it here requires the current PIN.'));
-
-    const pinRow = el('div', 'admin-pin-row');
-    const curIn = el('input'); curIn.type = 'password'; curIn.placeholder = 'Current PIN'; curIn.autocomplete = 'off';
-    const newIn = el('input'); newIn.type = 'password'; newIn.placeholder = 'New PIN'; newIn.autocomplete = 'off';
-    const pinSaveBtn = el('button', 'primary', 'Change PIN');
-    pinRow.appendChild(curIn); pinRow.appendChild(newIn); pinRow.appendChild(pinSaveBtn);
-    pinpBody.appendChild(pinRow);
-    const pinStatus = el('p', 'note'); pinStatus.style.marginTop = '6px';
-    pinpBody.appendChild(pinStatus);
-
-    pinSaveBtn.onclick = async () => {
-      const who = getUser();
-      pinStatus.textContent = ''; pinStatus.style.color = '';
-      if (!newIn.value || newIn.value.length < 4) {
-        pinStatus.textContent = 'New PIN must be at least 4 characters.'; pinStatus.style.color = 'var(--bad)';
-        return;
-      }
-      pinSaveBtn.disabled = true;
-      try {
-        await API.changePin(curIn.value, newIn.value, who);
-        pinStatus.textContent = 'PIN updated.'; pinStatus.style.color = 'var(--good)';
-        curIn.value = ''; newIn.value = '';
-        await refreshSilently();
-      } catch (e) {
-        pinStatus.textContent = e.message; pinStatus.style.color = 'var(--bad)';
-      }
-      pinSaveBtn.disabled = false;
+    const tokRow = el('div', 'taglist');
+    tokRow.appendChild(el('span', 'note', 'Add a level:'));
+    (FOLDER.tokens || []).forEach(function(t) {
+      const tb = el('button', 'btn-sm', '+ [' + t + ']'); tb.type = 'button';
+      tb.onclick = function() { fsLevels.push('[' + t + ']'); drawFsList(); };
+      tokRow.appendChild(tb);
+    });
+    fsLeft.appendChild(tokRow);
+    const fsSave = el('button', 'primary', 'Save folder structure');
+    fsSave.style.marginTop = '8px';
+    fsSave.onclick = async function() {
+      try { await API.post('/api/config/folder-structure', { user: getUser(), levels: fsLevels }); await redrawAfterWrite(); }
+      catch (e) { alert('Could not save: ' + e.message); }
     };
+    fsLeft.appendChild(fsSave);
+    fsLeft.appendChild(el('p', 'note', 'Applies to files uploaded from now on. Files already in the vault are not moved, and every link to them keeps working.'));
+  } else {
+    fsLeft.appendChild(el('p', 'note', 'Only the admin user can change this.'));
+  }
+  fsRight.appendChild(el('p', 'note', 'Example: a drawing of the Blade for 9649LP'));
+  fsRight.appendChild(fsTree);
+  fsGrid.appendChild(fsLeft); fsGrid.appendChild(fsRight);
+  fspBody.appendChild(fsGrid);
+  fsp.appendChild(fspBody); root.appendChild(fsp);
+  drawFsList();
 
-    pinp.appendChild(pinpBody); root.appendChild(pinp);
+  /* ---- all vaults (v12, admin) ------------------------------------------ */
+  if (isAdmin()) {
+    const avp = el('div', 'card');
+    const avpHdr = el('div', 'card-header'); avpHdr.appendChild(el('h3', 'card-title', 'All vaults')); avp.appendChild(avpHdr);
+    const avpBody = el('div', 'card-body');
+    avpBody.appendChild(el('p', 'note', 'The common vault, and every personal vault. A personal vault is visible to its owner and to the admin only.'));
+    const avWrap = el('div', 'scroll');
+    avWrap.innerHTML = '<p class="note" style="padding:8px">Loading…</p>';
+    avpBody.appendChild(avWrap);
+    avp.appendChild(avpBody); root.appendChild(avp);
+    API.get('/api/vaults').then(function(d) {
+      const tbl = el('table');
+      tbl.innerHTML = '<thead><tr><th>Vault</th><th>Kind</th><th>Owner</th><th>Folder</th><th>Projects</th><th></th></tr></thead>';
+      const tb = el('tbody');
+      (d.vaults || []).forEach(function(v) {
+        const tr = el('tr');
+        tr.appendChild(el('td')).innerHTML = '<b>' + esc(v.name) + '</b>' + (v.archived ? ' <span class="badge bg-secondary">archived</span>' : '');
+        tr.appendChild(el('td')).innerHTML = v.kind === 'common' ? '<span class="badge bg-primary-lt">Common</span>' : '<span class="badge bg-teal-lt">Personal</span>';
+        tr.appendChild(el('td', null, v.kind === 'common' ? 'everyone' : v.owner));
+        tr.appendChild(el('td')).innerHTML = '<code>' + esc(v.path) + '</code>';
+        tr.appendChild(el('td', 'num', String(v.projects)));
+        const aTd = tr.appendChild(el('td'));
+        aTd.style.whiteSpace = 'nowrap';
+        if (v.kind === 'personal') {
+          const openA = el('a', '', 'Open'); openA.href = '/vault.html?id=' + encodeURIComponent(v.id);
+          aTd.appendChild(openA);
+          const arB = el('button', 'btn-sm', v.archived ? 'Restore' : 'Archive');
+          arB.style.marginLeft = '8px';
+          arB.onclick = async function() {
+            try { await API.post('/api/vaults/' + encodeURIComponent(v.id) + '/archive', { archived: !v.archived }); await redrawAfterWrite(); }
+            catch (e) { alert(e.message); }
+          };
+          aTd.appendChild(arB);
+        } else {
+          aTd.appendChild(el('span', 'note', 'this vault'));
+        }
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      avWrap.innerHTML = ''; avWrap.appendChild(tbl);
+    }).catch(function(e) { avWrap.innerHTML = '<p class="note" style="padding:8px;color:var(--bad)">Could not load vaults: ' + esc(e.message) + '</p>'; });
   }
 
   /* ---- evidence vault location ---- */
@@ -8704,68 +8931,46 @@ function setTheme(t) {
 try { setTheme(localStorage.getItem(TK) === 'dark' ? 'dark' : 'light'); } catch (e) { setTheme('light'); }
 $('#themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 
-/* -------------------------------------------------------------- header name field -- */
-function populateWhoSelect() {
-  const s = $('#whoSelect');
-  if (!s) return;
-  const list = (CFG && CFG.user_registry) || [];
-  if (!list.length) {
-    // Safety net — the registry is empty (shouldn't happen; 'admin' is always
-    // present). Fall back to the old free-text input so the app stays usable.
-    const fb = el('input'); fb.id = 'whoInput'; fb.placeholder = 'Your name'; fb.style.width = '140px'; fb.value = getUser();
-    fb.onchange = () => setUser(fb.value.trim());
-    s.insertAdjacentElement('beforebegin', fb);
-    s.remove();
-    return;
-  }
-  s.innerHTML = '';
-  list.forEach(function(u) {
-    const opt = el('option');
-    opt.value = u.username;
-    opt.textContent = u.username + ' (' + (u.role || 'user') + ')';
-    s.appendChild(opt);
-  });
-  let saved = getUser();
-  // getUser() persists 'admin' in localStorage across tabs/reloads, but the
-  // PIN gate's sessionStorage flag does not — restoring the select to
-  // 'admin' here without also checking that flag would silently grant admin
-  // identity on a fresh tab with no PIN prompt at all. Fall back to signed-
-  // out instead; the user has to re-pick admin and clear the gate again.
-  if (saved.toLowerCase() === 'admin' && sessionStorage.getItem(ADMIN_AUTH_KEY) !== '1') {
-    saved = '';
-    setUser('');
-  }
-  s.value = list.some(function(u) { return u.username === saved; }) ? saved : '';
+/* ---------------------------------------------------- header: signed-in user -- */
+/* v12: the header shows who is signed in. It used to be a dropdown anyone
+   could change, with a PIN prompt in front of "admin"; the name now comes
+   from the login session and can only be changed by signing out. */
+function paintVaultSwitch() {
+  const n = $('#vaultSwitchName'), k = $('#vaultSwitchKind');
+  // <wbr> after each underscore: a folder name like NPI_EPM_Documents_Control
+  // is one unbreakable word otherwise, and the rail would cut it mid-letter.
+  if (n) n.innerHTML = esc(String(PATHS.vault || '').split('\\').pop() || '').replace(/_/g, '_<wbr>');
+  if (k) k.textContent = getLang() === 'vi' ? 'Kho chung' : 'Common vault';
+  const a = $('#vaultSwitch');
+  if (a) a.title = getLang() === 'vi' ? 'Đổi kho' : 'Switch vault';
 }
-
-/* Admin identity is PIN-gated per browser tab (v8.3 Section 4): picking
-   "admin" from the header dropdown for the first time this session prompts
-   for the PIN before the switch takes effect. */
-(function initWho() {
-  const who = el('select'); who.id = 'whoSelect';
-  let lastKnownWho = who.value;
-  who.onchange = async () => {
-    const picked = who.value;
-    if (picked.toLowerCase() !== 'admin' || sessionStorage.getItem(ADMIN_AUTH_KEY) === '1') {
-      lastKnownWho = picked;
-      setUser(picked);
-      return;
-    }
-    // Switching TO admin, not yet authorised this tab — hold the switch
-    // until the PIN checks out.
-    const pin = await promptAdminPinModal('Admin PIN required', 'Enter the admin PIN to switch to the admin identity.');
-    if (pin == null) { who.value = lastKnownWho; return; }
-    try {
-      await API.verifyPin(pin);
-      sessionStorage.setItem(ADMIN_AUTH_KEY, '1');
-      lastKnownWho = picked;
-      setUser(picked);
-    } catch (e) {
-      alert('Incorrect PIN.');
-      who.value = lastKnownWho;
-    }
+function renderUserChip() {
+  let wrap = $('#userChipWrap');
+  if (!wrap) {
+    wrap = el('div', 'userchip-wrap'); wrap.id = 'userChipWrap';
+    $('#srvState').insertAdjacentElement('afterend', wrap);
+    document.addEventListener('click', function(ev) { if (!ev.target.closest('#userChipWrap')) { const m = $('#userMenu'); if (m) m.classList.add('hide'); const c = $('#userChip'); if (c) c.setAttribute('aria-expanded', 'false'); } });
+    document.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') { const m = $('#userMenu'); if (m && !m.classList.contains('hide')) { m.classList.add('hide'); $('#userChip').focus(); } } });
+  }
+  const vi = getLang() === 'vi';
+  const wasOpen = $('#userMenu') && !$('#userMenu').classList.contains('hide');
+  wrap.innerHTML = '';
+  const chip = el('button', 'userchip'); chip.id = 'userChip'; chip.type = 'button';
+  chip.setAttribute('aria-haspopup', 'true'); chip.setAttribute('aria-expanded', wasOpen ? 'true' : 'false');
+  chip.innerHTML = iconHtml('user', 'icon-sm') + '<b>' + esc(getUser()) + '</b><span class="badge bg-secondary">' + esc(SESSION.role || 'user') + '</span>' + iconHtml('chevron-down', 'icon-sm');
+  const menu = el('div', 'usermenu' + (wasOpen ? '' : ' hide')); menu.id = 'userMenu';
+  const item = function(iconName, label, fn) {
+    const b = el('button'); b.type = 'button';
+    b.innerHTML = iconHtml(iconName, 'icon-sm') + '<span>' + esc(label) + '</span>';
+    b.onclick = function() { menu.classList.add('hide'); fn(); };
+    menu.appendChild(b);
   };
-  $('#srvState').insertAdjacentElement('afterend', who);
-})();
+  item('lock', vi ? 'Đổi mật khẩu' : 'Change my password', changePasswordModal);
+  item('switch-horizontal', vi ? 'Đổi kho' : 'Switch vault', function() { location.href = '/login.html'; });
+  item('logout', vi ? 'Đăng xuất' : 'Sign out', signOut);
+  chip.onclick = function() { const open = menu.classList.toggle('hide'); chip.setAttribute('aria-expanded', open ? 'false' : 'true'); };
+  wrap.appendChild(chip); wrap.appendChild(menu);
+  paintVaultSwitch();
+}
 
 boot();

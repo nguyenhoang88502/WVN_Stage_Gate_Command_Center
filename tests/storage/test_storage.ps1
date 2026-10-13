@@ -20,8 +20,17 @@ function Check([string]$name, [bool]$ok, [string]$detail = '') {
 }
 function Start-App([string]$writer) {
   $p = Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $sys 'launcher.ps1'),'-NoBrowser','-Port','8090','-WriterId',$writer) -PassThru -WindowStyle Hidden
-  for ($i = 0; $i -lt 60; $i++) { try { Invoke-RestMethod "$base/api/data" -TimeoutSec 2 | Out-Null; return $p } catch { Start-Sleep -Milliseconds 500 } }
+  for ($i = 0; $i -lt 60; $i++) { try { Invoke-RestMethod "$base/api/auth/status" -TimeoutSec 2 | Out-Null; Enter-App; return $p } catch { Start-Sleep -Milliseconds 500 } }
   throw "server $writer did not start"
+}
+# v12: every /api/* call needs a session, and a session lives in the launcher
+# process - so each (re)start signs in again as admin. $script:ws carries the
+# cookie; Post and GetData send it.
+$TestAdminPw = 'Test-admin-2026'
+function Enter-App {
+  $body = @{ username = 'admin'; password = $TestAdminPw } | ConvertTo-Json -Compress
+  Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType 'application/json; charset=utf-8' -Body $body -SessionVariable ws | Out-Null
+  $script:ws = $ws
 }
 function Stop-App($p) {
   try { Invoke-RestMethod "$base/api/shutdown" -Method Post -ContentType 'application/json' -Body '{"user":"test"}' | Out-Null } catch { }
@@ -29,10 +38,28 @@ function Stop-App($p) {
   if (-not $p.HasExited) { $p.Kill() }
   Start-Sleep -Milliseconds 400
 }
-function Post($path, $obj) { Invoke-RestMethod "$base$path" -Method Post -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Depth 8 -Compress))) }
-function GetData() { Invoke-RestMethod "$base/api/data" }
+function Post($path, $obj) { Invoke-RestMethod "$base$path" -Method Post -ContentType 'application/json; charset=utf-8' -WebSession $script:ws -Body ([System.Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Depth 8 -Compress))) }
+function GetData() { Invoke-RestMethod "$base/api/data" -WebSession $script:ws }
 function Hash($f) { (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash }
 function CsvRows($store) { @(Import-Csv -LiteralPath (Join-Path $trk ($store + '.csv')) -Encoding UTF8) }
+
+# ---------------- v12 setup: give the copy's admin a known password
+# The first admin sign-in uses the old PIN from this copy's config.json and
+# must replace it; doing so removes admin_pin from config.json. That is a
+# one-time, deliberate edit, so it happens HERE, before the baselines below
+# are taken - T7 then still proves that merely starting and stopping the app
+# never touches config.json. The journal this setup run wrote (two audit
+# lines) is removed again so T1 starts from the same clean state as before.
+$pin = [string]((Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $sys 'config.json')) | ConvertFrom-Json).admin_pin
+if ($pin) {
+  $sp = Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $sys 'launcher.ps1'),'-NoBrowser','-Port','8090','-WriterId','PC_A') -PassThru -WindowStyle Hidden
+  for ($i = 0; $i -lt 60; $i++) { try { Invoke-RestMethod "$base/api/auth/status" -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Milliseconds 500 } }
+  Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType 'application/json; charset=utf-8' -Body (@{ username = 'admin'; password = $pin } | ConvertTo-Json -Compress) -SessionVariable sws | Out-Null
+  Invoke-RestMethod "$base/api/auth/change-password" -Method Post -ContentType 'application/json; charset=utf-8' -WebSession $sws -Body (@{ current = $pin; new = $TestAdminPw } | ConvertTo-Json -Compress) | Out-Null
+  Stop-App $sp
+  if (Test-Path -LiteralPath $jr) { Remove-Item -LiteralPath $jr -Recurse -Force }
+  Remove-Item -LiteralPath (Join-Path $sys 'logs\launcher_PC_A.log') -Force -ErrorAction SilentlyContinue
+}
 
 $baseHashes = @{}; foreach ($f in Get-ChildItem $trk -Filter *.csv) { $baseHashes[$f.Name] = Hash $f.FullName }
 $cfgHash = Hash (Join-Path $sys 'config.json')
@@ -43,7 +70,10 @@ $d = GetData
 foreach ($f in Get-ChildItem $trk -Filter *.csv) {
   $s = $f.BaseName
   $n = (CsvRows $s).Count
-  Check "T1 parity $s ($n rows)" (@($d.tracking.$s).Count -eq $n) ("api=" + @($d.tracking.$s).Count)
+  # v12: a sign-in writes one Auth_Login audit line, so those are not part of
+  # the base file being compared against.
+  $apiRows = @($d.tracking.$s | Where-Object { -not ($s -eq 'lb_audit' -and $_.action -like 'Auth_*') })
+  Check "T1 parity $s ($n rows)" ($apiRows.Count -eq $n) ("api=" + $apiRows.Count)
 }
 # evidenceFor-equivalent: last real row per key must be the ONLY active one
 $raw = CsvRows 'lb_deliverables'

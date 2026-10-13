@@ -13,3 +13,6 @@ system/tracking/journal/*/
 system/tracking_backup_v11_*/
 system/logs/v11_backfill_*.txt
 system/logs/launcher_*.log
+
+# v12: password hashes and the optional recovery key - never committed, never bundled
+system/auth/

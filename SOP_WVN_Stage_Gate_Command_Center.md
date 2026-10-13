@@ -64,24 +64,52 @@ their own synced copy.
 Each PC's changes are kept in its own file under `system\tracking\journal\`
 and merged by everyone's app — never edit or delete those folders.
 
+### Upgrading to v12 (admin, once)
+
+1. Ask everyone to **stop the app**, then replace the app folder with the v12
+   bundle, keeping `system\tracking\` and `system\config.json`.
+2. Start the app and sign in as **`admin`**. The first password is the **old
+   admin PIN**; you are asked to replace it with a real password straight away
+   (the PIN is then deleted from `config.json`).
+3. Open **Settings → Users and passwords** and press **Issue password** for each
+   person. Each one gets a temporary password, shown to you once — hand it over
+   in person. Nobody else can sign in until you have done this.
+
 ---
 
-## 3. Identity and roles
+## 3. Signing in, identity and roles
 
-Pick your name from the dropdown in the top bar **before doing anything**.
-Every claim, upload, approval and bypass is recorded against that name and
-written to the audit log.
+The app opens on a **sign-in page**. Type your user name and password; the
+vault list follows, with the common vault (`NPI_EPM_Documents_Control`)
+preselected — press **Open vault**.
+
+- **First sign-in / after a reset:** you sign in with the temporary password the
+  admin gave you and must choose your own (at least 8 characters) before
+  anything else opens.
+- **Your name comes from the sign-in.** Every claim, upload, approval and bypass
+  is recorded against it and written to the audit log. There is no name picker
+  any more, so nobody can act under someone else's name.
+- **Top-right menu (your name):** *Change my password*, *Switch vault*, *Sign out*.
+- **Forgot your password?** Ask the admin for a reset. Five wrong tries lock the
+  account for 5 minutes.
+- You are signed out when the app is stopped on your PC, or after 12 idle hours.
 
 | Role | Set by | Can do |
 |---|---|---|
-| User | Present in the user registry | Claim tasks, file evidence, raise issues, add notes |
+| User | Present in **Settings → Users and passwords** | Claim tasks, file evidence, raise issues, add notes, keep personal vaults |
 | Moderator | Listed in `config.json` → `moderators` | Everything a user can, plus assign tasks to others and sign gates out of sequence |
-| Admin | Selecting `admin` + PIN | Everything, plus Settings: master data, personnel, document types, PIN |
+| Admin | Signing in as `admin` | Everything, plus Settings: master data, users and passwords, folder structure, every vault |
 
-**Admin is PIN-gated.** Selecting `admin` prompts for a PIN (default `1234`).
-The unlock lasts for the browser tab only — closing the tab re-locks it.
-Change the PIN in **Settings → Admin Security PIN**; it is stored in
-`config.json` and is a workflow guard, not a security boundary.
+**How passwords are kept.** Only a salted hash of each password is stored (one
+small file per user under `system\auth\`). Nobody — including the admin — can
+read a password back from it. The admin can optionally switch on **Let the
+admin view passwords** in Settings; an encrypted copy is then kept that only the
+admin password unlocks, and every view is written to the audit log. Leave it off
+unless you really need it.
+
+**What the sign-in does not do.** The app folder is synced to every PC, so
+anyone with access to that folder can still open its files directly. The
+sign-in controls what happens through the app; it does not lock the folder.
 
 ---
 
@@ -89,8 +117,8 @@ Change the PIN in **Settings → Admin Security PIN**; it is stored in
 
 | Area | Purpose |
 |---|---|
-| Left rail | Six workspaces. Collapses to icons via the ☰ button; the choice persists |
-| Top bar | Current workspace, connection status, identity, manual reload, 15s auto-reload, theme, VI\|EN |
+| Left rail | The vault you are in (click it to switch vault), then the workspaces. Collapses to icons via the ☰ button; the choice persists |
+| Top bar | Current workspace, connection status, your name (menu: change password, switch vault, sign out), manual reload, 15s auto-reload, VI\|EN, theme |
 | Page body | The active workspace |
 | Right drawer | Opens over the content when a project or gate is selected |
 
@@ -345,10 +373,20 @@ work from any row.
   this one PC only.
 - **Product families / Change types / Document types** — master data. The
   Change / project types table scrolls horizontally on narrow windows
-- **User registry** — personnel; drives every owner dropdown
+- **Users and passwords** (v12) — the roster (drives every owner dropdown) with
+  each person's role, department and password status. **Add user** and **Issue /
+  Reset password** both produce a temporary password shown once; removing a
+  user deletes their password. The admin's own password is changed from the
+  top-right menu, not reset here
+- **Common vault folder structure** (v12) — the folder levels every upload is
+  filed under, top level first (default: Model → DocType → PartID). Add, remove
+  and reorder levels from the tokens `[Model] [Process] [ProjectID] [Step]
+  [DocType] [PartID]`; the example tree updates as you go. Applies to new
+  uploads only — files already in the vault are not moved
+- **All vaults** (v12) — the common vault and every personal vault, with owner
+  and folder; open or archive any of them
 - **Moderators** — who may assign work and sign out of sequence
 - **Templates** — blank company forms mapped to document types
-- **Admin Security PIN** — requires the current PIN to change
 - **Pillars** — the stage-gate processes. NPI and ECN come built in; **Add pillar**
   creates another (for example an equipment process) with its own steps,
   document types and name for the responsible person. It gets its own tab,
@@ -374,10 +412,48 @@ A change type still referenced by a project cannot be deleted.
 
 ---
 
+## 9b. Personal vaults (v12)
+
+A personal vault is your own small register, separate from NPI/ECN: your own
+project fields, your own processes, steps and deadlines, your own document
+types and folders. Only you and the admin can open it. It lives beside the
+common vault, in `Personal_Vaults\<your name>\<vault name>`, so it syncs to
+your other PCs the same way.
+
+1. **Create:** on the vault list (after sign-in, or **Switch vault**), choose
+   **New personal vault**, name it, and start from *Blank*, an example, or a
+   filled Excel template.
+2. **Vault setup** — five tabs:
+   - *Project fields* — the boxes on your register form (Text, Number, Date,
+     List, Yes/No; required or not; shown in the list or not).
+   - *Processes and steps* — each step has a duration in days and the document
+     types it expects. Deadlines are counted from a project's start date.
+   - *Document types* — a short code and a name.
+   - *Folder structure* — levels built from `[Project ID] [Process] [Step]
+     [DocType]` and any `[field]` of yours; a preview shows the result.
+   - *Excel template* — **Download template** gives a workbook with one sheet
+     each for Fields, Processes, Steps, DocTypes and FolderStructure, filled
+     with the current setup. Fill it in Excel and **import** it: you see a
+     summary and any problems first, and nothing changes until you confirm.
+   Changes are kept until you press **Save setup**.
+3. **Projects** — **Register project** builds the form from your fields; pick a
+   process and a start date and adjust any deadline. Click a project to set
+   each step's status and deadline and to add files to each document slot.
+4. **Steps and deadlines** — one bar per step for every project; red = late.
+
+Removing a file from a project's list, deleting a project or archiving a vault
+never deletes a file from disk.
+
+---
+
 ## 10. Troubleshooting
 
 | Symptom | Cause | Action |
 |---|---|---|
+| Sent back to the sign-in page | The app was restarted on this PC, or 12 idle hours passed | Sign in again |
+| "No password has been issued for this account yet" | The admin has not issued your first password | Ask the admin: Settings → Users and passwords → Issue password |
+| "This account is locked" | Five wrong passwords | Wait 5 minutes, or ask the admin for a reset |
+| Admin password forgotten | — | Stop the app, delete `system\auth\u_admin_*.json`, start it: a new temporary admin password is written to `system\auth\ADMIN_FIRST_LOGIN.txt` |
 | `offline` in the top bar | Server window closed, or port 8080 taken | Re-run `Open_WVN_NPI_Command_Center.cmd` |
 | No dropzones on a step | The task is owned by someone else | Claim it, ask the owner, or have an admin reassign |
 | Approve button greyed out | Missing docs, open issue, or a prior step still open | Hover it — the tooltip names the blocker |

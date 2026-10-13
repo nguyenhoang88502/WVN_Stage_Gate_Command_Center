@@ -18,13 +18,15 @@ let pass = 0, fail = 0;
 function check(name, ok, detail) {
   if (ok) { pass++; console.log('PASS ' + name); } else { fail++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
-async function waitUp() {
-  for (let i = 0; i < 90; i++) { try { const r = await fetch(BASE + '/api/data'); if (r.ok) return; } catch (e) { } await new Promise(r => setTimeout(r, 500)); }
-  throw new Error('server did not start');
-}
-async function api(p) { const r = await fetch(BASE + p); return r.json(); }
+// v12: every /api/* call needs a session. tests/lib/session.js signs in admin
+// and intern; a request is sent as the user its body names (admin otherwise),
+// which is what `user: '...'` in these calls meant before there was a login.
+const session = require('../lib/session');
+let SESS = null;
+const cookieFor = b => SESS.cookies[String((b && b.user) || 'admin').toLowerCase()] || SESS.cookies.admin;
+async function api(p) { const r = await fetch(BASE + p, { headers: { Cookie: SESS.cookies.admin } }); return r.json(); }
 async function post(p, body) {
-  const r = await fetch(BASE + p, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify(body) });
+  const r = await fetch(BASE + p, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8', Cookie: cookieFor(body) }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   return { ok: r.ok, status: r.status, body: j };
 }
@@ -34,7 +36,7 @@ async function post(p, body) {
   const srv = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcher, '-NoBrowser', '-Port', '8091', '-WriterId', 'PC_A'], { stdio: 'ignore' });
   let browser;
   try {
-    await waitUp();
+    SESS = await session.clients(BASE, ROOT);
 
     /* ---------------- setup: one project via the raw API ---------------- */
     const proj = await post('/api/projects', { process: 'NPI', family: 'TEST1', class_abcde: 'E', prf_date: '2026-01-05', created_by: 'admin' });

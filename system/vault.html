@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- v12: a personal vault. One page for any vault - which one is in ?id=.
+     Only served to a signed-in browser (launcher.ps1 redirects to login.html
+     otherwise) and the API refuses a vault that is not the caller's own.
+     Self-contained like login.html: v12.css only, no Tabler, no webfont. -->
+<html lang="vi" data-theme="light">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WAHL Vietnam — Personal vault</title>
+  <link rel="stylesheet" href="./v12.css">
+</head>
+
+<body>
+  <div id="root"></div>
+  <script src="./v12-shared.js"></script>
+  <script src="./vault.js"></script>
+</body>
+
+</html>

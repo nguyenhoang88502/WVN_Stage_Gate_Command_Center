@@ -83,6 +83,44 @@ one it bound.
 
 ---
 
+## 2a. Signing in, and vaults (v12)
+
+The browser opens on `login.html`. Until someone signs in, every page redirects there and every
+`/api/*` route except `/api/auth/*` and `/api/shutdown` answers `401`.
+
+- **Accounts** are the roster in `config.json` → `user_registry` (Settings → *Users and passwords*).
+  A person can sign in once the admin has issued them a password.
+- **Passwords** are stored only as salted PBKDF2-HMAC-SHA256 hashes (100 000 rounds), one file per user
+  in `system\auth\u_<name>_<tag>.json` — one file each so two people changing their password on two PCs
+  never collide in the OneDrive sync. The folder is not in the app bundle and is git-ignored.
+- **First start after upgrading:** the `admin` account is created with the old `admin_pin` as its
+  password and must replace it at first sign-in; `admin_pin` is then removed from `config.json`. With no
+  PIN to fall back on, a temporary admin password is written to `system\auth\ADMIN_FIRST_LOGIN.txt`.
+- **Temporary passwords.** *Issue password* / *Reset password* / *Add user* each produce one, shown to
+  the admin once. It only works for choosing a real password (≥ 8 characters).
+- **Sessions** live in the launcher's memory (an `HttpOnly`, `SameSite=Strict` cookie). Each PC runs its
+  own launcher, so a session belongs to that PC and ends when the launcher stops or after 12 idle hours.
+  Five wrong passwords lock an account for 5 minutes on that PC.
+- **The acting user is the session's user.** The server overwrites the `user` of every request body
+  (and `audit.user` on `/api/action`) with it, so a request cannot claim to be someone else. `admin`
+  rights are still "the user named `admin`", as before.
+- **Optional: admin can view passwords** (Settings, off by default). A hash cannot be read back, so this
+  keeps a second copy of each password encrypted to an RSA key whose private half is itself encrypted
+  with the admin password. Viewing asks for the admin password again and is audited. Switching it off
+  deletes the copies.
+
+After signing in you choose a **vault**. The common vault (the evidence vault of §4, default) opens the
+NPI/ECN app. A **personal vault** (`vault.html`) is a user's own register — own project fields, own
+processes / steps / deadlines, own document types and folder levels, an Excel template to fill them in —
+kept in `..\Personal_Vaults\<owner>\<vault>\` and visible to its owner and the admin only. It shares
+nothing with `system\tracking`.
+
+The admin also sets the **folder levels of the common vault** (Settings → *Common vault folder
+structure*; default `[Model]\[DocType]\[PartID]`, tokens `[Model] [Process] [ProjectID] [Step]
+[DocType] [PartID]`). A change applies to new uploads; existing files are not moved.
+
+---
+
 ## 2b. The one-time import (`Run_OneTime_Migration.cmd`) — DEPRECATED (v3.1)
 
 > **Do not run this.** The one-time import has already been done. `system\tracking\*.csv` is now the
@@ -394,9 +432,29 @@ five are cleared for a given project/step, the step cannot be approved. Which st
 
 ## 9. API (for reference / scripting)
 
+Since v12 every route below needs a signed-in session (cookie `wvn_sid`); the `user` in a request body
+is replaced by the session's user.
+
 | Method & path | Purpose |
 |---|---|
-| `GET /api/data` | Full snapshot: `{ config, tracking, paths }` — everything the frontend needs on load |
+| `GET /api/auth/status` | Open. `{ authenticated, user, role, must_change, app }` |
+| `POST /api/auth/login` | Open. `{ username, password }` → sets the session cookie |
+| `POST /api/auth/logout` | Ends the session |
+| `POST /api/auth/change-password` | `{ current, new }` — own password; the only call a temporary-password session may make |
+| `GET /api/auth/users` | Admin. Roster with password status (never the password) |
+| `POST /api/auth/reset-password` | Admin. `{ username }` → `{ temp_password }`, shown once |
+| `POST /api/auth/recovery` | Admin. `{ enable, admin_password }` — "admin can view passwords" on/off |
+| `POST /api/auth/reveal` | Admin, only while that is on. `{ username, admin_password }` → the password; audited |
+| `POST /api/config/folder-structure` | Admin. `{ levels: [...] }` — folder levels of the common vault |
+| `GET /api/vaults` | The common vault plus the personal vaults the caller may open |
+| `POST /api/vaults` | `{ name, config }` — create a personal vault |
+| `GET /api/vaults/<id>` | One personal vault: setup + projects |
+| `POST /api/vaults/<id>/config` | Replace its setup (fields, processes, doctypes, folder) |
+| `POST /api/vaults/<id>/projects` | Register a project; deadlines are computed from the step durations |
+| `POST /api/vaults/<id>/project-update` · `project-delete` | Edit values / step status / deadlines; remove from the register |
+| `POST /api/vaults/<id>/upload` · `unfile` · `GET …/file?path=` | File a document into a step's slot, take it off the list, open it |
+| `POST /api/vaults/<id>/archive` · `open` | Hide/restore the vault; open its folder in Explorer |
+| `GET /api/data` | Full snapshot: `{ config, tracking, paths, session, folder_levels }` — everything the frontend needs on load |
 | `GET /api/config` | `config.json` only |
 | `POST /api/config/family` | `{ op: 'add'\|'delete', family, family_id, user }` |
 | `POST /api/config/doctype` | `{ op: 'add'\|'delete', doctype, doctype_id, user }` |
@@ -434,6 +492,26 @@ five are cleared for a given project/step, the step cannot be approved. Which st
 ---
 
 ## 11. Honest limits
+
+### Known gaps (v12 sign-in and vaults)
+
+- **The sign-in guards the app, not the folder.** The app folder is synced to every PC, so anyone with
+  access to it can still read or edit `config.json`, the tracking CSVs and the vault files directly, or
+  run a modified launcher. What the hashing does guarantee is that the passwords themselves cannot be
+  read from the files.
+- **Sessions and lockouts are per PC**, because each PC runs its own launcher. Signing out on one PC does
+  not sign you out on another, and the five-tries lock counts tries on one PC only.
+- **Removing a user** takes effect on other PCs when the changed `config.json` has synced to them.
+- **Identity is enforced for `user` and `audit.user` only.** A row written through `/api/action` still
+  carries whatever `uploaded_by` / `approved_by` / `claimed_by` the browser put in it — task assignment
+  legitimately names other people — so those columns remain as trustworthy as before v12.
+- **Changing the common vault folder structure does not move existing files**, and there is no bulk
+  re-file. Old and new layouts coexist; every stored path stays valid.
+- **Personal vaults have no revision history, approvals or audit store** — only a per-PC activity log
+  (`_vault\activity_<PC>.log`). Two PCs editing the same personal vault inside one sync window can
+  produce a OneDrive conflict copy of `projects.json`; the common vault's journal storage is not used.
+- **The pre-v12 Playwright specs** (`tests\*.spec.js`) still drive the removed header name picker and
+  have not been ported; the suites under `tests\storage`, `tests\v11`, `tests\v11_1` and `tests\v12` have.
 
 ### Known gaps (v11)
 
@@ -520,6 +598,27 @@ teams.**
 ## 13. Version history
 
 Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
+
+### v12.0.0 (2026-10-13)
+
+**Sign-in, hashed passwords, personal vaults, admin-set folder structure.**
+
+- **Login page and sessions** — `login.html`; identity comes from a server-side session instead of the
+  header name picker, and the server stamps it on every request (§2a). The plain-text `admin_pin` and
+  its two endpoints are gone; the admin signs in with a password like everyone else.
+- **Users and passwords** in Settings replaces *User Registry* and *Admin Security PIN*: password
+  status per user, issue / reset to a one-time temporary password, optional "admin can view".
+- **Vault chooser at sign-in**, with the common vault as the default, and **personal vaults**
+  (`vault.html` / `vault.js`): own fields, processes, steps and deadlines, document types, folder levels
+  and an `.xlsx` template written and read in the browser with no library.
+- **Common vault folder structure** is a Settings card instead of a constant in `Save-Evidence`; the
+  uncategorized-file guess reads the configured levels.
+- Found while testing it: `HttpListenerRequest.QueryString` decodes with the request's content encoding,
+  which a GET does not have, so a Vietnamese value in a query string arrived as mojibake and matched
+  nothing. Every route now decodes the raw query as UTF-8 (`Get-QueryValue`) — which also fixes Vault
+  search and document history for Vietnamese search words and part names.
+- Tests: `tests\v12\api_auth_vaults.js` (server) and `tests\v12\e2e_login_vaults.js` (through the pages);
+  the v11 suites sign in through `tests\lib\session.js`.
 
 ### v11.0.0 (2026-09-18)
 

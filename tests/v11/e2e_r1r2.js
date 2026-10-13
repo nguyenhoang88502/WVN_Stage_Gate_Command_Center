@@ -15,29 +15,30 @@ let pass = 0, fail = 0;
 function check(name, ok, detail) {
   if (ok) { pass++; console.log('PASS ' + name); } else { fail++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
-async function waitUp() {
-  for (let i = 0; i < 90; i++) { try { const r = await fetch(BASE + '/api/data'); if (r.ok) return; } catch (e) { } await new Promise(r => setTimeout(r, 500)); }
-  throw new Error('server did not start');
-}
-async function api(p) { const r = await fetch(BASE + p); return r.json(); }
+// v12: every /api/* call needs a session. tests/lib/session.js signs in admin
+// and intern; a request is sent as the user its body names (admin otherwise),
+// which is what `user: '...'` in these calls meant before there was a login.
+const session = require('../lib/session');
+let SESS = null;
+const cookieFor = b => SESS.cookies[String((b && b.user) || 'admin').toLowerCase()] || SESS.cookies.admin;
+async function api(p) { const r = await fetch(BASE + p, { headers: { Cookie: SESS.cookies.admin } }); return r.json(); }
 
 (async () => {
   const launcher = path.join(ROOT, 'app', 'system', 'launcher.ps1');
   const srv = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcher, '-NoBrowser', '-Port', '8090', '-WriterId', 'PC_A'], { stdio: 'ignore' });
   let browser;
   try {
-    await waitUp();
+    SESS = await session.clients(BASE, ROOT);
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(() => { try { localStorage.setItem('wvn_lang', 'en'); } catch (e) { } });
+    // v12: the page opens already signed in as admin (it used to pick "admin"
+    // in the header and type the PIN).
+    await SESS.signInContext(page.context());
     await page.goto(BASE + '/');
     await page.locator('#srvState').filter({ hasText: 'connected' }).waitFor({ timeout: 20000 });
-    await page.locator('#whoSelect').selectOption('admin');
-    const pin = page.locator('.modal-scrim .modal', { hasText: 'Admin PIN required' });
-    await pin.locator('input[type="password"]').fill('1234');
-    await pin.locator('button', { hasText: 'Unlock' }).click();
 
     /* ---------------- R1: history + new revision + stale approval ------- */
     await page.locator('#tabs button', { hasText: /^NPI ·/ }).click();

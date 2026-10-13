@@ -1118,7 +1118,11 @@ function Test-NamingRules {
 }
 
 function Save-Evidence {
-  param([string]$DocType, [string]$Family, [string]$PartId, [string]$FileName, [byte[]]$Bytes)
+  param([string]$DocType, [string]$Family, [string]$PartId, [string]$FileName, [byte[]]$Bytes,
+        # v12: folder levels already resolved from the admin's folder
+        # structure (Resolve-EvidenceLevels). Omitted by callers that have no
+        # project context (the LFI writer), which keep the built-in shape.
+        [string[]]$LevelNames = $null)
   # v3.6 hierarchy: [Family]\[DocType]\[file] — you browse to a specific
   # model (Family, e.g. 9649LP), then a kind of document, which is how people
   # actually look for one. This app never tracks individual finished-good /
@@ -1130,6 +1134,7 @@ function Save-Evidence {
   $levels = @($Family, $DocType, $PartId) |
             ForEach-Object { if ($null -eq $_) { '' } else { (Get-SafeName ([string]$_)) } } |
             Where-Object { $_ -ne '' }
+  if ($null -ne $LevelNames) { $levels = @($LevelNames | Where-Object { $_ }) }
   $destDir = (@($EvidenceDir) + $levels) -join '\'
   if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
 
@@ -1347,8 +1352,24 @@ function Read-JsonBody {
   }
   $reader = New-Object System.IO.StreamReader($Request.InputStream, $enc)
   $text = $reader.ReadToEnd(); $reader.Close()
-  if (-not $text) { return @{} }
-  return $text | ConvertFrom-Json
+  $obj = if ($text) { $text | ConvertFrom-Json } else { $null }
+  # v12: the acting user is whoever is signed in, never whoever the request
+  # body says it is. Every endpoint below reads $body.user (and /api/action
+  # reads $body.audit.user) exactly as before; the value is simply replaced
+  # here, in the one place every body passes through, so no endpoint can
+  # forget to do it.
+  if ($script:ReqUser) {
+    if ($null -eq $obj) { $obj = [pscustomobject]@{} }
+    if ($obj -is [System.Management.Automation.PSCustomObject]) {
+      $obj | Add-Member -NotePropertyName user -NotePropertyValue $script:ReqUser -Force
+      if ($obj.audit -is [System.Management.Automation.PSCustomObject]) {
+        $obj.audit | Add-Member -NotePropertyName user -NotePropertyValue $script:ReqUser -Force
+      }
+    }
+    return $obj
+  }
+  if ($null -eq $obj) { return @{} }
+  return $obj
 }
 function ConvertTo-Hashtable {
   param($Obj)
@@ -2104,13 +2125,31 @@ $script:VaultIndexCache = @{ sig = ''; docs = @() }
 function Get-OrphanGuess {
   param($Config, [string]$RelPath)
   $parts = @($RelPath -split '\\')
-  if ($parts.Count -lt 3 -or $parts.Count -gt 4) { return $null }
-  $family = $parts[0]
-  $docCode = $parts[1].ToUpperInvariant()
-  $part = if ($parts.Count -eq 4) { $parts[2] } else { '' }
+  # v12: the folder levels are whatever the admin set, so the guess reads the
+  # path against that list instead of assuming [Model]\[DocType]\[PartID]. A
+  # blank level is dropped when a file is saved, so the list is also tried
+  # without [PartID]. Only a level that is exactly one token can be read back;
+  # a level that mixes tokens and text ("[Process] docs") is skipped over.
+  $levels = @(Get-EvidenceLevels $Config)
+  $dirs = @(if ($parts.Count -gt 1) { $parts[0..($parts.Count - 2)] })
+  $map = $null
+  foreach ($cand in @(, $levels) + @(, @($levels | Where-Object { $_ -ne '[PartID]' }))) {
+    if ($cand.Count -ne $dirs.Count -or -not $cand.Count) { continue }
+    $map = @{}
+    for ($i = 0; $i -lt $cand.Count; $i++) { if ($cand[$i] -match '^\[([A-Za-z]+)\]$') { $map[$Matches[1]] = $dirs[$i] } }
+    break
+  }
+  if (-not $map -or -not $map.ContainsKey('DocType')) { return $null }
+  $family = [string]$map['Model']
+  $docCode = ([string]$map['DocType']).ToUpperInvariant()
+  $part = [string]$map['PartID']
   $dt = @(Get-AllDocTypes $Config) | Where-Object { ([string]$_.doctype_id).ToUpperInvariant() -eq $docCode } | Select-Object -First 1
   if (-not $dt) { return $null }
-  $projects = @(Read-Store 'lb_projects' | Where-Object { [string]$_.family -eq $family })
+  $projects = @(Read-Store 'lb_projects' | Where-Object {
+    ($map.ContainsKey('ProjectID') -and (Get-SafeName ([string]$_.project_id)) -eq $map['ProjectID']) -or
+    (-not $map.ContainsKey('ProjectID') -and $family -and [string]$_.family -eq $family)
+  })
+  if (-not $family -and $projects.Count -eq 1) { $family = [string]$projects[0].family }
   if (-not $projects.Count) { return $null }
   $ambiguous = $projects.Count -gt 1
   $projectId = if (-not $ambiguous) { [string]$projects[0].project_id } else { '' }
@@ -2345,6 +2384,995 @@ if ($Backfill) {
   exit 0
 }
 
+# ================================================================ v12 auth ==
+# Before v12 the tool had no login: identity was a name picked from a header
+# dropdown, "admin" was gated by a PIN kept in plain text in config.json, and
+# every write trusted the `user` field the browser sent. v12 replaces that:
+#   - a separate login page (login.html) and a server-side session held in an
+#     HttpOnly cookie. Every /api/* route except /api/auth/* and /api/shutdown
+#     needs a session, and Read-JsonBody overwrites the `user` a request claims
+#     with the session's own name, so nobody can act under another name.
+#   - passwords are stored only as salted PBKDF2-HMAC-SHA256 hashes, one small
+#     file per user under system\auth\ (one file per user, not one shared file,
+#     so two people changing their passwords on two PCs never collide in the
+#     OneDrive sync).
+#   - sessions live in this process's memory. Each PC runs its own launcher on
+#     loopback, so a session is local to the PC it was opened on and ends when
+#     this launcher stops.
+# What this is NOT: the app folder is synced to every PC, so anyone with access
+# to that folder can still read or edit its files directly. The login controls
+# what happens through the app and keeps the passwords themselves unreadable;
+# it does not turn a shared folder into a locked one.
+$AuthDir            = Join-Path $SystemDir 'auth'
+$RecoveryPath       = Join-Path $AuthDir '_recovery.json'
+$AdminFirstLoginPath = Join-Path $AuthDir 'ADMIN_FIRST_LOGIN.txt'
+$SessionCookie      = 'wvn_sid'
+$SessionIdleHours   = 12
+$PwIterations       = 100000
+$PwMinLength        = 8
+$LoginMaxFails      = 5
+$LoginLockMinutes   = 5
+$script:Sessions    = @{}     # token -> @{ user; must_change; seen }
+$script:LoginFails  = @{}     # lower-cased user name -> @{ n; until }
+$script:ReqUser     = ''      # the signed-in user of the request being served
+$script:RegistryCache = @{ sig = ''; list = @() }
+
+function Get-RandomBytes { param([int]$Count)
+  $b = New-Object byte[] $Count
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+  return ,$b
+}
+function Get-RandomHex { param([int]$Bytes = 4)
+  return ([BitConverter]::ToString((Get-RandomBytes $Bytes))).Replace('-', '').ToLowerInvariant()
+}
+
+# PBKDF2-HMAC-SHA256. The four-argument Rfc2898DeriveBytes constructor needs
+# .NET Framework 4.7.2; on anything older the same function is computed by
+# hand (slow, but correct) rather than silently falling back to SHA-1.
+function Get-Pbkdf2 { param([string]$Password, [byte[]]$Salt, [int]$Iterations, [int]$Length = 32)
+  $pw = [System.Text.Encoding]::UTF8.GetBytes($Password)
+  $derived = $null
+  try {
+    $d = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($pw, $Salt, $Iterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    try { $derived = $d.GetBytes($Length) } finally { $d.Dispose() }
+  } catch {
+    if ($Length -gt 32) { throw 'PBKDF2 fallback only produces one 32-byte block.' }
+    $h = New-Object System.Security.Cryptography.HMACSHA256 (, $pw)
+    try {
+      $block = New-Object byte[] ($Salt.Length + 4)
+      [Array]::Copy($Salt, $block, $Salt.Length)
+      $block[$block.Length - 1] = 1
+      $u = $h.ComputeHash($block)
+      $t = [byte[]]$u.Clone()
+      for ($i = 1; $i -lt $Iterations; $i++) {
+        $u = $h.ComputeHash($u)
+        for ($j = 0; $j -lt 32; $j++) { $t[$j] = $t[$j] -bxor $u[$j] }
+      }
+      $derived = New-Object byte[] $Length
+      [Array]::Copy($t, $derived, $Length)
+    } finally { $h.Dispose() }
+  }
+  return ,$derived
+}
+function New-PasswordHash { param([string]$Password)
+  $salt = Get-RandomBytes 16
+  $hash = Get-Pbkdf2 -Password $Password -Salt $salt -Iterations $PwIterations
+  return ('pbkdf2-sha256$' + $PwIterations + '$' + [Convert]::ToBase64String($salt) + '$' + [Convert]::ToBase64String($hash))
+}
+function Test-PasswordHash { param([string]$Password, [string]$Stored)
+  $p = @(([string]$Stored).Split('$'))
+  if ($p.Count -ne 4 -or $p[0] -ne 'pbkdf2-sha256') { return $false }
+  $iter = 0
+  if (-not [int]::TryParse($p[1], [ref]$iter) -or $iter -lt 1) { return $false }
+  try {
+    $salt = [Convert]::FromBase64String($p[2]); $want = [Convert]::FromBase64String($p[3])
+    $got = Get-Pbkdf2 -Password $Password -Salt $salt -Iterations $iter -Length $want.Length
+  } catch { return $false }
+  if ($got.Length -ne $want.Length) { return $false }
+  # Compare every byte whatever the outcome, so the time taken says nothing
+  # about how many leading bytes matched.
+  $diff = 0
+  for ($i = 0; $i -lt $want.Length; $i++) { $diff = $diff -bor ($got[$i] -bxor $want[$i]) }
+  return ($diff -eq 0)
+}
+function New-TempPassword {
+  # No 0/O/1/l/i: a temporary password is read off a screen and typed by hand.
+  $alphabet = 'abcdefghjkmnpqrstuvwxyz23456789'
+  $bytes = Get-RandomBytes 6
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($b in $bytes) { [void]$sb.Append($alphabet[$b % $alphabet.Length]) }
+  return ('Temp-' + $sb.ToString())
+}
+
+function Read-JsonFile { param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  $text = Invoke-Locked -Path $Path -Action { param($s) Read-AllText $s }
+  if (-not $text -or -not $text.Trim()) { return $null }
+  return ($text | ConvertFrom-Json)
+}
+function Write-JsonFile { param([string]$Path, $Object)
+  $dir = Split-Path -Parent $Path
+  if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $json = $Object | ConvertTo-Json -Depth 14
+  Invoke-Locked -Path $Path -Action { param($s) Write-AllText $s $json }.GetNewClosure() | Out-Null
+}
+# @($null) is a one-element array in PowerShell, so a missing JSON array would
+# otherwise turn into one empty row everywhere it is looped over.
+function ConvertTo-List { param($Value)
+  $out = New-Object System.Collections.Generic.List[object]
+  foreach ($x in @($Value)) { if ($null -ne $x) { $out.Add($x) } }
+  # Emitted one by one on purpose (no leading comma): callers pipe this, and
+  # wrap it in @() wherever they index it or count it.
+  return $out.ToArray()
+}
+
+function Get-AuthFile { param([string]$Username)
+  $low = ([string]$Username).Trim().ToLowerInvariant()
+  $slug = ($low -replace '[^a-z0-9]+', '_').Trim('_')
+  if (-not $slug) { $slug = 'user' }
+  $sha = [System.Security.Cryptography.SHA1]::Create()
+  try { $tag = ([BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($low)))).Replace('-', '').Substring(0, 6).ToLowerInvariant() }
+  finally { $sha.Dispose() }
+  return (Join-Path $AuthDir ('u_' + $slug + '_' + $tag + '.json'))
+}
+function Read-AuthRecord { param([string]$Username) return (Read-JsonFile (Get-AuthFile $Username)) }
+
+# The roster (who exists, their role and department) stays in config.json where
+# Settings has always edited it. Looked up on every request, so it is cached on
+# the file's size + timestamp.
+function Get-Registry {
+  $sig = ''
+  try { $ci = Get-Item -LiteralPath $ConfigPath; $sig = [string]$ci.Length + '|' + [string]$ci.LastWriteTimeUtc.Ticks } catch { }
+  if ($sig -and $script:RegistryCache.sig -eq $sig) { return $script:RegistryCache.list }
+  $list = @(ConvertTo-List (Get-Config).user_registry)
+  $script:RegistryCache = @{ sig = $sig; list = $list }
+  return $list
+}
+function Get-RegistryUser { param([string]$Username)
+  $low = ([string]$Username).Trim().ToLowerInvariant()
+  if (-not $low) { return $null }
+  foreach ($u in (Get-Registry)) { if (([string]$u.username).Trim().ToLowerInvariant() -eq $low) { return $u } }
+  return $null
+}
+function Test-AdminName { param([string]$Username) return (([string]$Username).Trim().ToLowerInvariant() -eq 'admin') }
+
+# ---- optional: admin can view passwords ------------------------------------
+# A hash cannot be read back, so "the admin can see everyone's password" needs
+# a second, recoverable copy. It is OFF unless the admin turns it on in
+# Settings. When on, each password is also stored encrypted to an RSA public
+# key; the matching private key is itself encrypted with a key derived from the
+# admin's password, so revealing one needs the admin password typed again and
+# nothing on disk can be decrypted without it.
+function Get-Recovery {
+  $r = Read-JsonFile $RecoveryPath
+  if ($r -and $r.enabled -and $r.public_key) { return $r }
+  return $null
+}
+function Protect-ForAdmin { param([string]$Password, $Recovery)
+  $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+  try {
+    $rsa.PersistKeyInCsp = $false
+    $rsa.FromXmlString([string]$Recovery.public_key)
+    return [Convert]::ToBase64String($rsa.Encrypt([System.Text.Encoding]::UTF8.GetBytes($Password), $true))
+  } finally { $rsa.Dispose() }
+}
+function Protect-PrivateKey { param([string]$PrivateXml, [string]$AdminPassword)
+  $salt = Get-RandomBytes 16
+  $aes = [System.Security.Cryptography.Aes]::Create()
+  try {
+    $aes.Key = Get-Pbkdf2 -Password $AdminPassword -Salt $salt -Iterations $PwIterations
+    $aes.GenerateIV()
+    $plain = [System.Text.Encoding]::UTF8.GetBytes($PrivateXml)
+    $enc = $aes.CreateEncryptor()
+    $ct = $enc.TransformFinalBlock($plain, 0, $plain.Length)
+    return @{ salt = [Convert]::ToBase64String($salt); iv = [Convert]::ToBase64String($aes.IV); data = [Convert]::ToBase64String($ct) }
+  } finally { $aes.Dispose() }
+}
+function Unprotect-PrivateKey { param($Recovery, [string]$AdminPassword)
+  $aes = [System.Security.Cryptography.Aes]::Create()
+  try {
+    $aes.Key = Get-Pbkdf2 -Password $AdminPassword -Salt ([Convert]::FromBase64String([string]$Recovery.private_key.salt)) -Iterations $PwIterations
+    $aes.IV = [Convert]::FromBase64String([string]$Recovery.private_key.iv)
+    $ct = [Convert]::FromBase64String([string]$Recovery.private_key.data)
+    $dec = $aes.CreateDecryptor()
+    return [System.Text.Encoding]::UTF8.GetString($dec.TransformFinalBlock($ct, 0, $ct.Length))
+  } finally { $aes.Dispose() }
+}
+
+function Set-UserPassword { param([string]$Username, [string]$Password, [bool]$MustChange)
+  $rec = [ordered]@{
+    username      = $Username
+    password_hash = (New-PasswordHash $Password)
+    must_change   = $MustChange
+    changed_utc   = [DateTime]::UtcNow.ToString('o')
+  }
+  $recovery = Get-Recovery
+  if ($recovery) { try { $rec.recovery = Protect-ForAdmin -Password $Password -Recovery $recovery } catch { Write-Log ('Recovery copy failed for ' + $Username + ': ' + $_.Exception.Message) 'WARN' } }
+  Write-JsonFile -Path (Get-AuthFile $Username) -Object $rec
+}
+
+# Deletes the key and every viewable copy. Used when "admin can view" is
+# switched off, and whenever the key could no longer be unlocked anyway (the
+# admin account is being re-created) - a copy nobody can decrypt must not be
+# left looking as if it were still viewable.
+function Clear-RecoveryCopies {
+  if (Test-Path -LiteralPath $RecoveryPath) { Remove-Item -LiteralPath $RecoveryPath -Force }
+  if (-not (Test-Path -LiteralPath $AuthDir)) { return }
+  foreach ($af in @(Get-ChildItem -LiteralPath $AuthDir -Filter 'u_*.json' -File -ErrorAction SilentlyContinue)) {
+    try {
+      $r = Read-JsonFile $af.FullName
+      if ($r -and $r.PSObject.Properties.Name -contains 'recovery') { $r.PSObject.Properties.Remove('recovery'); Write-JsonFile -Path $af.FullName -Object $r }
+    } catch { Write-Log ('Could not clear the viewable copy in ' + $af.Name + ': ' + $_.Exception.Message) 'WARN' }
+  }
+}
+
+function Initialize-Auth {
+  if (-not (Test-Path -LiteralPath $AuthDir)) { New-Item -ItemType Directory -Path $AuthDir -Force | Out-Null }
+  if (Test-Path -LiteralPath (Get-AuthFile 'admin')) { return }
+  # No admin account: first start after the upgrade, or the documented way out
+  # of a forgotten admin password (delete system\auth\u_admin_*.json). Either
+  # way the old viewable copies, if any, were locked with a password that is
+  # gone.
+  Clear-RecoveryCopies
+  # First start after the upgrade: the admin already knows one secret, the old
+  # PIN, so that becomes the first password and has to be replaced at sign-in.
+  $pin = ''
+  try { $pin = [string](Get-Config).admin_pin } catch { }
+  if ($pin) {
+    Set-UserPassword -Username 'admin' -Password $pin -MustChange $true
+    Write-Log 'Auth: admin account created. First password = the old admin PIN; it must be changed at first sign-in.'
+  } else {
+    $tmp = New-TempPassword
+    Set-UserPassword -Username 'admin' -Password $tmp -MustChange $true
+    Set-Content -LiteralPath $AdminFirstLoginPath -Encoding UTF8 -Value @(
+      'WVN NPI & ECN Command Center - first admin sign-in',
+      '',
+      ('User name : admin'),
+      ('Password  : ' + $tmp),
+      '',
+      'You are asked to choose your own password straight away, and this file is',
+      'deleted as soon as you do.'
+    )
+    Write-Log ('Auth: admin account created with a temporary password written to ' + $AdminFirstLoginPath)
+  }
+}
+
+function New-Session { param([string]$User, [bool]$MustChange)
+  $token = Get-RandomHex 32
+  $script:Sessions[$token] = @{ user = $User; must_change = $MustChange; seen = [DateTime]::UtcNow; token = $token }
+  return $token
+}
+function Remove-UserSessions { param([string]$Username, [string]$ExceptToken = '')
+  $low = ([string]$Username).ToLowerInvariant()
+  foreach ($k in @($script:Sessions.Keys)) {
+    if ($k -ne $ExceptToken -and ([string]$script:Sessions[$k].user).ToLowerInvariant() -eq $low) { $script:Sessions.Remove($k) }
+  }
+}
+function Get-RequestSession { param([System.Net.HttpListenerRequest]$Request)
+  $token = ''
+  try { $c = $Request.Cookies[$SessionCookie]; if ($c) { $token = [string]$c.Value } } catch { }
+  if (-not $token) { return $null }
+  $s = $script:Sessions[$token]
+  if (-not $s) { return $null }
+  if (([DateTime]::UtcNow - $s.seen).TotalHours -gt $SessionIdleHours) { $script:Sessions.Remove($token); return $null }
+  # A user the admin removed from the roster on another PC loses access here
+  # too, as soon as the synced config.json arrives.
+  if (-not (Get-RegistryUser $s.user)) { $script:Sessions.Remove($token); return $null }
+  $s.seen = [DateTime]::UtcNow
+  return $s
+}
+function Set-SessionCookie { param([System.Net.HttpListenerResponse]$Response, [string]$Token)
+  if ($Token) { $Response.AppendHeader('Set-Cookie', ($SessionCookie + '=' + $Token + '; Path=/; HttpOnly; SameSite=Strict')) }
+  else { $Response.AppendHeader('Set-Cookie', ($SessionCookie + '=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')) }
+}
+function New-RedirectResponse { param([System.Net.HttpListenerResponse]$Response, [string]$Location)
+  $Response.StatusCode = 302
+  $Response.RedirectLocation = $Location
+  $Response.Headers.Add('Cache-Control', 'no-store')
+  $Response.ContentLength64 = 0
+  $Response.OutputStream.Close()
+}
+# HttpListener decodes QueryString with the request's ContentEncoding, which a
+# plain GET does not have - so a Vietnamese folder name arrives as mojibake.
+# This reads the raw query and decodes it as UTF-8, which is what browsers send.
+function Get-QueryValue { param([System.Net.HttpListenerRequest]$Request, [string]$Name)
+  $q = [string]$Request.Url.Query
+  if ($q.StartsWith('?')) { $q = $q.Substring(1) }
+  foreach ($pair in $q.Split('&')) {
+    if (-not $pair) { continue }
+    $kv = $pair.Split('=', 2)
+    if ([System.Uri]::UnescapeDataString($kv[0].Replace('+', ' ')) -ne $Name) { continue }
+    if ($kv.Count -lt 2) { return '' }
+    return [System.Uri]::UnescapeDataString($kv[1].Replace('+', ' '))
+  }
+  return ''
+}
+function Get-SessionInfo { param($Session)
+  if (-not $Session) { return @{ authenticated = $false } }
+  $ru = Get-RegistryUser $Session.user
+  return @{
+    authenticated = $true
+    user          = [string]$ru.username
+    role          = if (Test-AdminName $ru.username) { 'admin' } else { [string]$ru.role }
+    department    = [string]$ru.department
+    must_change   = [bool]$Session.must_change
+    is_admin      = (Test-AdminName $ru.username)
+  }
+}
+function Test-NewPassword { param([string]$Password)
+  if ($Password.Length -lt $PwMinLength) { return ('Use at least ' + $PwMinLength + ' characters.') }
+  if ($Password.Length -gt 128) { return 'Use at most 128 characters.' }
+  return ''
+}
+
+function Invoke-AuthApi {
+  param([System.Net.HttpListenerRequest]$Req, [System.Net.HttpListenerResponse]$Res, [string]$Path, [string]$Method, $Session)
+  $json = { param($code, $body) New-JsonResponse -Response $Res -StatusCode $code -Body $body }
+
+  if ($Method -eq 'GET' -and $Path -eq '/api/auth/status') {
+    $info = Get-SessionInfo $Session
+    $cfg = Get-Config
+    $info.app = @{ name = [string]$cfg.system_info.app_name; version = [string]$cfg.system_info.version }
+    & $json 200 $info
+    return
+  }
+  if ($Method -eq 'POST' -and $Path -eq '/api/auth/login') {
+    $body = Read-JsonBody -Request $Req
+    $name = ([string]$body.username).Trim()
+    $pw = [string]$body.password
+    $low = $name.ToLowerInvariant()
+    $f = $script:LoginFails[$low]
+    if ($f -and $f.until -and $f.until -gt [DateTime]::UtcNow) {
+      $mins = [Math]::Ceiling(($f.until - [DateTime]::UtcNow).TotalMinutes)
+      & $json 429 @{ error = ('Too many wrong tries. This account is locked for ' + $mins + ' more minute(s).'); locked = $true }
+      return
+    }
+    $ru = Get-RegistryUser $name
+    $rec = if ($ru) { Read-AuthRecord $ru.username } else { $null }
+    if ($ru -and -not $rec) {
+      & $json 403 @{ error = 'No password has been issued for this account yet. Ask the admin for a temporary password.'; no_password = $true }
+      return
+    }
+    if (-not $ru -or -not $pw -or -not (Test-PasswordHash -Password $pw -Stored ([string]$rec.password_hash))) {
+      if ($low) {
+        if (-not $f -or ($f.until -and $f.until -le [DateTime]::UtcNow)) { $f = @{ n = 0; until = $null } }
+        $f.n++
+        if ($f.n -ge $LoginMaxFails) { $f.until = [DateTime]::UtcNow.AddMinutes($LoginLockMinutes); $f.n = 0; Write-Log ('Auth: ' + $name + ' locked after ' + $LoginMaxFails + ' wrong passwords.') 'WARN' }
+        $script:LoginFails[$low] = $f
+      }
+      $left = if ($f -and -not $f.until) { $LoginMaxFails - $f.n } else { 0 }
+      $msg = 'Wrong user name or password.'
+      if ($f -and $f.until) { $msg = 'Too many wrong tries. This account is locked for ' + $LoginLockMinutes + ' minutes.' }
+      & $json 401 @{ error = $msg; tries_left = $left; locked = [bool]($f -and $f.until) }
+      return
+    }
+    $script:LoginFails.Remove($low)
+    $must = [bool]$rec.must_change
+    # "Admin can view" was switched on after this password was set: this is
+    # the one moment the server sees it, so the recoverable copy is taken now.
+    if (-not $rec.recovery) {
+      $recovery = Get-Recovery
+      if ($recovery) {
+        try {
+          $rec | Add-Member -NotePropertyName recovery -NotePropertyValue (Protect-ForAdmin -Password $pw -Recovery $recovery) -Force
+          Write-JsonFile -Path (Get-AuthFile $ru.username) -Object $rec
+        } catch { Write-Log ('Recovery copy failed for ' + $ru.username + ': ' + $_.Exception.Message) 'WARN' }
+      }
+    }
+    $token = New-Session -User ([string]$ru.username) -MustChange $must
+    Set-SessionCookie -Response $Res -Token $token
+    try { Add-Audit -User ([string]$ru.username) -Action 'Auth_Login' -ProjectId '' -ObjType 'Session' -ObjId $WriterId -From '' -To '' -Detail '' } catch { }
+    & $json 200 (Get-SessionInfo $script:Sessions[$token])
+    return
+  }
+  if ($Method -eq 'POST' -and $Path -eq '/api/auth/logout') {
+    if ($Session) { $script:Sessions.Remove([string]$Session.token) }
+    Set-SessionCookie -Response $Res -Token ''
+    & $json 200 @{ ok = $true }
+    return
+  }
+
+  # Everything below needs a signed-in user.
+  if (-not $Session) { & $json 401 @{ error = 'Sign in first.'; auth = 'required' }; return }
+  $me = [string]$Session.user
+  $iAmAdmin = Test-AdminName $me
+
+  if ($Method -eq 'POST' -and $Path -eq '/api/auth/change-password') {
+    $body = Read-JsonBody -Request $Req
+    $cur = [string]$body.current; $new = [string]$body.new
+    $rec = Read-AuthRecord $me
+    if (-not $rec -or -not (Test-PasswordHash -Password $cur -Stored ([string]$rec.password_hash))) { & $json 403 @{ error = 'The current password is wrong.' }; return }
+    $bad = Test-NewPassword $new
+    if ($bad) { & $json 400 @{ error = $bad }; return }
+    if ($new -ceq $cur) { & $json 400 @{ error = 'The new password must be different from the current one.' }; return }
+    if ($iAmAdmin) {
+      # The recovery private key is wrapped with the admin password, so it has
+      # to be re-wrapped before the old password stops working.
+      $recovery = Get-Recovery
+      if ($recovery) {
+        $priv = Unprotect-PrivateKey -Recovery $recovery -AdminPassword $cur
+        $recovery.private_key = Protect-PrivateKey -PrivateXml $priv -AdminPassword $new
+        Write-JsonFile -Path $RecoveryPath -Object $recovery
+      }
+    }
+    Set-UserPassword -Username $me -Password $new -MustChange $false
+    $Session.must_change = $false
+    Remove-UserSessions -Username $me -ExceptToken ([string]$Session.token)
+    if ($iAmAdmin) {
+      # The old plain-text PIN has now been replaced for good.
+      try {
+        $cfg = Get-Config
+        if ($cfg.PSObject.Properties.Name -contains 'admin_pin') { $cfg.PSObject.Properties.Remove('admin_pin'); Save-Config $cfg }
+      } catch { Write-Log ('Could not remove admin_pin from config.json: ' + $_.Exception.Message) 'WARN' }
+      if (Test-Path -LiteralPath $AdminFirstLoginPath) { Remove-Item -LiteralPath $AdminFirstLoginPath -Force -ErrorAction SilentlyContinue }
+    }
+    try { Add-Audit -User $me -Action 'Auth_Password_Change' -ProjectId '' -ObjType 'User' -ObjId $me -From '(hidden)' -To '(hidden)' -Detail '' } catch { }
+    & $json 200 @{ ok = $true }
+    return
+  }
+
+  # Admin-only from here.
+  if (-not $iAmAdmin) { & $json 403 @{ error = 'Only the admin user can manage accounts.' }; return }
+  if ($Session.must_change) { & $json 403 @{ error = 'Choose your own password first.' }; return }
+
+  if ($Method -eq 'GET' -and $Path -eq '/api/auth/users') {
+    $recovery = Get-Recovery
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($u in (Get-Registry)) {
+      $r = Read-AuthRecord $u.username
+      $stored = ''
+      if ($r) { $hp = @(([string]$r.password_hash).Split('$')); if ($hp.Count -eq 4) { $stored = $hp[0] + '$' + $hp[1] + '$' + $hp[2].Substring(0, [Math]::Min(4, $hp[2].Length)) + '...$' + $hp[3].Substring(0, [Math]::Min(6, $hp[3].Length)) + '...' } }
+      $rows.Add(@{
+        username = [string]$u.username; role = [string]$u.role; department = [string]$u.department
+        has_password = [bool]$r; must_change = [bool]($r -and $r.must_change)
+        changed_utc = if ($r) { [string]$r.changed_utc } else { '' }
+        stored = $stored
+        recoverable = [bool]($recovery -and $r -and $r.recovery)
+      })
+    }
+    & $json 200 @{ users = $rows.ToArray(); admin_can_view = [bool]$recovery; min_length = $PwMinLength }
+    return
+  }
+  if ($Method -eq 'POST' -and $Path -eq '/api/auth/reset-password') {
+    $body = Read-JsonBody -Request $Req
+    $ru = Get-RegistryUser ([string]$body.username)
+    if (-not $ru) { & $json 404 @{ error = 'That user is not in the registry.' }; return }
+    if (Test-AdminName $ru.username) { & $json 400 @{ error = 'The admin password is changed from "Change my password", not reset.' }; return }
+    $tmp = New-TempPassword
+    $had = [bool](Read-AuthRecord $ru.username)
+    Set-UserPassword -Username ([string]$ru.username) -Password $tmp -MustChange $true
+    Remove-UserSessions -Username ([string]$ru.username)
+    $script:LoginFails.Remove(([string]$ru.username).ToLowerInvariant())
+    Add-Audit -User $me -Action $(if ($had) { 'Auth_Password_Reset' } else { 'Auth_Password_Issue' }) -ProjectId '' -ObjType 'User' -ObjId ([string]$ru.username) -From '' -To 'Temporary password' -Detail ''
+    & $json 200 @{ ok = $true; username = [string]$ru.username; temp_password = $tmp }
+    return
+  }
+  if ($Method -eq 'POST' -and $Path -eq '/api/auth/recovery') {
+    # Switches "admin can view passwords" on or off. Either way the admin
+    # password is asked for again.
+    $body = Read-JsonBody -Request $Req
+    $adminPw = [string]$body.admin_password
+    $rec = Read-AuthRecord $me
+    if (-not $rec -or -not (Test-PasswordHash -Password $adminPw -Stored ([string]$rec.password_hash))) { & $json 403 @{ error = 'Wrong admin password.' }; return }
+    if ($body.enable) {
+      if (-not (Get-Recovery)) {
+        Clear-RecoveryCopies
+        $rec = Read-AuthRecord $me
+        $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider 2048
+        try {
+          $rsa.PersistKeyInCsp = $false
+          $obj = [ordered]@{
+            enabled = $true; enabled_utc = [DateTime]::UtcNow.ToString('o'); enabled_by = $me
+            public_key = $rsa.ToXmlString($false)
+            private_key = (Protect-PrivateKey -PrivateXml ($rsa.ToXmlString($true)) -AdminPassword $adminPw)
+          }
+        } finally { $rsa.Dispose() }
+        Write-JsonFile -Path $RecoveryPath -Object $obj
+        # The admin's own copy can be taken straight away.
+        try { $rec | Add-Member -NotePropertyName recovery -NotePropertyValue (Protect-ForAdmin -Password $adminPw -Recovery (Get-Recovery)) -Force; Write-JsonFile -Path (Get-AuthFile $me) -Object $rec } catch { }
+        Add-Audit -User $me -Action 'Auth_AdminView_On' -ProjectId '' -ObjType 'Config' -ObjId 'auth' -From 'hash only' -To 'admin can view passwords' -Detail ''
+      }
+    } else {
+      Clear-RecoveryCopies
+      Add-Audit -User $me -Action 'Auth_AdminView_Off' -ProjectId '' -ObjType 'Config' -ObjId 'auth' -From 'admin can view passwords' -To 'hash only' -Detail 'Recoverable copies deleted'
+    }
+    & $json 200 @{ ok = $true; admin_can_view = [bool](Get-Recovery) }
+    return
+  }
+  if ($Method -eq 'POST' -and $Path -eq '/api/auth/reveal') {
+    $body = Read-JsonBody -Request $Req
+    $adminPw = [string]$body.admin_password
+    $mine = Read-AuthRecord $me
+    if (-not $mine -or -not (Test-PasswordHash -Password $adminPw -Stored ([string]$mine.password_hash))) { & $json 403 @{ error = 'Wrong admin password.' }; return }
+    $recovery = Get-Recovery
+    if (-not $recovery) { & $json 400 @{ error = 'Viewing passwords is switched off.' }; return }
+    $ru = Get-RegistryUser ([string]$body.username)
+    $r = if ($ru) { Read-AuthRecord $ru.username } else { $null }
+    if (-not $r -or -not $r.recovery) { & $json 404 @{ error = 'No viewable copy exists for this user yet. One is saved the next time they sign in or change their password.' }; return }
+    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    try {
+      $rsa.PersistKeyInCsp = $false
+      $rsa.FromXmlString((Unprotect-PrivateKey -Recovery $recovery -AdminPassword $adminPw))
+      $plain = [System.Text.Encoding]::UTF8.GetString($rsa.Decrypt([Convert]::FromBase64String([string]$r.recovery), $true))
+    } finally { $rsa.Dispose() }
+    Add-Audit -User $me -Action 'Auth_Password_Reveal' -ProjectId '' -ObjType 'User' -ObjId ([string]$ru.username) -From '' -To '' -Detail 'Password viewed by admin'
+    & $json 200 @{ username = [string]$ru.username; password = $plain }
+    return
+  }
+  & $json 404 @{ error = 'not found' }
+}
+
+# ---- common vault folder structure (v12) -----------------------------------
+# Save-Evidence used to hard-code [Model]\[DocType]\[PartID]. The admin now sets
+# the levels in Settings; that default is what an install with no setting gets,
+# so nothing moves on upgrade. A level may mix tokens and plain text.
+$EvidenceLevelTokens = @('Model', 'Process', 'ProjectID', 'Step', 'DocType', 'PartID')
+function Get-EvidenceLevels { param($Config)
+  $lv = @(ConvertTo-List $Config.deployment_defaults.evidence_folder_levels | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+  if (-not $lv.Count) { return @('[Model]', '[DocType]', '[PartID]') }
+  return $lv
+}
+function Test-EvidenceLevels { param($Levels)
+  $errs = @()
+  $lv = @(ConvertTo-List $Levels | ForEach-Object { ([string]$_).Trim() })
+  if (-not $lv.Count) { return @('At least one folder level is required.') }
+  if ($lv.Count -gt 8) { $errs += 'Use at most 8 folder levels.' }
+  $anyToken = $false
+  for ($i = 0; $i -lt $lv.Count; $i++) {
+    $l = $lv[$i]
+    if (-not $l) { $errs += ('Level ' + ($i + 1) + ' is empty.'); continue }
+    if ($l -match '[\\/:\*\?"<>\|]') { $errs += ('Level ' + ($i + 1) + ' contains a character Windows does not allow in a folder name.') }
+    foreach ($m in [regex]::Matches($l, '\[([^\]]*)\]')) {
+      $anyToken = $true
+      if ($EvidenceLevelTokens -notcontains $m.Groups[1].Value) { $errs += ('Level ' + ($i + 1) + ': [' + $m.Groups[1].Value + '] is not a known token. Use ' + (($EvidenceLevelTokens | ForEach-Object { '[' + $_ + ']' }) -join ', ') + '.') }
+    }
+  }
+  if (-not $anyToken) { $errs += 'Use at least one token such as [Model] or [DocType], or every file lands in the same folder.' }
+  return $errs
+}
+function Resolve-EvidenceLevels { param($Config, [hashtable]$Values)
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($l in (Get-EvidenceLevels $Config)) {
+    $s = [regex]::Replace($l, '\[([^\]]*)\]', { param($m) [string]$Values[$m.Groups[1].Value] })
+    $s = (Get-SafeName $s).Trim(' ', '.', '_', '-')
+    if ($s) { $out.Add($s) }
+  }
+  return $out.ToArray()
+}
+
+# ===================================================== v12 personal vaults ==
+# A personal vault is a user's own small register: their own project fields,
+# their own processes / steps / deadlines, their own document types and folder
+# levels. It is deliberately separate from the NPI/ECN stores - nothing here
+# reads or writes system\tracking - and lives beside the common vault, inside
+# the synced site folder:
+#   <site>\Personal_Vaults\<owner>\<vault name>\_vault\vault.json     setup
+#                                              \_vault\projects.json  register
+#                                              \<folder levels>\...   documents
+# Visible to its owner and to the admin only.
+$PersonalRoot = Join-Path ([System.IO.Path]::GetFullPath((Split-Path -Parent $RootDir))) 'Personal_Vaults'
+
+function Get-PersonalVaults {
+  $out = New-Object System.Collections.Generic.List[object]
+  if (-not (Test-Path -LiteralPath $PersonalRoot)) { return }
+  foreach ($ownerDir in @(Get-ChildItem -LiteralPath $PersonalRoot -Directory -ErrorAction SilentlyContinue)) {
+    foreach ($vDir in @(Get-ChildItem -LiteralPath $ownerDir.FullName -Directory -ErrorAction SilentlyContinue)) {
+      $metaPath = Join-Path $vDir.FullName '_vault\vault.json'
+      if (-not (Test-Path -LiteralPath $metaPath -PathType Leaf)) { continue }
+      try {
+        $meta = Read-JsonFile $metaPath
+        if ($meta -and $meta.id) { $out.Add(@{ meta = $meta; dir = $vDir.FullName }) }
+      } catch { Write-Log ('Personal vault unreadable: ' + $metaPath + ' - ' + $_.Exception.Message) 'WARN' }
+    }
+  }
+  return $out.ToArray()
+}
+function Find-PersonalVault { param([string]$Id)
+  foreach ($v in (Get-PersonalVaults)) { if ([string]$v.meta.id -eq $Id) { return $v } }
+  return $null
+}
+function Test-VaultAccess { param($Vault, [string]$User)
+  if (Test-AdminName $User) { return $true }
+  return (([string]$Vault.meta.owner).ToLowerInvariant() -eq $User.ToLowerInvariant())
+}
+function Read-VaultProjects { param($Vault)
+  $d = Read-JsonFile (Join-Path $Vault.dir '_vault\projects.json')
+  if (-not $d) { return }
+  return (ConvertTo-List $d.projects)
+}
+function Write-VaultProjects { param($Vault, $Projects)
+  Write-JsonFile -Path (Join-Path $Vault.dir '_vault\projects.json') -Object ([ordered]@{ projects = @($Projects) })
+}
+function Add-VaultLog { param($Vault, [string]$User, [string]$Action, [string]$Detail)
+  try {
+    $line = ([ordered]@{ utc = [DateTime]::UtcNow.ToString('o'); user = $User; action = $Action; detail = $Detail } | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath (Join-Path $Vault.dir ('_vault\activity_' + $WriterId + '.log')) -Value $line -Encoding UTF8
+  } catch { }
+}
+function ConvertTo-VaultFolderName { param([string]$Name)
+  $n = (Get-SafeName ([string]$Name)).Trim(' ', '.')
+  if ($n.Length -gt 60) { $n = $n.Substring(0, 60).Trim() }
+  return $n
+}
+
+# Cleans and validates a setup sent by the browser (typed in the GUI or parsed
+# from the Excel template). Returns @{ errors; config }.
+function ConvertTo-VaultConfig { param($In)
+  $errs = New-Object System.Collections.Generic.List[string]
+  $noBrackets = { param($s) (([string]$s) -replace '[\[\]]', '').Trim() }
+
+  $fields = New-Object System.Collections.Generic.List[object]
+  $labels = @{}; $keys = @{}
+  foreach ($f in (ConvertTo-List $In.fields)) {
+    $label = & $noBrackets $f.label
+    if (-not $label) { $errs.Add('Every project field needs a label.'); continue }
+    $ll = $label.ToLowerInvariant()
+    if ($labels.ContainsKey($ll)) { $errs.Add("Field '" + $label + "' appears twice."); continue }
+    if (@('project id', 'process', 'step', 'doctype') -contains $ll) { $errs.Add("'" + $label + "' is a built-in name. Give the field another label."); continue }
+    $labels[$ll] = $true
+    $type = ([string]$f.type).ToLowerInvariant()
+    if (@('text', 'number', 'date', 'list', 'yesno') -notcontains $type) { $type = 'text' }
+    $key = [string]$f.key
+    if ($key -notmatch '^f_[a-z0-9_]{1,24}$' -or $keys.ContainsKey($key)) { $key = 'f_' + (Get-RandomHex 4) }
+    $keys[$key] = $true
+    $opts = @(ConvertTo-List $f.options | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    if ($type -eq 'list' -and -not $opts.Count) { $errs.Add("List field '" + $label + "' needs at least one choice.") }
+    $fields.Add([ordered]@{ key = $key; label = $label; type = $type; options = $opts; required = [bool]$f.required; inList = [bool]$f.inList })
+  }
+  if (-not $fields.Count) { $errs.Add('At least one project field is required.') }
+
+  $doctypes = New-Object System.Collections.Generic.List[object]
+  $codes = @{}
+  foreach ($d in (ConvertTo-List $In.doctypes)) {
+    $code = (([string]$d.code).Trim().ToUpperInvariant() -replace '\s+', '-')
+    if (-not $code) { continue }
+    if ($code -notmatch '^[A-Z0-9][A-Z0-9_\-]{0,23}$') { $errs.Add("Document code '" + $code + "' may only use letters, digits, - and _ (24 at most)."); continue }
+    if ($codes.ContainsKey($code)) { $errs.Add("Document code '" + $code + "' appears twice."); continue }
+    $codes[$code] = $true
+    $doctypes.Add([ordered]@{ code = $code; name = ([string]$d.name).Trim(); hint = ([string]$d.hint).Trim() })
+  }
+
+  $processes = New-Object System.Collections.Generic.List[object]
+  $pnames = @{}; $pids = @{}
+  foreach ($p in (ConvertTo-List $In.processes)) {
+    $pname = & $noBrackets $p.name
+    if (-not $pname) { $errs.Add('Every process needs a name.'); continue }
+    if ($pnames.ContainsKey($pname.ToLowerInvariant())) { $errs.Add("Process '" + $pname + "' appears twice."); continue }
+    $pnames[$pname.ToLowerInvariant()] = $true
+    $pid2 = [string]$p.id
+    if ($pid2 -notmatch '^p_[a-z0-9_]{1,24}$' -or $pids.ContainsKey($pid2)) { $pid2 = 'p_' + (Get-RandomHex 4) }
+    $pids[$pid2] = $true
+    $steps = New-Object System.Collections.Generic.List[object]
+    foreach ($s in (ConvertTo-List $p.steps)) {
+      $sname = & $noBrackets $s.name
+      if (-not $sname) { $errs.Add("Process '" + $pname + "': every step needs a name."); continue }
+      $days = 0
+      [void][int]::TryParse(([string]$s.days), [ref]$days)
+      if ($days -lt 0) { $days = 0 }
+      if ($days -gt 3650) { $days = 3650 }
+      $docs = New-Object System.Collections.Generic.List[string]
+      foreach ($c in (ConvertTo-List $s.docs)) {
+        $cc = ([string]$c).Trim().ToUpperInvariant()
+        if (-not $cc -or $docs.Contains($cc)) { continue }
+        if (-not $codes.ContainsKey($cc)) { $errs.Add("Process '" + $pname + "', step '" + $sname + "': document type '" + $cc + "' is not defined."); continue }
+        $docs.Add($cc)
+      }
+      $steps.Add([ordered]@{ name = $sname; days = $days; docs = @($docs.ToArray()) })
+    }
+    if (-not $steps.Count) { $errs.Add("Process '" + $pname + "' needs at least one step.") }
+    $processes.Add([ordered]@{ id = $pid2; name = $pname; desc = ([string]$p.desc).Trim(); steps = @($steps.ToArray()) })
+  }
+  if (-not $processes.Count) { $errs.Add('At least one process is required.') }
+
+  $folder = New-Object System.Collections.Generic.List[string]
+  $known = @{ 'project id' = 1; 'process' = 1; 'step' = 1; 'doctype' = 1 }
+  foreach ($k in $labels.Keys) { $known[$k] = 1 }
+  foreach ($l in (ConvertTo-List $In.folder)) {
+    $lv = ([string]$l).Trim()
+    if (-not $lv) { continue }
+    if ($lv -match '[\\/:\*\?"<>\|]') { $errs.Add("Folder level '" + $lv + "' contains a character Windows does not allow in a folder name."); continue }
+    foreach ($m in [regex]::Matches($lv, '\[([^\]]*)\]')) {
+      if (-not $known.ContainsKey($m.Groups[1].Value.Trim().ToLowerInvariant())) { $errs.Add("Folder level '" + $lv + "': [" + $m.Groups[1].Value + '] is not a field of this vault.') }
+    }
+    $folder.Add($lv)
+  }
+  if (-not $folder.Count) { $folder.Add('[Project ID]') }
+  if ($folder.Count -gt 8) { $errs.Add('Use at most 8 folder levels.') }
+
+  return @{
+    errors = @($errs.ToArray())
+    config = [ordered]@{ fields = @($fields.ToArray()); processes = @($processes.ToArray()); doctypes = @($doctypes.ToArray()); folder = @($folder.ToArray()) }
+  }
+}
+function Resolve-VaultFolder { param($Meta, $Project, [string]$ProcessName, [string]$StepName, [string]$Code)
+  $map = @{ 'project id' = [string]$Project.id; 'process' = $ProcessName; 'step' = $StepName; 'doctype' = $Code }
+  foreach ($f in (ConvertTo-List $Meta.fields)) { $map[([string]$f.label).ToLowerInvariant()] = [string]$Project.values.([string]$f.key) }
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($l in (ConvertTo-List $Meta.folder)) {
+    $s = [regex]::Replace([string]$l, '\[([^\]]*)\]', { param($m) [string]$map[$m.Groups[1].Value.Trim().ToLowerInvariant()] })
+    $s = ConvertTo-VaultFolderName $s
+    if ($s) { $out.Add($s) }
+  }
+  return ($out.ToArray() -join '\')
+}
+function Test-IsoDate { param([string]$Value)
+  if ($Value -notmatch '^\d{4}-\d{2}-\d{2}$') { return $false }
+  $d = [datetime]::MinValue
+  return [datetime]::TryParseExact($Value, 'yyyy-MM-dd', [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)
+}
+function Get-VaultSummary { param($Vault, [string]$User)
+  $m = $Vault.meta
+  return @{
+    id = [string]$m.id; kind = 'personal'; name = [string]$m.name; owner = [string]$m.owner
+    archived = [bool]$m.archived; path = [string]$Vault.dir
+    projects = @(Read-VaultProjects $Vault).Count
+    mine = (([string]$m.owner).ToLowerInvariant() -eq $User.ToLowerInvariant())
+    created_utc = [string]$m.created_utc
+  }
+}
+
+function Invoke-VaultApi {
+  param([System.Net.HttpListenerRequest]$Req, [System.Net.HttpListenerResponse]$Res, [string]$Path, [string]$Method, [string]$User)
+  $json = { param($code, $body) New-JsonResponse -Response $Res -StatusCode $code -Body $body }
+  $isAdmin = Test-AdminName $User
+
+  if ($Path -eq '/api/vaults' -and $Method -eq 'GET') {
+    $list = New-Object System.Collections.Generic.List[object]
+    $list.Add(@{
+      id = 'common'; kind = 'common'; name = (Split-Path -Leaf $EvidenceDir); owner = ''; archived = $false
+      path = $EvidenceDir; projects = @(Read-Store 'lb_projects').Count; mine = $false
+    })
+    foreach ($v in (Get-PersonalVaults)) {
+      if (-not (Test-VaultAccess -Vault $v -User $User)) { continue }
+      $list.Add((Get-VaultSummary -Vault $v -User $User))
+    }
+    & $json 200 @{ vaults = $list.ToArray(); personal_root = $PersonalRoot; user = $User; is_admin = $isAdmin }
+    return
+  }
+  if ($Path -eq '/api/vaults' -and $Method -eq 'POST') {
+    $body = Read-JsonBody -Request $Req
+    $name = ConvertTo-VaultFolderName ([string]$body.name)
+    if (-not $name) { & $json 400 @{ error = 'Give the vault a name.' }; return }
+    $ownerDir = Join-Path $PersonalRoot (ConvertTo-VaultFolderName $User)
+    $dir = Join-Path $ownerDir $name
+    if (Test-Path -LiteralPath $dir) { & $json 409 @{ error = 'You already have a vault with this name.' }; return }
+    $cv = ConvertTo-VaultConfig $body.config
+    if ($cv.errors.Count) { & $json 400 @{ error = ($cv.errors -join ' '); errors = $cv.errors }; return }
+    $meta = [ordered]@{
+      id = 'v_' + (Get-RandomHex 5); name = $name; owner = $User; archived = $false
+      created_utc = [DateTime]::UtcNow.ToString('o'); seq = 0
+      fields = $cv.config.fields; processes = $cv.config.processes; doctypes = $cv.config.doctypes; folder = $cv.config.folder
+    }
+    New-Item -ItemType Directory -Path (Join-Path $dir '_vault') -Force | Out-Null
+    Write-JsonFile -Path (Join-Path $dir '_vault\vault.json') -Object $meta
+    $v = @{ meta = (Read-JsonFile (Join-Path $dir '_vault\vault.json')); dir = $dir }
+    Write-VaultProjects -Vault $v -Projects @()
+    Add-VaultLog -Vault $v -User $User -Action 'Vault_Create' -Detail $name
+    Write-Log ('Personal vault created: ' + $dir + ' by ' + $User)
+    & $json 200 @{ ok = $true; vault = (Get-VaultSummary -Vault $v -User $User) }
+    return
+  }
+  if ($Path -notmatch '^/api/vaults/(v_[a-z0-9]{4,24})(?:/([a-z\-]+))?$') { & $json 404 @{ error = 'not found' }; return }
+  $vid = $Matches[1]; $verb = [string]$Matches[2]
+  $v = Find-PersonalVault $vid
+  # Same answer for "does not exist" and "not yours", so a vault id cannot be
+  # used to find out what other people have.
+  if (-not $v -or -not (Test-VaultAccess -Vault $v -User $User)) { & $json 404 @{ error = 'That vault does not exist, or it is not yours.' }; return }
+  $meta = $v.meta
+  $metaPath = Join-Path $v.dir '_vault\vault.json'
+
+  if ($Method -eq 'GET' -and -not $verb) {
+    & $json 200 @{ vault = $meta; projects = @(Read-VaultProjects $v); path = [string]$v.dir; summary = (Get-VaultSummary -Vault $v -User $User) }
+    return
+  }
+  if ($Method -eq 'GET' -and $verb -eq 'file') {
+    $rel = (Get-QueryValue -Request $Req -Name 'path') -replace '/', '\'
+    $full = ''
+    try { $full = [System.IO.Path]::GetFullPath((Join-Path $v.dir $rel)) } catch { }
+    $root = [System.IO.Path]::GetFullPath($v.dir).TrimEnd('\') + '\'
+    if (-not $rel -or -not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($root + '_vault\', [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
+      & $json 404 @{ error = 'file not found' }; return
+    }
+    # Same fixed allowlist as /api/vault/view: an uploaded file is never
+    # served back as markup.
+    $type = switch ([System.IO.Path]::GetExtension($full).ToLowerInvariant()) {
+      '.png' { 'image/png' } '.jpg' { 'image/jpeg' } '.jpeg' { 'image/jpeg' } '.webp' { 'image/webp' } '.gif' { 'image/gif' }
+      '.pdf' { 'application/pdf' } '.txt' { 'text/plain; charset=utf-8' } '.csv' { 'text/plain; charset=utf-8' }
+      default { 'application/octet-stream' }
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($full)
+    $Res.StatusCode = 200
+    $Res.ContentType = $type
+    $disp = if ($type -eq 'application/octet-stream') { 'attachment' } else { 'inline' }
+    $Res.AddHeader('Content-Disposition', $disp + "; filename*=UTF-8''" + ([System.Uri]::EscapeDataString([System.IO.Path]::GetFileName($full))))
+    $Res.Headers.Add('Cache-Control', 'no-store')
+    $Res.ContentLength64 = $bytes.Length
+    $Res.OutputStream.Write($bytes, 0, $bytes.Length)
+    $Res.OutputStream.Close()
+    return
+  }
+  if ($Method -ne 'POST') { & $json 404 @{ error = 'not found' }; return }
+  $body = Read-JsonBody -Request $Req
+
+  if ($verb -eq 'config') {
+    $cv = ConvertTo-VaultConfig $body
+    if ($cv.errors.Count) { & $json 400 @{ error = ($cv.errors -join ' '); errors = $cv.errors }; return }
+    # A process that still has projects cannot disappear from under them.
+    $keptIds = @{}; foreach ($p in $cv.config.processes) { $keptIds[[string]$p.id] = $true }
+    $stranded = @(Read-VaultProjects $v | Where-Object { -not $keptIds.ContainsKey([string]$_.process_id) } | ForEach-Object { [string]$_.id })
+    if ($stranded.Count) { & $json 400 @{ error = ('A process that still has projects was removed (' + ($stranded -join ', ') + '). Keep the process, or delete those projects first.') }; return }
+    foreach ($k in @('fields', 'processes', 'doctypes', 'folder')) { $meta | Add-Member -NotePropertyName $k -NotePropertyValue $cv.config[$k] -Force }
+    Write-JsonFile -Path $metaPath -Object $meta
+    Add-VaultLog -Vault $v -User $User -Action 'Setup_Save' -Detail ''
+    & $json 200 @{ ok = $true; vault = (Read-JsonFile $metaPath) }
+    return
+  }
+  if ($verb -eq 'archive') {
+    $meta | Add-Member -NotePropertyName archived -NotePropertyValue ([bool]$body.archived) -Force
+    Write-JsonFile -Path $metaPath -Object $meta
+    Add-VaultLog -Vault $v -User $User -Action $(if ($body.archived) { 'Vault_Archive' } else { 'Vault_Restore' }) -Detail ''
+    & $json 200 @{ ok = $true; archived = [bool]$body.archived }
+    return
+  }
+  if ($verb -eq 'open') {
+    if (-not (Test-LoopbackRequest -Request $Req)) { & $json 403 @{ error = 'This action may only be requested from this machine.' }; return }
+    $rel = ([string]$body.path) -replace '/', '\'
+    $target = $v.dir
+    if ($rel) {
+      try { $cand = [System.IO.Path]::GetFullPath((Join-Path $v.dir $rel)) } catch { $cand = '' }
+      # The trailing backslash matters: without it a sibling folder whose name
+      # merely starts with this vault's name would pass the check.
+      $vRoot = [System.IO.Path]::GetFullPath($v.dir).TrimEnd('\') + '\'
+      if ($cand -and $cand.StartsWith($vRoot, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $cand)) { $target = $cand }
+    }
+    if (Test-Path -LiteralPath $target -PathType Leaf) { Start-Process explorer.exe -ArgumentList "/select,`"$target`"" }
+    else { Start-Process explorer.exe -ArgumentList "`"$target`"" }
+    & $json 200 @{ ok = $true }
+    return
+  }
+
+  $projects = New-Object System.Collections.Generic.List[object]
+  foreach ($p in (Read-VaultProjects $v)) { $projects.Add($p) }
+  $fieldDefs = @(ConvertTo-List $meta.fields)
+
+  if ($verb -eq 'projects') {
+    $proc = $null
+    foreach ($p in (ConvertTo-List $meta.processes)) { if ([string]$p.id -eq [string]$body.process_id) { $proc = $p } }
+    if (-not $proc) { & $json 400 @{ error = 'Choose a process.' }; return }
+    $start = [string]$body.start
+    if (-not (Test-IsoDate $start)) { & $json 400 @{ error = 'Give a start date.' }; return }
+    $values = [ordered]@{}
+    $missing = @()
+    foreach ($f in $fieldDefs) {
+      $val = ([string]$body.values.([string]$f.key)).Trim()
+      if ($f.required -and -not $val) { $missing += [string]$f.label }
+      if ($val -and $f.type -eq 'date' -and -not (Test-IsoDate $val)) { & $json 400 @{ error = ("'" + [string]$f.label + "' must be a date.") }; return }
+      if ($val -and $f.type -eq 'list' -and (@(ConvertTo-List $f.options) -notcontains $val)) { & $json 400 @{ error = ("'" + $val + "' is not one of the choices for '" + [string]$f.label + "'.") }; return }
+      $values[[string]$f.key] = $val
+    }
+    if ($missing.Count) { & $json 400 @{ error = ('Fill in: ' + ($missing -join ', ')) }; return }
+    $seq = [int]$meta.seq + 1
+    $meta | Add-Member -NotePropertyName seq -NotePropertyValue $seq -Force
+    $startDate = [datetime]::ParseExact($start, 'yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+    $dues = @(ConvertTo-List $body.dues)
+    $steps = New-Object System.Collections.Generic.List[object]
+    $acc = 0; $i = 0
+    foreach ($s in (ConvertTo-List $proc.steps)) {
+      $acc += [int]$s.days
+      $due = $startDate.AddDays($acc).ToString('yyyy-MM-dd')
+      if ($i -lt $dues.Count -and (Test-IsoDate ([string]$dues[$i]))) { $due = [string]$dues[$i] }
+      $slots = @(ConvertTo-List $s.docs | ForEach-Object { [ordered]@{ code = [string]$_; files = @() } })
+      $steps.Add([ordered]@{ name = [string]$s.name; due = $due; status = 'todo'; done_utc = ''; docs = $slots })
+      $i++
+    }
+    $proj = [ordered]@{
+      id = 'P-' + $seq.ToString('D3'); values = $values; process_id = [string]$proc.id; process_name = [string]$proc.name
+      start = $start; created_by = $User; created_utc = [DateTime]::UtcNow.ToString('o'); steps = @($steps.ToArray())
+    }
+    $projects.Add($proj)
+    Write-JsonFile -Path $metaPath -Object $meta
+    Write-VaultProjects -Vault $v -Projects $projects.ToArray()
+    Add-VaultLog -Vault $v -User $User -Action 'Project_Register' -Detail $proj.id
+    & $json 200 @{ ok = $true; project_id = $proj.id; projects = @(Read-VaultProjects $v) }
+    return
+  }
+
+  $proj = $null
+  foreach ($p in $projects) { if ([string]$p.id -eq [string]$body.project_id) { $proj = $p } }
+  if (-not $proj) { & $json 404 @{ error = 'That project is not in this vault.' }; return }
+
+  if ($verb -eq 'project-update') {
+    if ($null -ne $body.values) {
+      foreach ($f in $fieldDefs) {
+        if ($body.values.PSObject.Properties.Name -notcontains [string]$f.key) { continue }
+        $val = ([string]$body.values.([string]$f.key)).Trim()
+        if ($f.required -and -not $val) { & $json 400 @{ error = ("'" + [string]$f.label + "' is required.") }; return }
+        $proj.values | Add-Member -NotePropertyName ([string]$f.key) -NotePropertyValue $val -Force
+      }
+    }
+    $inSteps = @(ConvertTo-List $body.steps)
+    $cur = @(ConvertTo-List $proj.steps)
+    for ($i = 0; $i -lt $cur.Count -and $i -lt $inSteps.Count; $i++) {
+      $s = $inSteps[$i]
+      if ($s.due -and (Test-IsoDate ([string]$s.due))) { $cur[$i].due = [string]$s.due }
+      $st = [string]$s.status
+      if (@('todo', 'doing', 'done') -contains $st -and $st -ne [string]$cur[$i].status) {
+        $cur[$i].status = $st
+        $cur[$i] | Add-Member -NotePropertyName done_utc -NotePropertyValue $(if ($st -eq 'done') { [DateTime]::UtcNow.ToString('o') } else { '' }) -Force
+      }
+    }
+    Write-VaultProjects -Vault $v -Projects $projects.ToArray()
+    Add-VaultLog -Vault $v -User $User -Action 'Project_Update' -Detail ([string]$proj.id)
+    & $json 200 @{ ok = $true; projects = @(Read-VaultProjects $v) }
+    return
+  }
+  if ($verb -eq 'project-delete') {
+    # The register entry goes; documents already filed stay on disk.
+    $kept = @($projects | Where-Object { [string]$_.id -ne [string]$proj.id })
+    Write-VaultProjects -Vault $v -Projects $kept
+    Add-VaultLog -Vault $v -User $User -Action 'Project_Delete' -Detail ([string]$proj.id)
+    & $json 200 @{ ok = $true; projects = @(Read-VaultProjects $v) }
+    return
+  }
+
+  $steps = @(ConvertTo-List $proj.steps)
+  $si = -1
+  [void][int]::TryParse(([string]$body.step_index), [ref]$si)
+  if ($null -eq $body.step_index -or $si -lt 0 -or $si -ge $steps.Count) { & $json 400 @{ error = 'Unknown step.' }; return }
+  $step = $steps[$si]
+  $slot = $null
+  foreach ($d in (ConvertTo-List $step.docs)) { if ([string]$d.code -eq [string]$body.code) { $slot = $d } }
+  if (-not $slot) { & $json 400 @{ error = 'This step does not expect that document type.' }; return }
+
+  if ($verb -eq 'upload') {
+    $bytes = [Convert]::FromBase64String([string]$body.contentBase64)
+    if ($bytes.Length -gt 25MB) { & $json 400 @{ error = 'File exceeds the 25 MB limit.' }; return }
+    $original = Get-SafeName ([System.IO.Path]::GetFileName([string]$body.fileName))
+    if (-not $original) { & $json 400 @{ error = 'The file has no name.' }; return }
+    $relDir = Resolve-VaultFolder -Meta $meta -Project $proj -ProcessName ([string]$proj.process_name) -StepName ([string]$step.name) -Code ([string]$slot.code)
+    $destDir = if ($relDir) { Join-Path $v.dir $relDir } else { $v.dir }
+    if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    $shaAlg = [System.Security.Cryptography.SHA256]::Create()
+    try { $sha = ([BitConverter]::ToString($shaAlg.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() } finally { $shaAlg.Dispose() }
+    # Keep the name the user gave the file. Only when a DIFFERENT file of the
+    # same name is already there does the new one get a short content suffix.
+    $name = $original
+    $dest = Join-Path $destDir $name
+    $duplicate = $false
+    if (Test-Path -LiteralPath $dest) {
+      $shaAlg = [System.Security.Cryptography.SHA256]::Create()
+      try { $have = ([BitConverter]::ToString($shaAlg.ComputeHash([System.IO.File]::ReadAllBytes($dest)))).Replace('-', '').ToLowerInvariant() } finally { $shaAlg.Dispose() }
+      if ($have -eq $sha) { $duplicate = $true }
+      else {
+        $name = [System.IO.Path]::GetFileNameWithoutExtension($original) + '_' + $sha.Substring(0, 8) + [System.IO.Path]::GetExtension($original)
+        $dest = Join-Path $destDir $name
+      }
+    }
+    if (-not $duplicate -and -not (Test-Path -LiteralPath $dest)) { [System.IO.File]::WriteAllBytes($dest, $bytes) }
+    $relPath = $dest.Substring($v.dir.TrimEnd('\').Length).TrimStart('\')
+    $files = New-Object System.Collections.Generic.List[object]
+    foreach ($f in (ConvertTo-List $slot.files)) { if ([string]$f.rel_path -ne $relPath) { $files.Add($f) } }
+    $files.Add([ordered]@{ name = $name; rel_path = $relPath; sha256 = $sha; bytes = $bytes.Length; by = $User; utc = [DateTime]::UtcNow.ToString('o') })
+    $slot.files = @($files.ToArray())
+    Write-VaultProjects -Vault $v -Projects $projects.ToArray()
+    Add-VaultLog -Vault $v -User $User -Action 'File_Upload' -Detail ([string]$proj.id + ' / ' + [string]$step.name + ' / ' + [string]$slot.code + ' / ' + $name)
+    & $json 200 @{ ok = $true; name = $name; rel_path = $relPath; duplicate = $duplicate; projects = @(Read-VaultProjects $v) }
+    return
+  }
+  if ($verb -eq 'unfile') {
+    # Takes the file off the project's list. The file itself is left where it
+    # is: this app never deletes a document.
+    $rel = [string]$body.rel_path
+    $slot.files = @(ConvertTo-List $slot.files | Where-Object { [string]$_.rel_path -ne $rel })
+    Write-VaultProjects -Vault $v -Projects $projects.ToArray()
+    Add-VaultLog -Vault $v -User $User -Action 'File_Unlist' -Detail ([string]$proj.id + ' / ' + $rel)
+    & $json 200 @{ ok = $true; projects = @(Read-VaultProjects $v) }
+    return
+  }
+  & $json 404 @{ error = 'not found' }
+}
+
 # ---------------------------------------------------------------- server --
 $listener = New-Object System.Net.HttpListener
 $boundPort = $null
@@ -2385,19 +3413,51 @@ if (-not $boundPort) {
 Write-Log ("Listening on http://localhost:$boundPort/")
 if (-not $NoBrowser) { Start-Process ("http://localhost:$boundPort/") }
 
+try { Initialize-Auth } catch { Write-Log ('Auth initialisation failed: ' + $_.Exception.Message) 'ERROR' }
+
 try {
   while ($listener.IsListening) {
     $context = $listener.GetContext()
     $req = $context.Request
     $res = $context.Response
+    $script:ReqUser = ''
     try {
       $path = $req.Url.AbsolutePath
       $method = $req.HttpMethod
 
-      if ($method -eq 'GET' -and ($path -eq '/' -or $path -eq '/index.html')) {
-        New-FileResponse -Response $res -Path (Join-Path $SystemDir 'index.html') -ContentType $MimeTypes['.html']
+      # v12: who is asking. A session that still carries a temporary password
+      # may only reach /api/auth/* (to replace it) - it is treated as signed
+      # out everywhere else.
+      $sess = Get-RequestSession -Request $req
+      $signedIn = [bool]($sess -and -not $sess.must_change)
+      if ($signedIn) { $script:ReqUser = [string]$sess.user }
+      $isApi = $path -like '/api/*'
+      # /api/shutdown stays reachable without a session: Stop_Server.cmd calls
+      # it, and it is already limited to this machine (Test-LoopbackRequest).
+      $openApi = ($path -like '/api/auth/*') -or ($path -eq '/api/shutdown')
+
+      if ($isApi -and -not $openApi -and -not $signedIn) {
+        New-JsonResponse -Response $res -StatusCode 401 -Body @{ error = 'Sign in first.'; auth = 'required' }
       }
-      elseif ($method -eq 'GET' -and $path -match '^/(styles\.css|app\.js)$') {
+      elseif ($path -like '/api/auth/*') {
+        Invoke-AuthApi -Req $req -Res $res -Path $path -Method $method -Session $sess
+      }
+      elseif ($path -eq '/api/vaults' -or $path -like '/api/vaults/*') {
+        Invoke-VaultApi -Req $req -Res $res -Path $path -Method $method -User $script:ReqUser
+      }
+      elseif ($method -eq 'GET' -and $path -eq '/login.html') {
+        New-FileResponse -Response $res -Path (Join-Path $SystemDir 'login.html') -ContentType $MimeTypes['.html']
+      }
+      elseif ($method -eq 'GET' -and ($path -eq '/' -or $path -eq '/index.html' -or $path -eq '/vault.html')) {
+        # The app pages themselves are only handed to a signed-in browser;
+        # anyone else lands on the login page.
+        if (-not $signedIn) { New-RedirectResponse -Response $res -Location '/login.html' }
+        else {
+          $page = if ($path -eq '/vault.html') { 'vault.html' } else { 'index.html' }
+          New-FileResponse -Response $res -Path (Join-Path $SystemDir $page) -ContentType $MimeTypes['.html']
+        }
+      }
+      elseif ($method -eq 'GET' -and $path -match '^/(styles\.css|app\.js|v12\.css|v12-shared\.js|login\.js|vault\.js)$') {
         $file = Join-Path $SystemDir $Matches[1]
         $ext = [System.IO.Path]::GetExtension($file)
         New-FileResponse -Response $res -Path $file -ContentType $MimeTypes[$ext]
@@ -2414,8 +3474,13 @@ try {
         $cfg = Get-Config
         # v11: runtime value, never stored (see "deployment path" above).
         if ($cfg.system_info) { $cfg.system_info | Add-Member -NotePropertyName deployment_path -NotePropertyValue $RootDir -Force }
+        # v12: the old plain-text PIN (still in config.json until the admin
+        # first changes their password) is never sent to a browser.
+        if ($cfg.PSObject.Properties.Name -contains 'admin_pin') { $cfg.PSObject.Properties.Remove('admin_pin') }
         New-JsonResponse -Response $res -StatusCode 200 -Body @{
           config = $cfg; tracking = (Get-AllTracking)
+          session = (Get-SessionInfo $sess)
+          folder_levels = @(Get-EvidenceLevels $cfg); folder_tokens = $EvidenceLevelTokens
           paths = @{ root = $RootDir; vault = $EvidenceDir; templates = $TemplatesDir }
           storage = @{ mode = 'journal'; writer = $WriterId; tag = $WriterTag; warnings = @($script:StorageWarnings.Values) }
         }
@@ -2424,11 +3489,14 @@ try {
         # v11 R1: one document's revisions, newest first. Scoped on purpose -
         # the browser never filters the whole store for this, and the contract
         # stays the same when lb_deliverables is partitioned later.
-        $qp = [string]$req.QueryString['project_id']; $qs = [string]$req.QueryString['step_key']; $qd = [string]$req.QueryString['doc_code']
+        # v12: Get-QueryValue, not $req.QueryString - the latter decodes with the
+        # request's content encoding, which a GET does not have, so a Vietnamese
+        # part name or search word arrived as mojibake and matched nothing.
+        $qp = (Get-QueryValue -Request $req -Name 'project_id'); $qs = (Get-QueryValue -Request $req -Name 'step_key'); $qd = (Get-QueryValue -Request $req -Name 'doc_code')
         # v11.1: optional - defaults to '' (the one part every pre-v11.1 row
         # and every single-file document has), so an old caller that never
         # heard of parts still gets exactly the rows it used to get.
-        $qpart = [string]$req.QueryString['part_id']
+        $qpart = (Get-QueryValue -Request $req -Name 'part_id')
         if (-not $qp -or -not $qs -or -not $qd) {
           New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'project_id, step_key and doc_code are all required.' }
         } else {
@@ -2623,7 +3691,7 @@ try {
         # what a partitioned lb_deliverables would sit behind later.
         $cfg = Get-Config
         $docsIdx = Get-VaultIndex -Config $cfg
-        $qv = { param($n) ([string]$req.QueryString[$n]).Trim() }
+        $qv = { param($n) (Get-QueryValue -Request $req -Name $n).Trim() }
         $fq = (& $qv 'q').ToLowerInvariant()
         $fPillar = & $qv 'pillar'; $fFam = & $qv 'family'; $fDoc = & $qv 'doc'; $fPic = & $qv 'pic'; $fDept = & $qv 'dept'
         $fFrom = & $qv 'from'; $fTo = & $qv 'to'; $fStatus = & $qv 'status'; $fStale = (& $qv 'stale') -eq '1'
@@ -2722,7 +3790,7 @@ try {
         $cfg = Get-Config
         $postBody = $null
         if ($method -eq 'POST') { $postBody = Read-JsonBody -Request $req }
-        $ruleId = if ($method -eq 'GET') { [string]$req.QueryString['rule_id'] } else { [string]$postBody.rule_id }
+        $ruleId = if ($method -eq 'GET') { (Get-QueryValue -Request $req -Name 'rule_id') } else { [string]$postBody.rule_id }
         $rule = @($cfg.naming.rules) | Where-Object { [string]$_.id -eq $ruleId } | Select-Object -First 1
         if (-not $rule) {
           New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = "Naming rule '$ruleId' not found." }
@@ -2775,7 +3843,9 @@ try {
         }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/config') {
-        New-JsonResponse -Response $res -StatusCode 200 -Body (Get-Config)
+        $cfg = Get-Config
+        if ($cfg.PSObject.Properties.Name -contains 'admin_pin') { $cfg.PSObject.Properties.Remove('admin_pin') }
+        New-JsonResponse -Response $res -StatusCode 200 -Body $cfg
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/config/family') {
         # v3.6: renamed field-for-field to match the corrected schema. Also
@@ -2924,50 +3994,48 @@ try {
           Save-Config $cfg
           $after = ($registryArray | ForEach-Object { ([string]$_.username) + ':' + ([string]$_.role) }) -join ', '
           Add-Audit -User $actor -Action 'Config_UserRegistry_Update' -ProjectId '' -ObjType 'Config' -ObjId 'user_registry' -From $before -To $after -Detail ''
+          # v12: someone taken off the roster loses their password file and any
+          # open session with it, so the name cannot sign in again if it is
+          # ever re-added without the admin issuing a new password.
+          $script:RegistryCache = @{ sig = ''; list = @() }
+          $keepFiles = @{}
+          foreach ($u in $registryArray) { $keepFiles[(Split-Path -Leaf (Get-AuthFile ([string]$u.username)))] = $true }
+          if (Test-Path -LiteralPath $AuthDir) {
+            foreach ($af in @(Get-ChildItem -LiteralPath $AuthDir -Filter 'u_*.json' -File -ErrorAction SilentlyContinue)) {
+              if ($keepFiles.ContainsKey($af.Name)) { continue }
+              try {
+                $gone = Read-JsonFile $af.FullName
+                Remove-Item -LiteralPath $af.FullName -Force
+                if ($gone -and $gone.username) { Remove-UserSessions -Username ([string]$gone.username) }
+              } catch { Write-Log ('Could not remove ' + $af.Name + ': ' + $_.Exception.Message) 'WARN' }
+            }
+          }
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; user_registry = $registryArray }
         }
       }
-      elseif ($method -eq 'POST' -and $path -eq '/api/config/verify-pin') {
-        # Gate on the header's admin identity switch (v8.3) — anyone can call
-        # this (there is no admin session yet to check against), it exists
-        # purely to compare the typed PIN. sessionStorage on the client is
-        # what actually remembers the result; this is a convenience gate
-        # against a shared workstation, not a hardened auth boundary.
-        $body = Read-JsonBody -Request $req
-        $cfg = Get-Config
-        $expected = [string]$cfg.admin_pin
-        $given = [string]$body.pin
-        $ok = ($expected -and $given -and $given -eq $expected)
-        if ($ok) { New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true } }
-        else { New-JsonResponse -Response $res -StatusCode 403 -Body @{ ok = $false; error = 'Incorrect PIN.' } }
-      }
-      elseif ($method -eq 'POST' -and $path -eq '/api/config/change-pin') {
-        # Requires the current PIN, not just admin identity — the header
-        # switch only proves someone picked "admin" from a dropdown and typed
-        # today's PIN; changing the PIN itself asks for that same proof again
-        # rather than trusting the client-side sessionStorage flag alone.
+      elseif ($method -eq 'POST' -and $path -eq '/api/config/folder-structure') {
+        # v12: the admin fixes the folder levels every upload to the common
+        # vault is filed under. Applies to files uploaded from now on; nothing
+        # already in the vault is moved (stored paths stay valid either way).
+        # The PIN endpoints that used to sit here (verify-pin / change-pin)
+        # went with the PIN itself - see "v12 auth".
         $body = Read-JsonBody -Request $req
         $actor = [string]$body.user
         if ($actor.ToLowerInvariant() -ne 'admin') {
-          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the PIN.' }
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the folder structure.' }
         } else {
-          $cfg = Get-Config
-          $currentPin = [string]$cfg.admin_pin
-          $givenPin = [string]$body.currentPin
-          $newPin = ([string]$body.newPin).Trim()
-          if (-not $newPin -or $newPin.Length -lt 4) {
-            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'New PIN must be at least 4 characters.' }
-          } elseif ($currentPin -and $givenPin -ne $currentPin) {
-            New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Current PIN is incorrect.' }
+          $levels = @(ConvertTo-List $body.levels | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+          $errs = @(Test-EvidenceLevels $levels)
+          if ($errs.Count) {
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = ($errs -join ' '); errors = $errs }
           } else {
-            if ($cfg.PSObject.Properties.Name -contains 'admin_pin') {
-              $cfg.admin_pin = $newPin
-            } else {
-              Add-Member -InputObject $cfg -NotePropertyName 'admin_pin' -NotePropertyValue $newPin -Force
-            }
+            $cfg = Get-Config
+            $before = (Get-EvidenceLevels $cfg) -join '\'
+            $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_folder_levels -NotePropertyValue $levels -Force
+            $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_folder_pattern -NotePropertyValue ($levels -join '\') -Force
             Save-Config $cfg
-            Add-Audit -User $actor -Action 'Config_AdminPin_Change' -ProjectId '' -ObjType 'Config' -ObjId 'admin_pin' -From '(hidden)' -To '(hidden)' -Detail ''
-            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true }
+            Add-Audit -User $actor -Action 'Config_FolderStructure_Update' -ProjectId '' -ObjType 'Config' -ObjId 'evidence_folder_levels' -From $before -To ($levels -join '\') -Detail 'Applies to new uploads'
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; levels = $levels }
           }
         }
       }
@@ -3027,7 +4095,7 @@ try {
         # would break every other PC's sync. ?path= is relative to that site
         # root; missing or outside it snaps back to the root itself.
         $siteRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $RootDir))
-        $reqPath = [string]$req.QueryString['path']
+        $reqPath = (Get-QueryValue -Request $req -Name 'path')
         $target = $siteRoot
         if ($reqPath) {
           try { $target = [System.IO.Path]::GetFullPath((Join-Path $siteRoot $reqPath)) } catch { $target = $siteRoot }
@@ -3701,7 +4769,20 @@ try {
             -WnbId $body.wnbId -Description $body.description -OriginalName $original `
             -Category $body.partId -ProjectId $body.projectId -Config (Get-Config)
         }
-        $saved = Save-Evidence -DocType $body.docType -Family $body.family -PartId $body.partId -FileName $stdName -Bytes $bytes
+        # v12: folder levels come from Settings -> Common vault folder
+        # structure. [Process] and [Step] need the project, so that is looked
+        # up only when the browser sent one.
+        $upCfg = Get-Config
+        $procId = ''
+        if ($body.projectId) {
+          $upProj = @(Read-Store 'lb_projects' | Where-Object { $_.project_id -eq [string]$body.projectId }) | Select-Object -First 1
+          if ($upProj) { $procId = [string]$upProj.process }
+        }
+        $levelNames = @(Resolve-EvidenceLevels -Config $upCfg -Values @{
+          Model = [string]$body.family; DocType = [string]$body.docType; PartID = [string]$body.partId
+          ProjectID = [string]$body.projectId; Process = $procId; Step = [string]$body.stepKey
+        })
+        $saved = Save-Evidence -DocType $body.docType -Family $body.family -PartId $body.partId -FileName $stdName -Bytes $bytes -LevelNames $levelNames
         $saved | Add-Member -NotePropertyName originalName -NotePropertyValue $original -Force
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved
       }
@@ -4095,11 +5176,11 @@ try {
         }
       }
       elseif ($method -eq 'GET' -and $path -eq '/api/reports/download') {
-                $typeKey     = [string]$req.QueryString['type']
-                $famFilter   = [string]$req.QueryString['fam']
-                $modelFilter = [string]$req.QueryString['model']
-                $startFilter = [string]$req.QueryString['start']
-                $endFilter   = [string]$req.QueryString['end']
+                $typeKey     = (Get-QueryValue -Request $req -Name 'type')
+                $famFilter   = (Get-QueryValue -Request $req -Name 'fam')
+                $modelFilter = (Get-QueryValue -Request $req -Name 'model')
+                $startFilter = (Get-QueryValue -Request $req -Name 'start')
+                $endFilter   = (Get-QueryValue -Request $req -Name 'end')
 
                 # Each report names the sheet it writes to. The three
                 # RANKED_COLORS workbooks and LL_info all keep their data on

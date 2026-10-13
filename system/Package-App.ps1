@@ -63,6 +63,15 @@ Write-Host "Staging to $StageDir ..."
   'config.json',
   'index.html',
   'styles.css',
+  # v12: sign-in page and personal-vault page. system\auth\ (the password
+  # hashes) is deliberately NOT in this list - a bundle never carries anyone's
+  # account; the receiving install creates its own admin on first start.
+  'login.html',
+  'login.js',
+  'vault.html',
+  'vault.js',
+  'v12.css',
+  'v12-shared.js',
   'launcher.ps1',
   'Stop_WVN_NPI_Command_Center.cmd'
 ) | ForEach-Object {

@@ -1496,10 +1496,88 @@ html[data-theme="dark"] .sidebar-project-item:hover { background: var(--row-hove
 }
 .dz-issue-resolve:hover { border-color: var(--good); background: var(--good2); color: var(--ink2) }
 
-/* -- Settings: Admin Security PIN card (v8.3 Section 4) ------------------ */
-.admin-pin-card .card-header { border-left: 3px solid var(--bad) }
-.admin-pin-row { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center }
-.admin-pin-row input { height: var(--ctl-h); min-width: 140px; flex: 1 1 140px }
+/* -- v12: signed-in user, vault switch, account + folder-structure cards ---
+   The Admin Security PIN card these rules replace went with the PIN itself:
+   the admin now signs in with a password like everyone else. */
+
+/* header chip + its menu (replaces the #whoSelect name picker) */
+.userchip-wrap { position: relative }
+.userchip {
+  height: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  padding: 0 10px; gap: 7px;
+  background: var(--soft); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  font-size: 12.5px; font-weight: 500; max-width: 260px;
+}
+.userchip b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.userchip:hover { background: var(--grey2) }
+.usermenu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 70;
+  min-width: 210px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: var(--r2); box-shadow: var(--sh3);
+  display: flex; flex-direction: column;
+}
+.usermenu button {
+  justify-content: flex-start; border: 0; background: transparent;
+  height: 34px; min-height: 34px; font-weight: 500; padding: 0 10px;
+}
+.usermenu button:hover { background: var(--soft) }
+
+/* sidebar: which vault this is, and the link to the chooser */
+.vault-switch {
+  display: flex; align-items: center; gap: 8px;
+  margin: var(--s2); padding: 8px 10px; flex: none;
+  background: rgba(255, 255, 255, .06); color: var(--sidebar-ink);
+  border: 1px solid #27445f; border-radius: var(--r1);
+  text-decoration: none;
+}
+.vault-switch:hover { background: rgba(255, 255, 255, .12); border-color: #3f6a92; text-decoration: none; color: var(--sidebar-ink) }
+.vault-switch-text { display: flex; flex-direction: column; min-width: 0; flex: 1 }
+.vault-switch small {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--sidebar-muted);
+}
+.vault-switch b { font-size: 12.5px; overflow-wrap: anywhere }
+.vault-switch .icon { color: var(--sidebar-muted) }
+body.sidebar-collapsed .vault-switch { justify-content: center; padding: 8px 0 }
+body.sidebar-collapsed .vault-switch-text { display: none }
+
+/* Settings: My account / Users and passwords */
+.acct-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap }
+.users-table { max-height: none; margin-top: var(--s2) }
+.users-table td { vertical-align: middle; white-space: nowrap }
+.users-table select, .users-table input { height: 30px; min-height: 30px; font-size: 12px; min-width: 92px; width: 100% }
+.users-table th, .users-table td { padding-inline: 8px }
+.users-table code { white-space: nowrap }
+.users-add { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s3) }
+.users-add input { flex: 1 1 150px; min-width: 130px }
+.users-view-toggle { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line) }
+.users-view-label { font-weight: 600; cursor: pointer }
+.temp-pw {
+  font: 600 20px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .06em; text-align: center; user-select: all;
+  background: var(--soft); border: 1px dashed var(--line-strong);
+  border-radius: var(--r2); padding: var(--s3); margin: var(--s3) 0;
+  overflow-wrap: anywhere;
+}
+
+/* Settings: Common vault folder structure */
+.folder-struct { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: var(--s4) }
+.folder-level { display: grid; grid-template-columns: 56px 1fr auto; gap: var(--s2); align-items: center; margin-top: 6px }
+.folder-level-n { font-size: 11px; font-weight: 600; color: var(--muted) }
+.folder-level input { width: 100%; height: var(--ctl-h-sm); min-height: var(--ctl-h-sm) }
+.folder-level-acts { display: inline-flex; gap: 4px }
+.folder-level-acts button { padding: 0 8px }
+.folder-tree {
+  font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--soft); border: 1px solid var(--line);
+  border-radius: var(--r2); padding: var(--s3);
+  overflow-x: auto; white-space: nowrap;
+}
+.folder-tree .lv { display: block }
+.folder-tree .icon { color: var(--muted); margin-right: 4px }
+@media (max-width: 900px) { .folder-struct { grid-template-columns: 1fr } }
 
 /* custom doc section in drawer */
 .custom-doc-section {

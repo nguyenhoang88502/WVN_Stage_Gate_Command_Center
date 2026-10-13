@@ -15,12 +15,14 @@ let pass = 0, fail = 0;
 function check(name, ok, detail) {
   if (ok) { pass++; console.log('PASS ' + name); } else { fail++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
-async function waitUp() {
-  for (let i = 0; i < 90; i++) { try { const r = await fetch(BASE + '/api/data'); if (r.ok) return; } catch (e) { } await new Promise(r => setTimeout(r, 500)); }
-  throw new Error('server did not start');
-}
-async function api(p) { const r = await fetch(BASE + p); return r.json(); }
-async function post(p, body) { const r = await fetch(BASE + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json() }; }
+// v12: every /api/* call needs a session. tests/lib/session.js signs in admin
+// and intern; a request is sent as the user its body names (admin otherwise),
+// which is what `user: '...'` in these calls meant before there was a login.
+const session = require('../lib/session');
+let SESS = null;
+const cookieFor = b => SESS.cookies[String((b && b.user) || 'admin').toLowerCase()] || SESS.cookies.admin;
+async function api(p) { const r = await fetch(BASE + p, { headers: { Cookie: SESS.cookies.admin } }); return r.json(); }
+async function post(p, body) { const r = await fetch(BASE + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookieFor(body) }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json() }; }
 
 // ---- config-only change: a third pillar ------------------------------------
 const cfgPath = path.join(ROOT, 'app', 'system', 'config.json');
@@ -45,7 +47,7 @@ fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
   const srv = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcher, '-NoBrowser', '-Port', '8090', '-WriterId', 'PC_A'], { stdio: 'ignore' });
   let browser;
   try {
-    await waitUp();
+    SESS = await session.clients(BASE, ROOT);
 
     /* ---- R4 server: registration validates the process ------------------ */
     const bad = await post('/api/projects', { process: 'XYZ', family: 'LINE9', class_abcde: 'C', prf_date: '2026-W38', created_by: 'admin' });
@@ -58,12 +60,11 @@ fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(() => { try { localStorage.setItem('wvn_lang', 'en'); } catch (e) { } });
+    // v12: the page opens already signed in as admin (it used to pick "admin"
+    // in the header and type the PIN).
+    await SESS.signInContext(page.context());
     await page.goto(BASE + '/');
     await page.locator('#srvState').filter({ hasText: 'connected' }).waitFor({ timeout: 20000 });
-    await page.locator('#whoSelect').selectOption('admin');
-    const pin = page.locator('.modal-scrim .modal', { hasText: 'Admin PIN required' });
-    await pin.locator('input[type="password"]').fill('1234');
-    await pin.locator('button', { hasText: 'Unlock' }).click();
 
     /* ---- R4 UI ----------------------------------------------------------- */
     const tabs = await page.locator('#tabs button').allInnerTexts();
@@ -113,7 +114,11 @@ fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
     const all = await api('/api/vault/search?size=200');
     check('R3 vault lists documents across all pillars', all.total >= 46 && all.facets.pillars.indexOf('EEM') >= 0 && all.facets.pillars.indexOf('NPI') >= 0 &&
       (await page.locator('#vPillar option').allInnerTexts()).length === 4, 'total=' + all.total + ' pillars=' + all.facets.pillars);
-    check('R3 one row per document, never per revision', new Set(all.rows.map(r => r.project_id + '|' + r.step_key + '|' + r.doc_code)).size === all.rows.length);
+    // v11.1: a (project, step, doc_code) group can hold several independently
+    // active documents distinguished by part_id (see e2e_r1r2.js's 108-part
+    // drop) - the "no duplicates" invariant is one row per PART, not per
+    // doc_code alone.
+    check('R3 one row per document, never per revision', new Set(all.rows.map(r => r.project_id + '|' + r.step_key + '|' + r.doc_code + '|' + (r.part_id || ''))).size === all.rows.length);
     await page.locator('#vq').fill('line7');
     await page.waitForTimeout(900);
     const qRows = await page.locator('.vault-table tbody tr').count();
