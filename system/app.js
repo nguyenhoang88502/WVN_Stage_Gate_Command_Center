@@ -268,6 +268,12 @@ async function boot() {
     buildTabs(); show(current);
     hideLoader();
     wireReloadButton();
+    (function wireStopButton() {
+      const sb = $('#stopBtn'); if (!sb) return;
+      sb.title = getLang() === 'vi' ? 'Tắt máy chủ trên máy này' : 'Stop the server on this PC';
+      sb.onclick = stopServerFlow;
+    })();
+    checkVaultRestoreBanner();
     (function wireSidebarToggle() {
       const btn = $('#sidebarToggle'); if (!btn) return;
       const KEY = 'wvn_sidebar_collapsed';
@@ -352,6 +358,12 @@ function buildTabs() {
   });
 }
 function show(id, preserveScroll) {
+  // v12.2: leaving the Input tab saves the categorizations staged there
+  if (id !== current && current === 'input' && orphanStageCount()) {
+    flushOrphanStage().then(function(r) {
+      if (r.failed) alert(r.failed + ' categorization(s) could not be saved: ' + r.firstError + '\n\nGo back to Input to fix or undo them.');
+    });
+  }
   current = id; buildTabs();
   const pt = $('#pageTitle');
   // NB: the find callback is `tab`, not `t` — `t` is the translator and a
@@ -417,6 +429,242 @@ async function redrawAfterWrite() {
 async function refreshSilently() {
   takeData(await API.data());
   try { TEMPLATES = (await API.templates()).templates || []; } catch (e) { TEMPLATES = []; }
+}
+
+/* ---- staged categorizations (v12.2) ----------------------------------------
+   Input tab, section C ("Uncategorized files in the vault"). Categorizing used
+   to POST at once and then reload the whole list, which made working through a
+   pile of files slow: one round trip, one reload, one lost scroll position per
+   file. Now each choice is only remembered - in this browser tab's
+   sessionStorage, so a page refresh keeps it - and the whole set is posted,
+   one file after another, when the person presses "Save changes", moves to
+   another tab, signs out or stops the server. Closing the tab with choices
+   still pending asks first (beforeunload).
+   An entry is { action: 'adopt'|'ignore', label, body|reason, error? }, keyed
+   by the file's vault-relative path. */
+const ORPHAN_STAGE_KEY = 'wvn_orphan_stage_v1';
+let _orphanStage = null;
+function orphanStageStorageKey() { return ORPHAN_STAGE_KEY + ':' + getUser() + ':' + (PATHS.vault || ''); }
+function orphanStage() {
+  if (_orphanStage) return _orphanStage;
+  let o = {};
+  try { o = JSON.parse(sessionStorage.getItem(orphanStageStorageKey()) || '{}') || {}; } catch (e) { o = {}; }
+  _orphanStage = o;
+  return o;
+}
+function saveOrphanStage() {
+  try {
+    const st = orphanStage();
+    if (Object.keys(st).length) sessionStorage.setItem(orphanStageStorageKey(), JSON.stringify(st));
+    else sessionStorage.removeItem(orphanStageStorageKey());
+  } catch (e) { }
+}
+function orphanStageCount() { return Object.keys(orphanStage()).length; }
+function stageOrphan(path, item) { orphanStage()[path] = item; saveOrphanStage(); }
+function unstageOrphan(path) { delete orphanStage()[path]; saveOrphanStage(); }
+let orphanFlushing = null;
+/* Posts every staged choice, in the order they were made. Each success leaves
+   the stage; a failure stays, marked with its error, and the rest carry on.
+   Resolves { saved, failed, firstError }. The data is reloaded once at the end,
+   and only if something was written. */
+async function flushOrphanStage() {
+  if (orphanFlushing) return orphanFlushing;
+  const st = orphanStage();
+  const paths = Object.keys(st);
+  if (!paths.length) return { saved: 0, failed: 0, firstError: '' };
+  orphanFlushing = (async function() {
+    const who = getUser();
+    let saved = 0, failed = 0, firstError = '';
+    for (const p of paths) {
+      const it = st[p];
+      try {
+        if (it.action === 'adopt') {
+          await API.post('/api/vault/orphans/adopt', Object.assign({ user: who }, it.body));
+        } else {
+          await API.action('lb_vault_ignored', { file_path: p, ignored_by: who, ignored_utc: new Date().toISOString(), reason: it.reason || '' },
+            { audit: { user: who, action: 'Vault_Ignore_Orphan', projectId: '', objType: 'VaultFile', objId: p, from: 'Uncategorized', to: 'Ignored', detail: it.reason || '' } });
+        }
+        delete st[p]; saved++;
+      } catch (e) {
+        it.error = e.message; failed++;
+        if (!firstError) firstError = e.message;
+      }
+    }
+    saveOrphanStage();
+    if (saved) { try { await redrawAfterWrite(); } catch (e) { } }
+    return { saved: saved, failed: failed, firstError: firstError };
+  })();
+  try { return await orphanFlushing; } finally { orphanFlushing = null; }
+}
+window.addEventListener('beforeunload', function(ev) {
+  if (orphanStageCount()) { ev.preventDefault(); ev.returnValue = ''; }
+});
+
+/* ---- project data in the vault (v12.2) ---------------------------------------
+   The register, gate progress and documents live in <vault>\_vault, with a
+   readable Project_Information.xlsx beside the documents, and the admin's
+   settings are copied there too. A NEW copy of the app pointed at an existing
+   vault therefore sees every project at once; only its settings start at the
+   factory defaults, and this banner offers the vault's saved ones. */
+async function restoreSettingsFromVault(writer) {
+  const vi = getLang() === 'vi';
+  await API.post('/api/vault/data/restore', { writer: writer || '' });
+  alert(vi ? 'Đã khôi phục cài đặt từ kho. Trang sẽ tải lại.' : 'Settings restored from the vault. The page will reload.');
+  location.reload();
+}
+async function checkVaultRestoreBanner() {
+  if (!isAdmin()) return;
+  let d;
+  try { d = await API.get('/api/vault/data'); } catch (e) { return; }
+  if (!d.restore_available || !d.restore_from) return;
+  const stamp = d.restore_from.saved_utc;
+  try { if (sessionStorage.getItem('wvn_restore_banner_off') === stamp) return; } catch (e) { }
+  const vi = getLang() === 'vi';
+  const b = el('div', 'banner warn vault-restore-banner');
+  b.innerHTML = '<b>' + esc(vi ? 'Kho này có cài đặt đã lưu từ trước.' : 'This vault has settings saved earlier.') + '</b> ' +
+    esc(vi
+      ? 'Cài đặt do ' + (d.restore_from.by || 'admin') + ' lưu lúc ' + fmtStamp(stamp) + (d.restore_from.app_version ? ' (bản ' + d.restore_from.app_version + ')' : '') + ' khác với cài đặt của bản ứng dụng này. Các dự án và tiến độ đã được nạp từ kho; chỉ phần cài đặt (quy trình, loại tài liệu, cấu trúc thư mục...) cần khôi phục.'
+      : 'Saved by ' + (d.restore_from.by || 'admin') + ' on ' + fmtStamp(stamp) + (d.restore_from.app_version ? ' (v' + d.restore_from.app_version + ')' : '') + ', they differ from this copy of the app. Projects and progress are already loaded from the vault; only the settings (processes, document types, folder structure ...) need restoring.');
+  const acts = el('div'); acts.style.cssText = 'margin-top:6px;display:flex;gap:6px;flex-wrap:wrap';
+  const go = el('button', 'primary sm', vi ? 'Khôi phục cài đặt từ kho' : 'Restore settings from the vault');
+  go.onclick = async function() {
+    if (!confirm(vi ? 'Thay cài đặt hiện tại bằng cài đặt đã lưu trong kho? Bản sao config.json hiện tại sẽ được giữ cạnh nó.' : 'Replace this copy\'s settings with the ones saved in the vault? The current config.json is kept beside it.')) return;
+    go.disabled = true;
+    try { await restoreSettingsFromVault(d.restore_from.writer); } catch (e) { alert(e.message); go.disabled = false; }
+  };
+  const later = el('button', 'sm', vi ? 'Để sau' : 'Not now');
+  later.onclick = function() { try { sessionStorage.setItem('wvn_restore_banner_off', stamp); } catch (e) { } b.remove(); };
+  acts.appendChild(go); acts.appendChild(later);
+  b.appendChild(acts);
+  const pb = document.querySelector('.page-body');
+  if (pb) pb.insertBefore(b, pb.firstChild);
+}
+/* Settings -> "Project data in the vault": what the vault holds, the readable
+   Excel copy, and the settings snapshot. */
+function vaultDataCard(root) {
+  const card = el('div', 'card');
+  const hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'Project data in the vault')); card.appendChild(hdr);
+  const body = el('div', 'card-body');
+  body.appendChild(el('p', 'note', 'The project register, progress by step, documents, approvals and issues are stored in the vault folder itself (not in the app folder), so a newer copy of the app pointed at this vault — see "Evidence vault location" below — finds all of it, and the app folder can be replaced or deleted. The same information is kept as an Excel file anyone can open.'));
+  const out = el('div'); out.innerHTML = '<p class="note">Loading…</p>';
+  body.appendChild(out);
+  card.appendChild(body); root.appendChild(card);
+  const draw = async function() {
+    let d;
+    try { d = await API.get('/api/vault/data'); }
+    catch (e) { out.innerHTML = '<p class="note" style="color:var(--bad)">Could not read the vault data: ' + esc(e.message) + '</p>'; return; }
+    out.innerHTML = '';
+    if (!d.enabled) {
+      const w = el('div', 'banner bad');
+      w.innerHTML = '<b>The vault folder is not writable from this PC</b> — project data is still kept in the app folder. Check that the vault folder exists and you have permission to write to it.';
+      out.appendChild(w);
+    }
+    const xl = d.info_workbook || {};
+    const x = el('div'); x.style.cssText = 'margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+    x.innerHTML = '<b>Project_Information.xlsx</b> <span class="note" style="margin:0">' + (xl.exists ? 'updated ' + esc(fmtStamp(xl.last_write_utc)) + ' · ' + Math.max(1, Math.round(xl.bytes / 1024)) + ' KB' : 'not written yet') + '</span>';
+    const openB = el('button', 'primary sm', 'Open in Excel');
+    openB.onclick = async function() {
+      openB.disabled = true;
+      try { await API.post('/api/vault/data/open', {}); } catch (e) { alert(e.message); }
+      openB.disabled = false; draw();
+    };
+    const upB = el('button', 'sm', 'Update now');
+    upB.onclick = async function() {
+      upB.disabled = true;
+      try { await API.post('/api/vault/data/export', {}); } catch (e) { alert(e.message); }
+      upB.disabled = false; draw();
+    };
+    x.appendChild(openB); x.appendChild(upB);
+    out.appendChild(x);
+    out.appendChild(el('p', 'note', 'Read-only copy, refreshed a few seconds after anything changes. Sheets: Projects, Progress by step, Documents, Approvals, Issues, Bypasses, Comments, Activity log. Edits made in the file are not read back.'));
+    const labels = { lb_projects: 'Projects', lb_gates: 'Step records', lb_deliverables: 'Document records', lb_approvals: 'Approvals', lb_issues: 'Issues', lb_audit: 'Activity log entries' };
+    const chips = el('div'); chips.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin:6px 0';
+    Object.keys(labels).forEach(function(k) { chips.innerHTML += '<span class="badge bg-secondary">' + esc(labels[k]) + ': ' + (d.stores[k] >= 0 ? d.stores[k] : '?') + '</span>'; });
+    out.appendChild(chips);
+    out.appendChild(el('p', 'note', 'Data folder: ' + (d.data_dir || '(not available)')));
+    if ((d.writers || []).length) {
+      const t = el('table');
+      t.innerHTML = '<thead><tr><th>Written by (PC_user)</th><th>Files</th><th>Size</th><th>Last write</th></tr></thead>';
+      const tb = el('tbody');
+      d.writers.forEach(function(w) {
+        const tr = el('tr');
+        tr.innerHTML = '<td>' + esc(w.writer) + (w.mine ? ' <span class="badge bg-primary-lt">this PC</span>' : '') + '</td><td class="num">' + w.files + '</td><td class="num">' + Math.max(1, Math.round(w.bytes / 1024)) + ' KB</td><td>' + esc(fmtStamp(w.last_write_utc)) + '</td>';
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      const sc = el('div', 'scroll'); sc.appendChild(t); out.appendChild(sc);
+    }
+    if (d.old_location_files) {
+      out.appendChild(el('p', 'note', d.old_location_files + ' journal file(s) from the app folder\'s old location were found; ' + d.old_location_in_vault + ' are already copied into the vault (nothing in the old location is deleted).'));
+    }
+    // settings
+    const sh = el('h4', '', 'Settings saved in the vault'); sh.style.margin = '14px 0 4px'; out.appendChild(sh);
+    if ((d.snapshots || []).length) {
+      const s0 = d.snapshots[0];
+      out.appendChild(el('p', 'note', 'Latest: ' + fmtStamp(s0.saved_utc) + ' by ' + (s0.by || 'the server') + ' on ' + s0.writer + (s0.app_version ? ' (app v' + s0.app_version + ')' : '') + '. ' + (d.settings_saved_utc ? 'This copy of the app last had its settings saved ' + fmtStamp(d.settings_saved_utc) + ' by ' + d.settings_saved_by + '.' : 'Nobody has saved settings in this copy of the app yet (it is on its original settings).')));
+    } else {
+      out.appendChild(el('p', 'note', 'No settings saved in this vault yet.'));
+    }
+    if (isAdmin()) {
+      const row = el('div'); row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:6px';
+      if (d.restore_available) {
+        const rb = el('button', 'primary sm', 'Restore settings from the vault');
+        rb.onclick = async function() {
+          if (!confirm('Replace this copy\'s settings with the ones saved in the vault? The current config.json is kept beside it as config.before_restore_….json.')) return;
+          rb.disabled = true;
+          try { await restoreSettingsFromVault(d.restore_from.writer); } catch (e) { alert(e.message); rb.disabled = false; }
+        };
+        row.appendChild(rb);
+      }
+      const sb = el('button', 'sm', 'Save this copy\'s settings into the vault now');
+      sb.onclick = async function() {
+        sb.disabled = true;
+        try { await API.post('/api/vault/data/snapshot', {}); } catch (e) { alert(e.message); }
+        sb.disabled = false; draw();
+      };
+      row.appendChild(sb);
+      out.appendChild(row);
+      out.appendChild(el('p', 'note', 'Settings are saved into the vault automatically every time the admin changes them. Restoring keeps this PC\'s own vault location.'));
+    }
+  };
+  draw();
+}
+
+/* ---- stop the server (v12.2) ------------------------------------------------
+   The server is a background process with no window of its own, so this button
+   is how a person ends it without Task Manager or Stop_Server.cmd. */
+function stopServerFlow() {
+  const vi = getLang() === 'vi';
+  confirmModal(
+    vi ? 'Tắt máy chủ?' : 'Stop the server?',
+    '<p>' + esc(vi
+      ? 'Máy chủ của ứng dụng trên máy này sẽ dừng và bạn (cùng bất kỳ ai đang dùng ứng dụng qua máy này) sẽ bị ngắt kết nối. Dữ liệu đã lưu không bị ảnh hưởng.'
+      : 'The app\'s server on this PC will stop, and you (and anyone else using the app through this PC) will be disconnected. Saved data is not affected.') + '</p>' +
+    '<p class="note">' + esc(vi ? 'Để mở lại, dùng biểu tượng "WVN Stage Gate Command Center" trên màn hình nền.' : 'To start it again, use the "WVN Stage Gate Command Center" icon on the desktop.') + '</p>',
+    vi ? 'Tắt máy chủ' : 'Stop server',
+    doStopServer);
+}
+async function doStopServer() {
+  const vi = getLang() === 'vi';
+  // choices still waiting in the Input tab are saved first
+  try {
+    const r = await flushOrphanStage();
+    if (r.failed && !confirm((vi ? 'Một số lựa chọn chưa lưu được: ' : 'Some choices could not be saved: ') + r.firstError + '\n\n' + (vi ? 'Vẫn tắt máy chủ?' : 'Stop the server anyway?'))) return;
+  } catch (e) { }
+  stopAutoReload();
+  try {
+    const r = await fetch('/api/shutdown', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: '{}' });
+    if (r.status === 403) { alert(vi ? 'Máy chủ chỉ có thể tắt từ chính máy này.' : 'The server can only be stopped from the PC it runs on.'); return; }
+  } catch (e) { /* the connection can drop while it stops - that is the expected outcome */ }
+  const wrap = el('div', 'stopped');
+  const card = el('div', 'card');
+  card.innerHTML = '<div class="mark">⏻</div><div class="big">' + esc(vi ? 'Máy chủ đã tắt' : 'Server stopped') + '</div>' +
+    '<p>' + esc(vi ? 'Bạn có thể đóng tab trình duyệt này.' : 'You can close this browser tab.') + '</p>' +
+    '<p class="note">' + esc(vi ? 'Để mở lại, dùng biểu tượng "WVN Stage Gate Command Center" trên màn hình nền.' : 'To start it again, use the "WVN Stage Gate Command Center" icon on the desktop.') + '</p>';
+  wrap.appendChild(card);
+  document.body.appendChild(wrap);
+  // nothing is left to ask: no "unsaved changes" prompt on the way out
+  _orphanStage = {};
 }
 
 /* ---- reload button & state-preserving reload ---- */
@@ -1043,6 +1291,7 @@ function tempPasswordModal(username, pw, issued) {
   });
 }
 async function signOut() {
+  try { await flushOrphanStage(); } catch (e) { }
   try { await API.post('/api/auth/logout', {}); } catch (e) { }
   location.href = '/login.html';
 }
@@ -5801,6 +6050,13 @@ function viewInput(root) {
       return;
     }
     const list = data.orphans || [];
+    // v12.2: a staged change for a file that is no longer an orphan is moot
+    (function pruneStage() {
+      const st = orphanStage(), here = {};
+      list.forEach(o => { here[o.path] = true; });
+      Object.keys(st).forEach(p => { if (!here[p]) delete st[p]; });
+      saveOrphanStage();
+    })();
     orphBody.innerHTML = '';
     if (!list.length) {
       orphBody.appendChild(el('p', 'note', 'Every file in the vault is accounted for.' +
@@ -5810,14 +6066,49 @@ function viewInput(root) {
     const banner = el('div', 'banner bad');
     banner.innerHTML = '<b>' + list.length + ' file' + (list.length === 1 ? '' : 's') + ' in the vault ' + (list.length === 1 ? 'was' : 'were') +
       ' not filed through this app.</b> Someone put ' + (list.length === 1 ? 'it' : 'them') +
-      ' straight into the vault folder — Categorize each one so it shows up on the dashboard and in the Vault, or mark it as not a deliverable.';
+      ' straight into the vault folder — Categorize each one so it shows up on the dashboard and in the Vault, or mark it as not a deliverable.' +
+      '<div class="note" style="margin-top:4px">Your choices are kept in this browser tab and saved together when you press <b>Save changes</b> or leave this tab — the list does not reload after each file.</div>';
     orphBody.appendChild(banner);
+    /* Sticky bar: how many choices are waiting, and the way to save or drop them. */
+    const sbar = el('div', 'stage-bar hide');
+    sbar.setAttribute('role', 'status');
+    const sbarText = el('span', 'stage-bar-text');
+    const sbarSave = el('button', 'primary sm', 'Save changes');
+    const sbarDrop = el('button', 'sm', 'Discard');
+    sbar.appendChild(sbarText); sbar.appendChild(sbarSave); sbar.appendChild(sbarDrop);
+    orphBody.appendChild(sbar);
+    const paintBar = () => {
+      const n = orphanStageCount();
+      sbar.classList.toggle('hide', !n);
+      sbarText.textContent = n + (n === 1 ? ' change' : ' changes') + ' not saved yet';
+    };
+    sbarSave.onclick = async () => {
+      sbarSave.disabled = true; sbarDrop.disabled = true;
+      try {
+        const r = await flushOrphanStage('save');
+        if (r.failed) alert(r.failed + ' of ' + (r.saved + r.failed) + ' could not be saved: ' + r.firstError + '\n\nThey stay marked in the list so you can fix or undo them.');
+      } finally { sbarSave.disabled = false; sbarDrop.disabled = false; }
+      repaintAll();
+    };
+    sbarDrop.onclick = () => {
+      if (!confirm('Discard the ' + orphanStageCount() + ' unsaved change(s)? The files stay uncategorized.')) return;
+      Object.keys(orphanStage()).forEach(unstageOrphan);
+      repaintAll();
+    };
     const t = el('table');
     t.innerHTML = '<thead><tr><th>File</th><th>Looks like</th><th>Size</th><th>Put there by</th><th>When</th><th></th></tr></thead>';
     const tb = el('tbody');
+    const rowDraws = [];
+    const repaintAll = () => { rowDraws.forEach(d => d()); paintBar(); };
     list.forEach(o => {
+      let tr = null;
+      const draw = () => { const n = buildRow(); if (tr) tr.replaceWith(n); else tb.appendChild(n); tr = n; };
+      rowDraws.push(draw);
+      const restage = () => { draw(); paintBar(); };
+      const buildRow = () => {
       const tr = el('tr');
       const g = o.guess;
+      const staged = orphanStage()[o.path];
       // v11.1: if the file already sits where the app itself would have put
       // it ([Family]\[DocType]\[Part]\file), say so plainly instead of a
       // blank form — the point of "aware where the user placed the doc" is
@@ -5835,44 +6126,53 @@ function viewInput(root) {
         '<td>' + esc(fmtStamp(o.created_utc)) + '<div class="note">modified ' + esc(fmtStamp(o.modified_utc)) + '</div></td>' +
         '<td></td>';
       const acts = tr.lastChild;
+      if (staged) {
+        // v12.2: chosen but not saved yet - the row stays where it is, dimmed,
+        // with the choice written out and a way back.
+        tr.classList.add('orph-staged');
+        const what = el('div', staged.error ? 'orph-staged-err' : 'orph-staged-what');
+        what.textContent = (staged.error ? 'Could not save: ' + staged.error + ' — ' : '✓ ') + staged.label;
+        acts.appendChild(what);
+        const undo = el('button', 'sm', 'Undo');
+        undo.onclick = () => { unstageOrphan(o.path); restage(); };
+        acts.appendChild(undo);
+        return tr;
+      }
       if (g && g.confident) {
         const okBtn = el('button', 'primary sm', 'Confirm');
         okBtn.title = 'File as ' + g.project_id + ' / ' + g.doc_code + (g.part_id ? ' (' + g.part_id + ')' : '') + ', renamed to the naming standard';
-        okBtn.onclick = async () => {
-          const who = requireName(); if (!who) return;
-          if (!confirm('File this as ' + g.project_id + ' / ' + g.doc_code + (g.part_id ? ' (' + g.part_id + ')' : '') +
-            ' and rename it to match the current naming standard?')) return;
-          okBtn.disabled = true;
-          try {
-            await API.post('/api/vault/orphans/adopt', {
-              user: who, path: o.path, sha256: o.sha256, standardize: true,
-              project_id: g.project_id, step_key: g.step_key, doc_code: g.doc_code, part_id: g.part_id
-            });
-            await redrawAfterWrite();
-          } catch (e) { alert('Could not file it: ' + e.message); okBtn.disabled = false; }
+        okBtn.onclick = () => {
+          // staged, not posted: see flushOrphanStage
+          stageOrphan(o.path, {
+            action: 'adopt', label: 'will be filed as ' + g.project_id + ' / ' + g.doc_code + (g.part_id ? ' (' + g.part_id + ')' : '') + ' and renamed to the naming standard',
+            body: { path: o.path, sha256: o.sha256, standardize: true, project_id: g.project_id, step_key: g.step_key, doc_code: g.doc_code, part_id: g.part_id }
+          });
+          restage();
         };
         acts.appendChild(okBtn);
         const adjBtn = el('button', 'sm', 'Adjust');
         adjBtn.style.marginLeft = '4px';
-        adjBtn.onclick = () => openOrphanCategorizeModal(o);
+        adjBtn.onclick = () => openOrphanCategorizeModal(o, restage);
         acts.appendChild(adjBtn);
       } else {
         const catBtn = el('button', 'primary sm', 'Categorize');
-        catBtn.onclick = () => openOrphanCategorizeModal(o);
+        catBtn.onclick = () => openOrphanCategorizeModal(o, restage);
         acts.appendChild(catBtn);
       }
       const ignBtn = el('button', 'sm', 'Not a deliverable');
       ignBtn.style.marginLeft = '4px';
-      ignBtn.onclick = async () => {
-        const who = requireName(); if (!who) return;
-        const reason = prompt('Why is this not a deliverable? (optional)', '') || '';
-        await API.action('lb_vault_ignored', { file_path: o.path, ignored_by: who, ignored_utc: new Date().toISOString(), reason: reason },
-          { audit: { user: who, action: 'Vault_Ignore_Orphan', projectId: '', objType: 'VaultFile', objId: o.path, from: 'Uncategorized', to: 'Ignored', detail: reason } });
-        await redrawAfterWrite();
+      ignBtn.onclick = () => {
+        const reason = prompt('Why is this not a deliverable? (optional)', '');
+        if (reason === null) return;
+        stageOrphan(o.path, { action: 'ignore', reason: reason, label: 'will be marked "not a deliverable"' + (reason ? ' (' + reason + ')' : '') });
+        restage();
       };
       acts.appendChild(ignBtn);
-      tb.appendChild(tr);
+      return tr;
+      };
+      draw();
     });
+    paintBar();
     t.appendChild(tb);
     const scroll = el('div', 'scroll'); scroll.appendChild(t); orphBody.appendChild(scroll);
   })();
@@ -5886,7 +6186,7 @@ function viewInput(root) {
    that is what being asked to confirm a guess implies) renames the file to
    the current naming standard via POST /api/vault/orphans/adopt; unchecked
    keeps the original name and location exactly as found. */
-function openOrphanCategorizeModal(orphan) {
+function openOrphanCategorizeModal(orphan, onStaged) {
   const g = orphan.guess;
   const scrim = el('div', 'modal-scrim');
   const box = el('div', 'modal');
@@ -5940,15 +6240,14 @@ function openOrphanCategorizeModal(orphan) {
     if (stepId == null) { alert('Pick a valid step first.'); return; }
     const step = stepsOf(p.process, p).find(s => s.step_id === stepId);
     const part = $('#ocPart', box).value.trim();
-    const btn = $('#ocGo', box); btn.disabled = true;
-    try {
-      await API.post('/api/vault/orphans/adopt', {
-        user: who, path: orphan.path, sha256: orphan.sha256, standardize: $('#ocStd', box).checked,
-        project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: doc, part_id: part
-      });
-    } catch (e) { alert('Could not file it: ' + e.message); btn.disabled = false; return; }
+    // v12.2: staged, not posted - saved with the rest by "Save changes" / on leaving the tab
+    stageOrphan(orphan.path, {
+      action: 'adopt',
+      label: 'will be filed as ' + p.project_id + ' / ' + doc + (part ? ' (' + part + ')' : '') + ($('#ocStd', box).checked ? ' and renamed to the naming standard' : ' in place'),
+      body: { path: orphan.path, sha256: orphan.sha256, standardize: $('#ocStd', box).checked, project_id: p.project_id, step_key: stepKeyOf(p.process, step), doc_code: doc, part_id: part }
+    });
     close();
-    await redrawAfterWrite();
+    if (onStaged) onStaged();
   };
 }
 
@@ -8327,6 +8626,8 @@ function viewSettings(root) {
     }).catch(function(e) { avWrap.innerHTML = '<p class="note" style="padding:8px;color:var(--bad)">Could not load vaults: ' + esc(e.message) + '</p>'; });
   }
 
+  vaultDataCard(root);
+
   /* ---- evidence vault location ---- */
   const vp = el('div', 'card');
   const vpHdr = el('div', 'card-header'); vpHdr.appendChild(el('h3', 'card-title', 'Evidence vault location')); vp.appendChild(vpHdr);
@@ -8966,7 +9267,7 @@ function renderUserChip() {
     menu.appendChild(b);
   };
   item('lock', vi ? 'Đổi mật khẩu' : 'Change my password', changePasswordModal);
-  item('switch-horizontal', vi ? 'Đổi kho' : 'Switch vault', function() { location.href = '/login.html'; });
+  item('switch-horizontal', vi ? 'Đổi kho' : 'Switch vault', async function() { try { await flushOrphanStage(); } catch (e) { } location.href = '/login.html'; });
   item('logout', vi ? 'Đăng xuất' : 'Sign out', signOut);
   chip.onclick = function() { const open = menu.classList.toggle('hide'); chip.setAttribute('aria-expanded', open ? 'false' : 'true'); };
   wrap.appendChild(chip); wrap.appendChild(menu);

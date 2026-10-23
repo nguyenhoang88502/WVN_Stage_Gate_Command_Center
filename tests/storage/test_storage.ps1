@@ -12,7 +12,8 @@ param([string]$Root)
 $ErrorActionPreference = 'Stop'
 $sys = Join-Path $Root 'app\system'
 $trk = Join-Path $sys 'tracking'
-$jr  = Join-Path $trk 'journal'
+# v12.2: the journals live in the vault (<vault>\_vault\journal), not in tracking\
+$jr  = Join-Path $Root 'NPI_EPM_Documents_Control\_vault\journal'
 $base = 'http://localhost:8090'
 $script:fail = 0; $script:pass = 0
 function Check([string]$name, [bool]$ok, [string]$detail = '') {

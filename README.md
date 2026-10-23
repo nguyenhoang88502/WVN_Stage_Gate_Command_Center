@@ -206,7 +206,24 @@ Anything unusual — a conflict copy, a base file written after the seal (i.e. a
 older version), a `config-*.json` conflict copy from two admins saving at once — is logged and returned
 by `/api/data` as a storage warning.
 
-**Every PC must run v11.** An older version writes the base files directly and does not read the
+**Where the journals live (v12.2).** The journals are no longer in the app folder: they are written inside the
+vault itself, so replacing or deleting the app folder never takes the project information with it.
+
+| Path | Written by | Holds |
+|---|---|---|
+| `<vault>\_vault\journal\<PC>_<user>\<store>.csv` | only that PC + Windows user's instance | the journals described above |
+| `<vault>\_vault\base\<store>.csv` | the first v12.2 start | copy of the pre-v11 base files, when the app folder had any |
+| `<vault>\_vault\config\<PC>_<user>.json` | that PC, whenever the admin saves Settings | the settings (processes, document types, folder structure ...), without any password |
+| `<vault>\Project_Information.xlsx` | any PC, a few seconds after data changes | the same information as a readable Excel file (read-only copy) |
+
+At start-up the app copies whatever an older version left in `tracking\journal\` into the vault (byte-exact, once;
+nothing in the old location is deleted) and reads both places, counting each record once. If the vault folder is
+not writable the app falls back to the old location and says so in Settings. A new app copy pointed at an existing
+vault (Settings → Evidence vault location → Browse…) finds every project, step, document and issue at once; only
+its settings start at the shipped defaults, and Settings offers **Restore settings from the vault**. User accounts
+and passwords stay in the app folder (`system\auth`) and are not copied: the admin issues passwords again.
+
+**Every PC must run v11 or later.** An older version writes the base files directly and does not read the
 journals: its users would see stale data and could overwrite base rows. The app flags this (see above)
 but cannot prevent it — restart every PC's app after the upgrade.
 
@@ -618,6 +635,23 @@ teams.**
 ## 13. Version history
 
 Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
+
+### v12.2 vault data (2026-10-23)
+
+- **Project information lives in the vault** (see §3): journals, a base copy and the admin settings are stored in
+  `<vault>\_vault`, with a readable `Project_Information.xlsx` (sheets: Read me, Projects, Progress by step,
+  Documents, Approvals, Issues, Bypasses, Comments, Activity log) beside the documents. Settings → *Project data in the
+  vault* shows what the vault holds and opens the workbook; *Restore settings from the vault* applies the saved
+  settings to a new app copy (a banner offers it to the admin on first sign-in). `/api/vault/data`, `/export`,
+  `/open`, `/snapshot`, `/restore`. The uncategorized-file scan and the file viewer ignore `_vault` and the workbook.
+- **Stop server button** in the header (power icon): asks first, saves any unsaved Input-tab choices, then stops the
+  background server and shows a "Server stopped" page.
+- **Input tab → Uncategorized files:** Confirm / Categorize / Not a deliverable no longer post and reload one file at a
+  time. The choices are kept in the browser tab (sessionStorage) and saved together by **Save changes**, by leaving the
+  tab, by signing out / switching vault, or by stopping the server; a bar shows how many are pending, each row has
+  Undo, and closing the tab with pending choices asks first.
+- Tests: `tests\v12_2\api_vault_data.js` (write → reopen on a fresh app copy with the old app deleted → legacy
+  migration) and `tests\v12_2\e2e_staging_stop.js` (staging, tab-switch save, Settings card, Stop button).
 
 ### v12.1 launcher (2026-10-16)
 

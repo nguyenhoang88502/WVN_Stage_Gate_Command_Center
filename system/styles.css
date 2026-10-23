@@ -411,9 +411,30 @@ code {
 }
 #themeBtn:hover { background: var(--grey2); color: var(--ink) }
 
-/* The in-app Stop Server button was removed in v4.1 - stopping the server now
-   goes through Stop_Server.cmd, so the #stopBtn rules that lived here were
-   styling an element that no longer exists in index.html. */
+/* v12.2: the Stop Server button is back (it was removed in v4.1 when stopping
+   went through Stop_Server.cmd). The server now runs with no window at all, so
+   the app itself has to be able to end it. Same shape as the theme/reload
+   buttons; turns red on hover so it is not mistaken for either. */
+#stopBtn {
+  height: var(--ctl-h-sm); min-width: var(--ctl-h-sm);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--soft); color: var(--ink2);
+  border: 1px solid var(--line-strong); border-radius: var(--r1);
+  cursor: pointer; font-size: 14px; line-height: 1;
+}
+#stopBtn:hover { background: var(--bad2); color: var(--bad); border-color: var(--bad) }
+
+/* v12.2: Input tab, "Uncategorized files" - choices wait here until saved. */
+.stage-bar {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--s2);
+  margin: var(--s2) 0; padding: var(--s2) var(--s3);
+  background: var(--warn2); border: 1px solid var(--warn); border-radius: var(--r2);
+}
+.stage-bar.hide { display: none }
+.stage-bar-text { font-weight: 600; margin-right: auto }
+tr.orph-staged td { background: var(--soft); opacity: .85 }
+.orph-staged-what { color: var(--good); font-size: 12px; margin-bottom: 4px }
+.orph-staged-err { color: var(--bad); font-size: 12px; margin-bottom: 4px }
 
 /* Reload sits in the command bar next to the theme toggle and borrows its
    shape so the two read as one pair of header controls. */

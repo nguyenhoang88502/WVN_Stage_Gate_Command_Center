@@ -154,8 +154,18 @@ function Get-Config {
   Invoke-Locked -Path $ConfigPath -Action { param($s) (Read-AllText $s) | ConvertFrom-Json }
 }
 function Save-Config { param($ConfigObj)
+  # v12.2: a save made by a signed-in person is stamped and copied into the
+  # vault (see Save-ConfigSnapshot). The stamp is what tells a fresh app copy
+  # still on factory settings apart from one an admin has set up. A save made
+  # by the server itself at start-up carries no user and is not stamped.
+  $by = [string]$script:ReqUser
+  if ($by) {
+    $ConfigObj | Add-Member -NotePropertyName settings_saved_utc -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
+    $ConfigObj | Add-Member -NotePropertyName settings_saved_by -NotePropertyValue $by -Force
+  }
   $json = $ConfigObj | ConvertTo-Json -Depth 12
   Invoke-Locked -Path $ConfigPath -Action { param($s) Write-AllText $s $json }.GetNewClosure() | Out-Null
+  if ($by) { Save-ConfigSnapshot -ConfigObj $ConfigObj -By $by }
 }
 
 # ---- deployment path (v11: runtime only) ----------------------------------
@@ -418,9 +428,33 @@ function ConvertFrom-CsvText { param([string]$Text)
 # The helper signatures below (Read-Store, Add-StoreRow, Set-StoreRow,
 # Add-StoreRowsBatch) are unchanged, so no endpoint had to change with it.
 $JournalMeta  = @('_v_utc', '_v_writer', '_v_seq', '_v_set')
-$JournalRoot  = Join-Path $TrackingDir 'journal'
+# v12.2: WHERE the journals live. Before, they sat in the app folder
+# (tracking\journal), so replacing the app folder with a newer version - or
+# deleting the old one - left the project register, the gate progress and every
+# deliverable row behind. They now live in the vault itself:
+#   <vault>\_vault\journal\<WriterId>\<store>.csv   this PC+user's journal
+#   <vault>\_vault\base\<store>.csv                 copy of a pre-v11 base file
+#   <vault>\_vault\config\<WriterId>.json           the settings, last saved here
+# Pointing a new app copy at the same vault finds all of it. The old
+# tracking\journal is still READ (and copied into the vault once at start-up,
+# see Sync-LegacyDataToVault); nothing is written there any more. If the vault
+# folder cannot be written to, the app falls back to the old location.
+$LegacyJournalRoot = Join-Path $TrackingDir 'journal'
+$VaultDataDir   = Join-Path $EvidenceDir '_vault'
+$VaultBaseDir   = Join-Path $VaultDataDir 'base'
+$VaultConfigDir = Join-Path $VaultDataDir 'config'
+$JournalRoot    = Join-Path $VaultDataDir 'journal'
+try { New-Item -ItemType Directory -Path $JournalRoot -Force -ErrorAction Stop | Out-Null }
+catch {
+  Write-Log ('Vault data folder not writable (' + $JournalRoot + ') - project data stays in the app folder: ' + $_.Exception.Message) 'WARN'
+  $VaultDataDir = ''; $VaultBaseDir = ''; $VaultConfigDir = ''
+  $JournalRoot = $LegacyJournalRoot
+}
 $MyJournalDir = Join-Path $JournalRoot $WriterId
-$SealPath     = Join-Path $JournalRoot 'BASE_SEALED.txt'
+$SealPath     = Join-Path $LegacyJournalRoot 'BASE_SEALED.txt'
+# Legacy journal files whose content is already inside the vault copy; they are
+# skipped on read so nothing is parsed twice. Filled by Sync-LegacyDataToVault.
+$script:LegacyCovered = @{}
 # Short stable tag on sequential IDs: two PCs that pick the same next number
 # inside one sync window still mint different IDs (DEL-0082-3FA vs DEL-0082-C07).
 $WriterTag = & {
@@ -505,15 +539,26 @@ function Get-StoreFiles { param([string]$Store)
       }
     }
   }
+  # v12.2: the base copy kept in the vault. With an app folder that has no base
+  # file of its own (a fresh install on an existing vault) it IS the base.
+  if ($VaultBaseDir) {
+    $vb = Join-Path $VaultBaseDir ($Store + '.csv')
+    if (Test-Path -LiteralPath $vb -PathType Leaf) { $extraBase.Add($vb) }
+  }
   foreach ($f in $extraBase) { $base.Add($f) }
-  if (Test-Path -LiteralPath $JournalRoot) {
-    foreach ($d in [System.IO.Directory]::GetDirectories($JournalRoot)) {
+  $roots = @($JournalRoot)
+  if ($LegacyJournalRoot -ne $JournalRoot) { $roots += $LegacyJournalRoot }
+  foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root)) { continue }
+    foreach ($d in [System.IO.Directory]::GetDirectories($root)) {
       foreach ($f in [System.IO.Directory]::GetFiles($d, $Store + '*.csv')) {
         $n = [System.IO.Path]::GetFileName($f)
         if ($n -match $rx) {
+          # an old-location journal already copied into the vault is not read twice
+          if ($root -ne $JournalRoot -and $script:LegacyCovered.ContainsKey($f.ToLowerInvariant())) { continue }
           $journals.Add($f)
           if ($Matches[2]) {
-            Add-StorageWarning $f ('OneDrive conflict copy of a journal (' + $f.Substring($JournalRoot.Length).TrimStart('\') + '). Merged - nothing lost. It usually means the same Windows user on the same PC name ran the app from two copies at once.')
+            Add-StorageWarning $f ('OneDrive conflict copy of a journal (' + $f.Substring($root.Length).TrimStart('\') + '). Merged - nothing lost. It usually means the same Windows user on the same PC name ran the app from two copies at once.')
           }
         }
       }
@@ -616,6 +661,7 @@ function Get-MergedStore { param([string]$Store)
 # (nobody else ever writes it), hence the wider, jittered retry budget.
 function Add-JournalVersions { param([string]$Store, [object[]]$Versions)
   if (-not $Versions -or -not $Versions.Count) { return }
+  if ($Store -ne 'lb_audit') { $script:InfoDirty = $true }   # see Update-InfoWorkbook
   if (-not (Test-Path -LiteralPath $MyJournalDir)) { New-Item -ItemType Directory -Path $MyJournalDir -Force | Out-Null }
   $jcols = @($Stores[$Store]) + $JournalMeta
   $headerLine = $jcols -join ','
@@ -896,7 +942,7 @@ function Set-StoreRow {
 # the journal and, on OneDrive, overwrite other PCs' base rows).
 function Test-StorageHealth {
   try {
-    if (-not (Test-Path -LiteralPath $JournalRoot)) { New-Item -ItemType Directory -Path $JournalRoot -Force | Out-Null }
+    if (-not (Test-Path -LiteralPath $LegacyJournalRoot)) { New-Item -ItemType Directory -Path $LegacyJournalRoot -Force | Out-Null }
     if (-not (Test-Path -LiteralPath $SealPath)) {
       Set-Content -LiteralPath $SealPath -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII
       Write-Log 'Sealed the v11 base snapshot (tracking\journal\BASE_SEALED.txt).'
@@ -915,6 +961,378 @@ function Test-StorageHealth {
 }
 
 Test-StorageHealth
+
+# ================================================ v12.2 project data in the vault ==
+# See "WHERE the journals live" above. Three jobs:
+#   1. Sync-LegacyDataToVault   copy the journals / base files an older app left
+#                               in tracking\ into the vault, once, byte-exact.
+#   2. Save-ConfigSnapshot      keep the admin's settings (processes, document
+#                               types, folder structure ...) in the vault too.
+#   3. Get-VaultDataStatus      what the vault holds, for Settings.
+# None of it ever deletes anything in the old location.
+function Read-BytesShared { param([string]$Path)
+  $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+  try {
+    $b = New-Object byte[] ([int]$fs.Length)
+    $n = 0
+    while ($n -lt $b.Length) { $r = $fs.Read($b, $n, $b.Length - $n); if ($r -le 0) { break }; $n += $r }
+    return ,$b
+  } finally { $fs.Close() }
+}
+# $true when $Big starts with every byte of $Small
+function Test-BytesPrefix { param([byte[]]$Small, [byte[]]$Big)
+  if ($Small.Length -gt $Big.Length) { return $false }
+  if ($Small.Length -eq 0) { return $true }
+  $h = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $a = [BitConverter]::ToString($h.ComputeHash($Small, 0, $Small.Length))
+    $b = [BitConverter]::ToString($h.ComputeHash($Big, 0, $Small.Length))
+  } finally { $h.Dispose() }
+  return ($a -eq $b)
+}
+# 'copied'    the vault now holds the file (new, or its older prefix replaced)
+# 'covered'   the vault copy already contains the whole old file
+# 'diverged'  both carry rows the other lacks - both stay, both are read
+# 'failed'    could not read or write (OneDrive busy, permissions)
+function Copy-LegacyIntoVault { param([string]$Src, [string]$Dest, [switch]$KeepExisting)
+  try {
+    $destDir = Split-Path -Parent $Dest
+    if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    $sb = Read-BytesShared $Src
+    if (-not (Test-Path -LiteralPath $Dest -PathType Leaf)) { [System.IO.File]::WriteAllBytes($Dest, $sb); return 'copied' }
+    $db = Read-BytesShared $Dest
+    if (Test-BytesPrefix $sb $db) { return 'covered' }
+    if ((-not $KeepExisting) -and (Test-BytesPrefix $db $sb)) { [System.IO.File]::WriteAllBytes($Dest, $sb); return 'copied' }
+    return 'diverged'
+  } catch {
+    Write-Log ('Copy into vault failed for ' + $Src + ': ' + $_.Exception.Message) 'WARN'
+    return 'failed'
+  }
+}
+function Sync-LegacyDataToVault {
+  if (-not $VaultDataDir -or $JournalRoot -eq $LegacyJournalRoot) { return }
+  $n = @{ copied = 0; covered = 0; diverged = 0; failed = 0 }
+  try {
+    if (Test-Path -LiteralPath $LegacyJournalRoot) {
+      foreach ($d in [System.IO.Directory]::GetDirectories($LegacyJournalRoot)) {
+        $name = [System.IO.Path]::GetFileName($d)
+        foreach ($f in [System.IO.Directory]::GetFiles($d, '*.csv')) {
+          $r = Copy-LegacyIntoVault -Src $f -Dest (Join-Path (Join-Path $JournalRoot $name) ([System.IO.Path]::GetFileName($f)))
+          $n[$r]++
+          if ($r -eq 'copied' -or $r -eq 'covered') { $script:LegacyCovered[$f.ToLowerInvariant()] = $true }
+        }
+      }
+    }
+    foreach ($store in $Stores.Keys) {
+      $bp = Join-Path $TrackingDir ($store + '.csv')
+      if (Test-Path -LiteralPath $bp -PathType Leaf) {
+        $r = Copy-LegacyIntoVault -Src $bp -Dest (Join-Path $VaultBaseDir ($store + '.csv')) -KeepExisting
+        $n[$r]++
+      }
+    }
+  } catch { Write-Log ('Syncing old project data into the vault failed: ' + $_.Exception.Message) 'WARN' }
+  Write-Log ('Project data in the vault (' + $VaultDataDir + '): ' + $n.copied + ' file(s) copied from the app folder, ' + $n.covered + ' already there, ' + $n.diverged + ' read from both places, ' + $n.failed + ' failed.')
+  # A marker so the folder explains itself to anyone browsing the vault.
+  try {
+    $note = Join-Path $VaultDataDir 'README.txt'
+    if (-not (Test-Path -LiteralPath $note)) {
+      Set-Content -LiteralPath $note -Encoding UTF8 -Value @(
+        'WVN Stage Gate Command Center - project data of this vault',
+        '',
+        'journal\<PC_user>\*.csv   project register, gate progress, deliverables, approvals, issues, audit log',
+        'base\*.csv               copy of the data a pre-v11 app kept in its own folder',
+        'config\<PC_user>.json    the admin settings (processes, document types, folder structure ...)',
+        '..\Project_Information.xlsx   the same information as an Excel file anyone can open and read',
+        '                         (rewritten by the app after every change - read-only copy)',
+        '',
+        'Do not edit or delete these files. A newer copy of the app pointed at this vault folder',
+        '(Settings > Evidence vault location) picks all of this up again, so the app folder itself',
+        'can be replaced or removed without losing the project information.')
+    }
+  } catch { }
+}
+Sync-LegacyDataToVault
+
+# ---- settings snapshot ----
+function Write-ConfigSnapshotFile { param($ConfigObj, [string]$By)
+  $ver = ''
+  try { $ver = [string]$ConfigObj.system_info.version } catch { }
+  # The old plain-text admin PIN (pre-v12 configs) must never be copied into a
+  # folder every user of the vault can read.
+  if ($ConfigObj.PSObject.Properties.Name -contains 'admin_pin') {
+    $ConfigObj = ($ConfigObj | ConvertTo-Json -Depth 14) | ConvertFrom-Json
+    $ConfigObj.PSObject.Properties.Remove('admin_pin')
+  }
+  $snap = [ordered]@{
+    saved_utc = [DateTime]::UtcNow.ToString('o'); writer = $WriterId; by = $By
+    app_version = $ver; config = $ConfigObj
+  }
+  Write-JsonFile -Path (Join-Path $VaultConfigDir ($WriterId + '.json')) -Object $snap
+}
+function Save-ConfigSnapshot { param($ConfigObj, [string]$By = '')
+  if (-not $VaultConfigDir) { return }
+  try { Write-ConfigSnapshotFile -ConfigObj $ConfigObj -By $By }
+  catch { Write-Log ('Settings snapshot into the vault failed: ' + $_.Exception.Message) 'WARN' }
+}
+function Get-ConfigSnapshots {
+  $out = New-Object System.Collections.Generic.List[object]
+  if (-not $VaultConfigDir -or -not (Test-Path -LiteralPath $VaultConfigDir)) { return $out.ToArray() }
+  foreach ($f in [System.IO.Directory]::GetFiles($VaultConfigDir, '*.json')) {
+    try {
+      $s = Read-JsonFile $f
+      if ($s -and $s.config -and $s.saved_utc) {
+        $out.Add(@{ file = $f; writer = [string]$s.writer; by = [string]$s.by; saved_utc = [string]$s.saved_utc; app_version = [string]$s.app_version; config = $s.config })
+      }
+    } catch { Write-Log ('Settings snapshot unreadable: ' + $f + ' - ' + $_.Exception.Message) 'WARN' }
+  }
+  return $out.ToArray()
+}
+# The settings that matter, without what is per PC, per copy of the app or just
+# a stamp: two configs with the same fingerprint are the same setup.
+function Get-ConfigFingerprint { param($Config)
+  $c = ($Config | ConvertTo-Json -Depth 14) | ConvertFrom-Json
+  foreach ($k in 'settings_saved_utc', 'settings_saved_by', 'admin_pin') { $c.PSObject.Properties.Remove($k) }
+  if ($c.system_info) { foreach ($k in 'version', 'deployment_path') { $c.system_info.PSObject.Properties.Remove($k) } }
+  if ($c.deployment_defaults) {
+    foreach ($k in 'evidence_vault_path', 'evidence_vault_root', 'evidence_vault_folder_name', 'evidence_vault_relative_to_root') { $c.deployment_defaults.PSObject.Properties.Remove($k) }
+  }
+  $h = [System.Security.Cryptography.SHA256]::Create()
+  try { return ([BitConverter]::ToString($h.ComputeHash([System.Text.Encoding]::UTF8.GetBytes(($c | ConvertTo-Json -Depth 14 -Compress))))).Replace('-', '') }
+  finally { $h.Dispose() }
+}
+# The newest snapshot in the vault, and whether it is worth offering: it must
+# be newer than the settings this copy of the app last had saved, and different.
+function Get-RestoreCandidate { param($Config)
+  $snaps = @(Get-ConfigSnapshots | Sort-Object { $_.saved_utc } -Descending)
+  if (-not $snaps.Count) { return $null }
+  $best = $snaps[0]
+  $mine = ''
+  try { $mine = [string]$Config.settings_saved_utc } catch { }
+  if ($mine -and $mine -ge $best.saved_utc) { return $null }
+  if ((Get-ConfigFingerprint $Config) -eq (Get-ConfigFingerprint $best.config)) { return $null }
+  return $best
+}
+# First start on a vault that has no settings in it yet: this app copy's
+# settings become the vault's. Called once the auth block is defined.
+function Initialize-VaultSettings {
+  if (-not $VaultConfigDir) { return }
+  try {
+    if (@(Get-ConfigSnapshots).Count) { return }
+    Save-ConfigSnapshot -ConfigObj (Get-Config) -By ''
+    Write-Log 'Settings of this app copy saved into the vault (first time for this vault).'
+  } catch { Write-Log ('Initial settings snapshot failed: ' + $_.Exception.Message) 'WARN' }
+}
+
+function Get-VaultDataStatus {
+  # NB: not $stores - PowerShell variables are case-insensitive and scoped
+  # dynamically, so a local $stores would hide the script's $Stores table from
+  # Get-MergedStore, which this function calls.
+  $rowCounts = [ordered]@{}
+  foreach ($s in @('lb_projects', 'lb_gates', 'lb_deliverables', 'lb_approvals', 'lb_issues', 'lb_audit')) {
+    # .list.Count, not @(...list).Count: in Windows PowerShell 5.1 @() around a
+    # generic List throws "Argument types do not match".
+    try { $rowCounts[$s] = [int](Get-MergedStore $s).list.Count } catch { $rowCounts[$s] = -1; Write-Log ('Row count of ' + $s + ' failed: ' + $_.Exception.Message) 'WARN' }
+  }
+  $writers = New-Object System.Collections.Generic.List[object]
+  if ($VaultDataDir -and (Test-Path -LiteralPath $JournalRoot)) {
+    foreach ($d in [System.IO.Directory]::GetDirectories($JournalRoot)) {
+      $files = @([System.IO.Directory]::GetFiles($d, '*.csv') | ForEach-Object { New-Object System.IO.FileInfo($_) })
+      if (-not $files.Count) { continue }
+      $last = ($files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+      $writers.Add(@{ writer = [System.IO.Path]::GetFileName($d); files = $files.Count; bytes = [long](($files | Measure-Object Length -Sum).Sum); last_write_utc = $last.ToString('o'); mine = ([System.IO.Path]::GetFileName($d) -eq $WriterId) })
+    }
+  }
+  $legacy = 0
+  if (Test-Path -LiteralPath $LegacyJournalRoot) { $legacy = @(Get-ChildItem -LiteralPath $LegacyJournalRoot -Recurse -Filter '*.csv' -ErrorAction SilentlyContinue).Count }
+  $cfg = Get-Config
+  $cand = $null
+  try { $cand = Get-RestoreCandidate $cfg } catch { Write-Log ('Restore check failed: ' + $_.Exception.Message) 'WARN' }
+  return @{
+    enabled = [bool]$VaultDataDir; vault = $EvidenceDir; data_dir = $VaultDataDir
+    stores = $rowCounts; writers = $writers.ToArray()
+    old_location_files = $legacy; old_location_in_vault = $script:LegacyCovered.Count
+    snapshots = @(Get-ConfigSnapshots | Sort-Object { $_.saved_utc } -Descending | ForEach-Object { @{ writer = $_.writer; by = $_.by; saved_utc = $_.saved_utc; app_version = $_.app_version } })
+    settings_saved_utc = [string]$cfg.settings_saved_utc; settings_saved_by = [string]$cfg.settings_saved_by
+    app_version = [string]$cfg.system_info.version
+    info_workbook = $(
+      $iw = Join-Path $EvidenceDir $InfoWorkbookName
+      if (Test-Path -LiteralPath $iw -PathType Leaf) { $fi = Get-Item -LiteralPath $iw; @{ path = $iw; exists = $true; bytes = $fi.Length; last_write_utc = $fi.LastWriteTimeUtc.ToString('o') } }
+      else { @{ path = $iw; exists = $false; bytes = 0; last_write_utc = '' } }
+    )
+    restore_available = [bool]$cand
+    restore_from = $(if ($cand) { @{ writer = $cand.writer; by = $cand.by; saved_utc = $cand.saved_utc; app_version = $cand.app_version } } else { $null })
+  }
+}
+
+# ---- the same data as an Excel file anyone can open ----
+# The journals above are for the app; people open this. One workbook in the
+# vault root, rewritten (never edited by hand - changes made in it are not read
+# back) a few seconds after the data changes. It is a pure function of the
+# merged data, so whichever PC writes it writes the same thing; a sidecar
+# fingerprint stops PCs from rewriting an unchanged file over and over.
+$InfoWorkbookName = 'Project_Information.xlsx'
+$script:InfoDirty = $true
+$script:InfoLast  = [DateTime]::MinValue
+
+function ConvertTo-InfoTitle { param([string]$Col)
+  $w = $Col -split '_' | Where-Object { $_ } | ForEach-Object {
+    switch ($_.ToLowerInvariant()) { 'id' { 'ID' } 'utc' { '(UTC)' } 'pic' { 'PIC' } 'sha256' { 'SHA-256' } 'prf' { 'PRF' } 'wvn' { 'WVN' } 'wnb' { 'WNB' } 'url' { 'URL' } 'abcde' { 'ABCDE' } default { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) } }
+  }
+  return ($w -join ' ')
+}
+function New-InfoSheet { param([string]$Name, [string[]]$Cols, $Rows)
+  $pathCols = @('file_path', 'evidence_path', 'attachment_path')
+  $data = New-Object System.Collections.Generic.List[object]
+  foreach ($r in $Rows) {
+    $cells = New-Object 'string[]' $Cols.Count
+    for ($i = 0; $i -lt $Cols.Count; $i++) {
+      $v = [string]$r.($Cols[$i])
+      if ($pathCols -contains $Cols[$i]) { $v = ConvertTo-StoredPath $v }
+      $cells[$i] = $v
+    }
+    $data.Add($cells)
+  }
+  return @{ name = $Name; headers = @($Cols | ForEach-Object { ConvertTo-InfoTitle $_ }); rows = $data }
+}
+function Get-InfoSheets {
+  $projects = @(Read-Store 'lb_projects')
+  $audit = @(Read-Store 'lb_audit' | Sort-Object timestamp_utc -Descending | Select-Object -First 5000)
+  $sheets = New-Object System.Collections.Generic.List[object]
+  $sheets.Add((New-InfoSheet 'Projects' @('project_id', 'process', 'prod_family', 'family', 'class_abcde', 'status', 'prf_date', 'target_date', 'market_manager', 'country', 'customer_number', 'certifications', 'notes', 'created_by', 'created_utc', 'updated_utc') $projects))
+  $sheets.Add((New-InfoSheet 'Progress by step' @('project_id', 'process', 'step_key', 'step_num', 'step_name', 'status', 'target_week', 'complexity', 'owner_pic', 'claimed_by', 'approved_by', 'approved_utc', 'evidence_cited', 'notes', 'updated_utc') @(Read-Store 'lb_gates')))
+  $sheets.Add((New-InfoSheet 'Documents' @('project_id', 'step_key', 'doc_code', 'part_id', 'file_name', 'file_path', 'revision_no', 'is_active', 'status', 'approved', 'uploaded_by', 'uploaded_utc', 'kind', 'link_url', 'original_name', 'description', 'change_reason', 'sha256', 'notes') @(Read-Store 'lb_deliverables')))
+  $sheets.Add((New-InfoSheet 'Approvals' @('project_id', 'step_key', 'approval_type', 'approved_by', 'approved_utc', 'evidence_count', 'comments') @(Read-Store 'lb_approvals')))
+  $sheets.Add((New-InfoSheet 'Issues' @('project_id', 'step_key', 'issue_id', 'category', 'severity', 'description', 'owner', 'due_date', 'status', 'resolution', 'raised_by', 'raised_utc', 'closed_utc', 'evidence_path') @(Read-Store 'lb_issues')))
+  $sheets.Add((New-InfoSheet 'Bypasses' @('project_id', 'step_key', 'authorised_by', 'authorised_utc', 'reason', 'mitigation', 'closed_utc', 'closed_note') @(Read-Store 'lb_bypasses')))
+  $sheets.Add((New-InfoSheet 'Comments' @('project_id', 'doc_code', 'step_key', 'author', 'comment', 'created_utc') @(Read-Store 'lb_doc_comments')))
+  $sheets.Add((New-InfoSheet 'Activity log' @('timestamp_utc', 'user', 'action', 'project_id', 'object_type', 'object_id', 'change_from', 'change_to', 'detail') $audit))
+  return $sheets.ToArray()
+}
+function Get-InfoFingerprint { param($Sheets)
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($s in $Sheets) {
+    [void]$sb.Append([string]$s.name).Append([char]1)
+    foreach ($row in $s.rows) { [void]$sb.Append(($row -join "`t")).Append("`n") }
+  }
+  $h = [System.Security.Cryptography.SHA256]::Create()
+  try { return ([BitConverter]::ToString($h.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sb.ToString())))).Replace('-', '') }
+  finally { $h.Dispose() }
+}
+function Get-InfoSheetXml { param($Headers, $Rows, [int]$Style = 0)
+  $n = $Headers.Count
+  $letters = @(0..($n - 1) | ForEach-Object { ConvertTo-ExcelCol $_ })
+  $clean = { param($t) $x = [string]$t; if ($x.Length -gt 32000) { $x = $x.Substring(0, 32000) }; ConvertTo-XmlSafe ($x -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', '') }
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.Append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">')
+  [void]$sb.Append('<dimension ref="A1:' + $letters[$n - 1] + ($Rows.Count + 1) + '"/>')
+  [void]$sb.Append('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft"/></sheetView></sheetViews>')
+  [void]$sb.Append('<cols>')
+  for ($c = 0; $c -lt $n; $c++) {
+    $w = ([string]$Headers[$c]).Length
+    $lim = [Math]::Min($Rows.Count, 200)
+    for ($r = 0; $r -lt $lim; $r++) { $l = ([string]$Rows[$r][$c]).Length; if ($l -gt $w) { $w = $l } }
+    $w = [Math]::Max(8, [Math]::Min(60, $w + 2))
+    [void]$sb.Append('<col min="' + ($c + 1) + '" max="' + ($c + 1) + '" width="' + $w + '" customWidth="1"/>')
+  }
+  [void]$sb.Append('</cols><sheetData><row r="1">')
+  for ($c = 0; $c -lt $n; $c++) { [void]$sb.Append('<c r="' + $letters[$c] + '1" s="1" t="inlineStr"><is><t xml:space="preserve">' + (& $clean $Headers[$c]) + '</t></is></c>') }
+  [void]$sb.Append('</row>')
+  for ($r = 0; $r -lt $Rows.Count; $r++) {
+    $rn = $r + 2
+    [void]$sb.Append('<row r="' + $rn + '">')
+    for ($c = 0; $c -lt $n; $c++) {
+      $v = [string]$Rows[$r][$c]
+      if ($v -eq '') { continue }
+      [void]$sb.Append('<c r="' + $letters[$c] + $rn + '"' + $(if ($Style) { ' s="' + $Style + '"' } else { '' }) + ' t="inlineStr"><is><t xml:space="preserve">' + (& $clean $v) + '</t></is></c>')
+    }
+    [void]$sb.Append('</row>')
+  }
+  [void]$sb.Append('</sheetData><autoFilter ref="A1:' + $letters[$n - 1] + ($Rows.Count + 1) + '"/></worksheet>')
+  return $sb.ToString()
+}
+function Add-ZipText { param($Zip, [string]$Name, [string]$Text)
+  $e = $Zip.CreateEntry($Name, [System.IO.Compression.CompressionLevel]::Optimal)
+  $w = New-Object System.IO.StreamWriter($e.Open(), (New-Object System.Text.UTF8Encoding($false)))
+  try { $w.Write($Text) } finally { $w.Dispose() }
+}
+function Write-InfoWorkbook { param([string]$Path, $Sheets)
+  Add-Type -AssemblyName System.IO.Compression
+  $main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  $rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  $tmp = $Path + '.tmp_' + $WriterId
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+  $fs = [System.IO.File]::Open($tmp, [System.IO.FileMode]::Create)
+  try {
+    $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+      $ct = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+      $wb = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="' + $main + '" xmlns:r="' + $rel + '"><sheets>'
+      $wr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      for ($i = 0; $i -lt $Sheets.Count; $i++) {
+        $k = $i + 1
+        $nm = (([string]$Sheets[$i].name) -replace '[\[\]:\*\?/\\]', ' ')
+        if ($nm.Length -gt 31) { $nm = $nm.Substring(0, 31) }
+        $ct += '<Override PartName="/xl/worksheets/sheet' + $k + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        $wb += '<sheet name="' + (ConvertTo-XmlSafe $nm) + '" sheetId="' + $k + '" r:id="rId' + $k + '"/>'
+        $wr += '<Relationship Id="rId' + $k + '" Type="' + $rel + '/worksheet" Target="worksheets/sheet' + $k + '.xml"/>'
+        # the first sheet ("Read me") is prose: wrapped cells
+        $st = if ($i -eq 0) { 2 } else { 0 }
+        Add-ZipText $zip ('xl/worksheets/sheet' + $k + '.xml') (Get-InfoSheetXml -Headers $Sheets[$i].headers -Rows $Sheets[$i].rows -Style $st)
+      }
+      $ct += '</Types>'
+      $wb += '</sheets></workbook>'
+      $wr += '<Relationship Id="rId' + ($Sheets.Count + 1) + '" Type="' + $rel + '/styles" Target="styles.xml"/></Relationships>'
+      Add-ZipText $zip '[Content_Types].xml' $ct
+      Add-ZipText $zip '_rels/.rels' ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + $rel + '/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+      Add-ZipText $zip 'xl/workbook.xml' $wb
+      Add-ZipText $zip 'xl/_rels/workbook.xml.rels' $wr
+      Add-ZipText $zip 'xl/styles.xml' ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="' + $main + '"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F3A5F"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
+    } finally { $zip.Dispose() }
+  } finally { $fs.Dispose() }
+  try { Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop }
+  catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw }
+}
+# Rewrites the workbook when the data changed. Cheap to call: without -Force it
+# returns at once unless something was written since the last export and at
+# least 15 s have passed. Never throws - the workbook is a convenience.
+function Update-InfoWorkbook { param([switch]$Force)
+  if (-not $Force) {
+    if (-not $script:InfoDirty) { return }
+    if (([DateTime]::UtcNow - $script:InfoLast).TotalSeconds -lt 15) { return }
+  }
+  $script:InfoLast = [DateTime]::UtcNow
+  try {
+    $path = Join-Path $EvidenceDir $InfoWorkbookName
+    $sheets = @(Get-InfoSheets)
+    $fp = Get-InfoFingerprint $sheets
+    $side = ''
+    if ($VaultDataDir) { $side = Join-Path $VaultDataDir 'info_workbook.sha256' }
+    if (-not $Force -and $side -and (Test-Path -LiteralPath $path) -and (Test-Path -LiteralPath $side)) {
+      if (([System.IO.File]::ReadAllText($side)).Trim() -eq $fp) { $script:InfoDirty = $false; return $path }
+    }
+    $counts = ($sheets | ForEach-Object { $_.name + ': ' + $_.rows.Count }) -join '   '
+    $readme = New-Object System.Collections.Generic.List[object]
+    foreach ($pair in @(
+      @('What this is', 'The project register, progress by step, documents, approvals and issues of this vault, as of the time below. The app keeps this file up to date by itself a few seconds after anything changes.'),
+      @('Do not edit', 'This is a read-only copy for reading, filtering and printing. Changes made here are NOT read back and are overwritten at the next update. To change data, use the Stage Gate Command Center.'),
+      @('Vault', $EvidenceDir),
+      @('Updated', ([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss') + ' (local)  /  ' + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC')),
+      @('Rows per sheet', $counts),
+      @('File paths', 'Document paths are relative to the vault folder.'),
+      @('Activity log', 'Newest 5000 entries.'))) { $readme.Add([string[]]$pair) }
+    $all = @(@{ name = 'Read me'; headers = @('Topic', 'Details'); rows = $readme }) + $sheets
+    Write-InfoWorkbook -Path $path -Sheets $all
+    if ($side) { Set-Content -LiteralPath $side -Value $fp -Encoding ASCII }
+    $script:InfoDirty = $false
+    Write-Log ('Project information workbook written: ' + $path)
+    return $path
+  } catch {
+    # most often: someone has it open in Excel. Try again in about a minute.
+    $script:InfoLast = [DateTime]::UtcNow.AddSeconds(45)
+    Write-Log ('Project information workbook not written: ' + $_.Exception.Message) 'WARN'
+    return $null
+  }
+}
 
 function Add-Audit { param([string]$User, [string]$Action, [string]$ProjectId, [string]$ObjType, [string]$ObjId, [string]$From, [string]$To, [string]$Detail)
   Add-JournalVersions -Store 'lb_audit' -Versions @(New-AuditVersion -User $User -Action $Action -ProjectId $ProjectId -ObjType $ObjType -ObjId $ObjId -From $From -To $To -Detail $Detail)
@@ -2923,6 +3341,7 @@ function Test-EvidenceLevels { param($Levels)
     $l = $lv[$i]
     if (-not $l) { $errs += ('Level ' + ($i + 1) + ' is empty.'); continue }
     if ($l -match '[\\/:\*\?"<>\|]') { $errs += ('Level ' + ($i + 1) + ' contains a character Windows does not allow in a folder name.') }
+    if ($i -eq 0 -and $l.ToLowerInvariant() -eq '_vault') { $errs += 'The first level cannot be "_vault": that folder holds the vault''s project data.' }
     foreach ($m in [regex]::Matches($l, '\[([^\]]*)\]')) {
       $anyToken = $true
       if ($EvidenceLevelTokens -notcontains $m.Groups[1].Value) { $errs += ('Level ' + ($i + 1) + ': [' + $m.Groups[1].Value + '] is not a known token. Use ' + (($EvidenceLevelTokens | ForEach-Object { '[' + $_ + ']' }) -join ', ') + '.') }
@@ -3414,6 +3833,7 @@ Write-Log ("Listening on http://localhost:$boundPort/")
 if (-not $NoBrowser) { Start-Process ("http://localhost:$boundPort/") }
 
 try { Initialize-Auth } catch { Write-Log ('Auth initialisation failed: ' + $_.Exception.Message) 'ERROR' }
+Initialize-VaultSettings
 
 try {
   while ($listener.IsListening) {
@@ -3574,6 +3994,79 @@ try {
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ results = $results.ToArray() }
         }
       }
+      elseif ($method -eq 'GET' -and $path -eq '/api/vault/data') {
+        # v12.2: what the vault itself holds (project register, progress,
+        # settings), for Settings -> Project data in the vault.
+        New-JsonResponse -Response $res -StatusCode 200 -Body (Get-VaultDataStatus)
+      }
+      elseif ($method -eq 'POST' -and ($path -eq '/api/vault/data/export' -or $path -eq '/api/vault/data/open')) {
+        # Rewrites the readable Excel copy now (export) and, for 'open',
+        # launches it in Excel on this PC. Opening is a local-only action,
+        # like /api/open-path.
+        $opening = ($path -eq '/api/vault/data/open')
+        if ($opening -and -not (Test-LoopbackRequest -Request $req)) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'This action may only be requested from this machine.' }
+        } else {
+          $out = Update-InfoWorkbook -Force
+          if (-not $out) {
+            New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = 'The Excel file could not be written. If it is open in Excel, close it and try again.' }
+          } else {
+            if ($opening) {
+              try { Start-Process -FilePath $out } catch { Write-Log ('Could not open ' + $out + ': ' + $_.Exception.Message) 'WARN' }
+            }
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; path = $out }
+          }
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/vault/data/snapshot') {
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if (-not (Test-AdminName $actor)) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can save the settings into the vault.' }
+        } elseif (-not $VaultConfigDir) {
+          New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = 'The vault data folder is not writable on this PC.' }
+        } else {
+          $cfg = Get-Config
+          Save-ConfigSnapshot -ConfigObj $cfg -By $actor
+          Add-Audit -User $actor -Action 'Config_Snapshot_To_Vault' -ProjectId '' -ObjType 'Config' -ObjId 'settings' -From '' -To 'vault' -Detail ''
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true }
+        }
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/vault/data/restore') {
+        # Applies the newest settings saved in this vault to this app copy -
+        # the step after pointing a new version of the app at an existing
+        # vault. This PC's own vault location and app version are kept; the
+        # config.json being replaced is first copied beside it.
+        $body = Read-JsonBody -Request $req
+        $actor = [string]$body.user
+        if (-not (Test-AdminName $actor)) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can restore settings from the vault.' }
+        } else {
+          $cfg = Get-Config
+          $snaps = @(Get-ConfigSnapshots | Sort-Object { $_.saved_utc } -Descending)
+          $pick = $null
+          if ([string]$body.writer) { $pick = @($snaps | Where-Object { $_.writer -eq [string]$body.writer }) | Select-Object -First 1 }
+          else { $pick = $snaps | Select-Object -First 1 }
+          if (-not $pick) {
+            New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'This vault has no saved settings.' }
+          } else {
+            $new = $pick.config
+            foreach ($k in 'evidence_vault_path', 'evidence_vault_root', 'evidence_vault_folder_name', 'evidence_vault_relative_to_root') {
+              if ($cfg.deployment_defaults.PSObject.Properties.Name -contains $k) { $new.deployment_defaults | Add-Member -NotePropertyName $k -NotePropertyValue $cfg.deployment_defaults.$k -Force }
+              else { $new.deployment_defaults.PSObject.Properties.Remove($k) }
+            }
+            foreach ($k in 'version', 'deployment_path') {
+              if ($cfg.system_info.PSObject.Properties.Name -contains $k) { $new.system_info | Add-Member -NotePropertyName $k -NotePropertyValue $cfg.system_info.$k -Force }
+            }
+            $bk = Join-Path $SystemDir ('config.before_restore_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.json')
+            Copy-Item -LiteralPath $ConfigPath -Destination $bk -Force
+            Save-Config $new
+            Add-Audit -User $actor -Action 'Config_Restore_From_Vault' -ProjectId '' -ObjType 'Config' -ObjId 'settings' -From ([string]$cfg.settings_saved_utc) -To $pick.saved_utc -Detail ('saved by ' + $pick.by + ' on ' + $pick.writer + ' (v' + $pick.app_version + ')')
+            Write-Log ('Settings restored from the vault snapshot of ' + $pick.writer + ' (' + $pick.saved_utc + '); previous config kept as ' + $bk)
+            New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; backup = $bk }
+          }
+        }
+      }
       elseif ($method -eq 'GET' -and $path -eq '/api/vault/orphans') {
         # v11 R2 (surfaced on the Input tab in v11.1): files in the vault that
         # no tracking row points at - either the "file saved, row never
@@ -3594,7 +4087,9 @@ try {
         $ignored = @{}
         foreach ($r in @(Read-Store 'lb_vault_ignored')) { if ($r.file_path) { $ignored[[string]$r.file_path] = $r } }
         $cfg = Get-Config
-        $all = @(if (Test-Path -LiteralPath $EvidenceDir) { Get-ChildItem -LiteralPath $EvidenceDir -Recurse -File -ErrorAction SilentlyContinue })
+        # v12.2: <vault>\_vault is the project data, not documents
+        $dataPrefix = $EvidenceDir.TrimEnd('\') + '\_vault\'
+        $all = @(if (Test-Path -LiteralPath $EvidenceDir) { Get-ChildItem -LiteralPath $EvidenceDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { -not $_.FullName.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase) -and -not ($_.Name -like 'Project_Information*' -and $_.DirectoryName.TrimEnd('\') -eq $EvidenceDir.TrimEnd('\')) } })
         $orph = New-Object System.Collections.Generic.List[object]
         $ignoredCount = 0
         foreach ($f in $all) {
@@ -4539,7 +5034,9 @@ try {
         $file = Join-Path $EvidenceDir $relPath
         $full = [System.IO.Path]::GetFullPath($file)
         $vaultFull = [System.IO.Path]::GetFullPath($EvidenceDir)
-        if (-not $relPath -or -not $full.StartsWith($vaultFull, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        # v12.2: <vault>\_vault holds the project data (journals, settings), not evidence
+        $inDataDir = $full.StartsWith($vaultFull.TrimEnd('\') + '\_vault\', [StringComparison]::OrdinalIgnoreCase)
+        if (-not $relPath -or $inDataDir -or -not $full.StartsWith($vaultFull, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
           New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'evidence file not found' }
         } else {
           $viewExt = [System.IO.Path]::GetExtension($full).ToLowerInvariant()
@@ -4844,6 +5341,8 @@ try {
           # The short sleep gives the response time to actually leave the
           # socket before the listener that carries it goes away.
           Start-Sleep -Milliseconds 300
+          # v12.2: leave the readable Excel copy of the project data current
+          if ($script:InfoDirty) { [void](Update-InfoWorkbook -Force) }
           try { $listener.Stop() } catch { }
           try { $mutex.ReleaseMutex() } catch { }
           try { $mutex.Dispose() } catch { }
@@ -5375,6 +5874,9 @@ try {
       Write-Log ('Request failed: ' + $req.Url + ' — ' + $_.Exception.Message) 'ERROR'
       try { New-JsonResponse -Response $res -StatusCode 500 -Body @{ error = $_.Exception.Message } } catch { }
     }
+    # v12.2: after the response is out, bring the readable Excel copy of the
+    # vault's project data up to date if anything was written (throttled).
+    [void](Update-InfoWorkbook)
   }
 } finally {
   # Every step is guarded: on the /api/shutdown path the background runspace

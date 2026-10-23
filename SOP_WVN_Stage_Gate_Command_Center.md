@@ -247,6 +247,17 @@ instead, opening the same picker blank. Either way there is also:
 - **Not a deliverable** — dismiss it with a reason (a stray screenshot, a
   leftover draft). It will not be listed again.
 
+**Choices are saved together (v12.2).** Confirm, Categorize and Not a
+deliverable do not save at once and the list does not reload after each file —
+the row stays where it is, greyed, with what will happen ("will be filed as
+NPI-9944 / DWG") and an **Undo** button. A bar above the table counts the
+changes not saved yet. They are saved, one after another, when you press
+**Save changes**, when you move to another tab, sign out, switch vault or stop
+the server. **Discard** drops them all. If you refresh the page they are kept;
+if you close the tab with some pending the browser asks first. A file that
+cannot be saved (for example because someone else already filed it) stays
+marked in red with the reason.
+
 ### 5.5 Raise and resolve issues
 
 **Raise issue…** opens a form for description, owner, due date and severity.
@@ -395,6 +406,22 @@ work from any row.
   uploads only — files already in the vault are not moved
 - **All vaults** (v12) — the common vault and every personal vault, with owner
   and folder; open or archive any of them
+- **Project data in the vault** (v12.2) — what the vault itself holds: the
+  register, step progress, documents, approvals and issues are stored in the
+  vault folder (`_vault`), not in the app folder, and also written to
+  **`Project_Information.xlsx`** in the vault folder — a read-only Excel copy
+  anyone can open (**Open in Excel**; it is refreshed by itself a few seconds
+  after anything changes, or press **Update now**). The same card shows each
+  PC's journal and the settings last saved in the vault. **Replacing or
+  deleting the app folder:** install the new version, sign in as admin, set
+  Settings → Evidence vault location to the existing vault folder (Browse…) and
+  restart; every project, step and document appears at once. Then use
+  **Restore settings from the vault** (a banner offers it) to bring back the
+  processes, document types and folder structure. User passwords are not kept
+  in the vault — issue them again under Users and passwords
+- **Stop server** (v12.2) — the power button in the header stops the app's
+  server on this PC after asking; it first saves any unsaved Input-tab choices.
+  Start it again with the desktop icon
 - **Moderators** — who may assign work and sign out of sequence
 - **Templates** — blank company forms mapped to document types
 - **Pillars** — the stage-gate processes. NPI and ECN come built in; **Add pillar**
