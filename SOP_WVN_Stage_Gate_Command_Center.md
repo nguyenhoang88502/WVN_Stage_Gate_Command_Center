@@ -419,6 +419,12 @@ work from any row.
   **Restore settings from the vault** (a banner offers it) to bring back the
   processes, document types and folder structure. User passwords are not kept
   in the vault — issue them again under Users and passwords
+- **File version names** (v12.3) — a filed document is stored as
+  `<standard name>_v1`, `_v2` … (for example `PRF_3026452_3026452_PRF_v2.doc`): the number goes up each
+  time a different file is filed under the same name, and filing the identical file again just points to
+  the existing one. Older versions of the app added a code like `_82a06cd1` instead. In **Project data in
+  the vault → File names** the admin sees how many files still have such a code and can rename them to
+  versions in one click (oldest first; the records follow the files; nothing is deleted)
 - **Stop server** (v12.2) — the power button in the header stops the app's
   server on this PC after asking; it first saves any unsaved Input-tab choices.
   Start it again with the desktop icon

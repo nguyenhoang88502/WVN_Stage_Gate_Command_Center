@@ -1164,6 +1164,109 @@ function Get-VaultDataStatus {
   }
 }
 
+# ---- rename old hash-suffixed files to _v1, _v2 ... (v12.3) ----
+# v11 to v12.2 stored every file as <name>_<8 hex of its SHA-256>.<ext>. This
+# finds those files in the common vault and plans <name>_v1, <name>_v2 ... per
+# folder + name + extension, oldest first. A file only counts when the 8 hex
+# really are the start of its own SHA-256, so a name that merely ends in hex-like
+# letters is never touched. Files cited by the support-issue or meeting stores
+# are left alone (those stores are not updated here).
+function Get-HashSuffixPlan {
+  $vaultRoot = $EvidenceDir.TrimEnd('\')
+  $dataPrefix = $vaultRoot + '\_vault\'
+  $addRef = { param($map, $path, $row)
+    if (-not $path -or $path -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return }
+    try { $k = [System.IO.Path]::GetFullPath([string]$path).ToLowerInvariant(); if (-not $map.ContainsKey($k)) { $map[$k] = New-Object System.Collections.Generic.List[object] }; $map[$k].Add($row) } catch { }
+  }
+  $delRefs = @{}; $issRefs = @{}; $protect = @{}
+  foreach ($r in @(Read-Store 'lb_deliverables')) { & $addRef $delRefs ([string]$r.file_path) $r }
+  foreach ($r in @(Read-Store 'lb_issues')) { & $addRef $issRefs ([string]$r.evidence_path) $r }
+  foreach ($pair in @(@('lb_sp_issues', 'attachment_path'), @('lb_mwer', 'evidence_file'))) {
+    foreach ($r in @(Read-Store $pair[0])) { & $addRef $protect ([string]$r.($pair[1])) $r }
+  }
+  $ignoredRel = @{}
+  foreach ($r in @(Read-Store 'lb_vault_ignored')) { if ($r.file_path) { $ignoredRel[([string]$r.file_path).ToLowerInvariant()] = $r } }
+  $cands = New-Object System.Collections.Generic.List[object]
+  foreach ($f in @(Get-ChildItem -LiteralPath $EvidenceDir -Recurse -File -ErrorAction SilentlyContinue)) {
+    if ($f.FullName.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+    if ($f.Name -like 'Project_Information*' -and $f.DirectoryName.TrimEnd('\') -eq $vaultRoot) { continue }
+    $m = [regex]::Match($f.BaseName, '^(.+)_([0-9a-f]{8})$')
+    if (-not $m.Success) { continue }
+    $key = $f.FullName.ToLowerInvariant()
+    if ($protect.ContainsKey($key)) { continue }
+    $hex = $m.Groups[2].Value
+    $ok = $false; $when = ''
+    if ($delRefs.ContainsKey($key)) {
+      foreach ($row in $delRefs[$key]) {
+        if (([string]$row.sha256).StartsWith($hex)) { $ok = $true }
+        if (-not $when -or ([string]$row.uploaded_utc -and [string]$row.uploaded_utc -lt $when)) { $when = [string]$row.uploaded_utc }
+      }
+    }
+    if (-not $ok -and $f.Length -le 100MB) {
+      try { $ok = (Get-FileSha256Hex $f.FullName).StartsWith($hex) } catch { $ok = $false }
+    }
+    if (-not $ok) { continue }
+    if (-not $when) { $when = $f.CreationTimeUtc.ToString('o') }
+    $cands.Add(@{ file = $f; stem = $m.Groups[1].Value; ext = $f.Extension; dir = $f.DirectoryName; sort = ($when + '|' + $f.LastWriteTimeUtc.ToString('o') + '|' + $f.Name) })
+  }
+  $groups = @{}
+  foreach ($c in $cands) {
+    $gk = ($c.dir + '|' + $c.stem + '|' + $c.ext).ToLowerInvariant()
+    if (-not $groups.ContainsKey($gk)) { $groups[$gk] = New-Object System.Collections.Generic.List[object] }
+    $groups[$gk].Add($c)
+  }
+  $plan = New-Object System.Collections.Generic.List[object]
+  foreach ($gk in @($groups.Keys | Sort-Object)) {
+    $items = @($groups[$gk] | Sort-Object { $_.sort })
+    $first = $items[0]
+    $st = Get-RevisionState -Dir $first.dir -Stem $first.stem -Ext $first.ext -Sha '' -Length 0
+    $n = [int]$st.max
+    foreach ($c in $items) {
+      $n++
+      $new = Join-Path $c.dir ($c.stem + '_v' + $n + $c.ext)
+      $key = $c.file.FullName.ToLowerInvariant()
+      $plan.Add(@{
+        old = $c.file.FullName; new = $new
+        # .ToArray(), not @(): in Windows PowerShell 5.1 @() around a generic List can throw
+        delRows = $(if ($delRefs.ContainsKey($key)) { $delRefs[$key].ToArray() } else { @() })
+        issRows = $(if ($issRefs.ContainsKey($key)) { $issRefs[$key].ToArray() } else { @() })
+        ignored = $ignoredRel[($c.file.FullName.Substring($vaultRoot.Length).TrimStart('\')).ToLowerInvariant()]
+      })
+    }
+  }
+  return $plan.ToArray()
+}
+function Invoke-HashSuffixRename { param([string]$Actor)
+  $plan = @(Get-HashSuffixPlan)
+  $vaultRoot = $EvidenceDir.TrimEnd('\')
+  $renamed = 0; $skipped = 0; $errs = New-Object System.Collections.Generic.List[string]
+  foreach ($p in $plan) {
+    $moved = $false
+    try {
+      if (Test-Path -LiteralPath $p.new) { $skipped++; continue }
+      Move-Item -LiteralPath $p.old -Destination $p.new -ErrorAction Stop
+      $moved = $true
+      $newName = [System.IO.Path]::GetFileName($p.new)
+      foreach ($row in @($p.delRows)) {
+        [void](Set-StoreRow -Store 'lb_deliverables' -Row @{ deliverable_id = [string]$row.deliverable_id; file_name = $newName; file_path = $p.new } -KeyFields @('deliverable_id'))
+      }
+      foreach ($row in @($p.issRows)) {
+        [void](Set-StoreRow -Store 'lb_issues' -Row @{ issue_id = [string]$row.issue_id; evidence_path = $p.new } -KeyFields @('issue_id'))
+      }
+      if ($p.ignored) {
+        [void](Set-StoreRow -Store 'lb_vault_ignored' -Row @{ ignore_id = [string]$p.ignored.ignore_id; file_path = $p.new.Substring($vaultRoot.Length).TrimStart('\') } -KeyFields @('ignore_id'))
+      }
+      $renamed++
+    } catch {
+      $errs.Add([System.IO.Path]::GetFileName($p.old) + ': ' + $_.Exception.Message)
+      # a move that was not followed by its record update goes back
+      if ($moved -and (Test-Path -LiteralPath $p.new) -and -not (Test-Path -LiteralPath $p.old)) { try { Move-Item -LiteralPath $p.new -Destination $p.old } catch { } }
+    }
+  }
+  if ($renamed) { Add-Audit -User $Actor -Action 'Vault_Rename_Revisions' -ProjectId '' -ObjType 'Vault' -ObjId '' -From '' -To '' -Detail ('renamed=' + $renamed + ' skipped=' + $skipped + ' errors=' + $errs.Count) }
+  return @{ renamed = $renamed; skipped = $skipped; errors = $errs.ToArray() }
+}
+
 # ---- the same data as an Excel file anyone can open ----
 # The journals above are for the app; people open this. One workbook in the
 # vault root, rewritten (never edited by hand - changes made in it are not read
@@ -1535,6 +1638,49 @@ function Test-NamingRules {
   return $errs
 }
 
+# ---- v12.3 version names: <name>_v1.ext, <name>_v2.ext ... ---------------------
+function Get-FileSha256Hex { param([string]$Path)
+  $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+  $h = [System.Security.Cryptography.SHA256]::Create()
+  try { return ([BitConverter]::ToString($h.ComputeHash($fs))).Replace('-', '').ToLowerInvariant() }
+  finally { $h.Dispose(); $fs.Close() }
+}
+# What is already in $Dir under this name: the highest version number, and
+# whether one of those files (or the pre-v12.3 hash-suffixed name of the same
+# bytes) already holds exactly these bytes.
+function Get-RevisionState { param([string]$Dir, [string]$Stem, [string]$Ext, [string]$Sha, [long]$Length)
+  $max = 0
+  $rx = '^' + [regex]::Escape($Stem) + '_v(\d+)' + [regex]::Escape($Ext) + '$'
+  $legacy = ''
+  if ($Sha -and $Sha.Length -ge 8) { $legacy = $Stem + '_' + $Sha.Substring(0, 8) + $Ext }
+  if (Test-Path -LiteralPath $Dir) {
+    foreach ($f in [System.IO.Directory]::GetFiles($Dir)) {
+      $n = [System.IO.Path]::GetFileName($f)
+      $isRev = ($n -match $rx)
+      if ($isRev) { $k = [int64]$Matches[1]; if ($k -gt $max -and $k -lt 100000) { $max = [int]$k } }
+      if ($Sha -and ($isRev -or ($legacy -and $n -ieq $legacy))) {
+        if ((New-Object System.IO.FileInfo($f)).Length -eq $Length -and (Get-FileSha256Hex $f) -eq $Sha) {
+          return @{ duplicate = $true; path = $f; name = $n; max = $max }
+        }
+      }
+    }
+  }
+  return @{ duplicate = $false; path = ''; name = ''; max = $max }
+}
+# Creates <Stem>_v<n><Ext> for the first free n >= StartAt and returns its path.
+function Write-RevisionFile { param([string]$Dir, [string]$Stem, [string]$Ext, [byte[]]$Bytes, [int]$StartAt = 1)
+  if ($StartAt -lt 1) { $StartAt = 1 }
+  for ($n = $StartAt; $n -lt $StartAt + 200; $n++) {
+    $p = Join-Path $Dir ($Stem + '_v' + $n + $Ext)
+    try {
+      $fs = [System.IO.File]::Open($p, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+      try { $fs.Write($Bytes, 0, $Bytes.Length) } finally { $fs.Close() }
+      return $p
+    } catch [System.IO.IOException] { if (-not (Test-Path -LiteralPath $p)) { throw } }
+  }
+  throw ('No free version number for ' + $Stem + $Ext + ' in ' + $Dir)
+}
+
 function Save-Evidence {
   param([string]$DocType, [string]$Family, [string]$PartId, [string]$FileName, [byte[]]$Bytes,
         # v12: folder levels already resolved from the admin's folder
@@ -1558,37 +1704,26 @@ function Save-Evidence {
 
   $safeFile = Get-SafeName $FileName
   $ext = [System.IO.Path]::GetExtension($safeFile)
-  $base = [System.IO.Path]::GetFileNameWithoutExtension($safeFile)
-  $destPath = Join-Path $destDir $safeFile
+  $stem = [System.IO.Path]::GetFileNameWithoutExtension($safeFile)
 
   $sha = [System.Security.Cryptography.SHA256]::Create()
   $newHash = ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant()
   $sha.Dispose()
 
-  # v11: the stored name ends in the first 8 hex of the file's SHA-256. On a
-  # OneDrive-synced vault two PCs can file the same document (same standard
-  # name) inside one sync window without seeing each other's file; without
-  # the suffix OneDrive renames one of them and that PC's row points at the
-  # other PC's bytes. Content-addressed names cannot collide, and identical
-  # bytes still land on the identical name (a duplicate, not a new file).
-  $safeFile = $base + '_' + $newHash.Substring(0, 8) + $ext
-  $base = [System.IO.Path]::GetFileNameWithoutExtension($safeFile)
-  $destPath = Join-Path $destDir $safeFile
-
-  $duplicate = $false
-  if (Test-Path -LiteralPath $destPath) {
-    $existingBytes = [System.IO.File]::ReadAllBytes($destPath)
-    $sha2 = [System.Security.Cryptography.SHA256]::Create()
-    $existingHash = ([BitConverter]::ToString($sha2.ComputeHash($existingBytes))).Replace('-', '').ToLowerInvariant()
-    $sha2.Dispose()
-    if ($existingHash -eq $newHash) { $duplicate = $true }
-    else {
-      $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-      $safeFile = $base + '_' + $stamp + $ext
-      $destPath = Join-Path $destDir $safeFile
-    }
+  # v12.3: the stored name ends in a version, <name>_v1, <name>_v2 ... (v11 to
+  # v12.2 appended 8 hex of the SHA-256, which nobody can read). Byte-identical
+  # content already filed under this name is a duplicate, not a new version.
+  # The file is created with CreateNew, so two uploads racing for the same
+  # number can never overwrite each other: the loser takes the next one. Two
+  # PCs inside one OneDrive sync window can still pick the same number for
+  # different files - OneDrive then keeps both, one as a conflict copy.
+  $state = Get-RevisionState -Dir $destDir -Stem $stem -Ext $ext -Sha $newHash -Length $Bytes.Length
+  $duplicate = [bool]$state.duplicate
+  if ($duplicate) { $destPath = [string]$state.path; $safeFile = [string]$state.name }
+  else {
+    $destPath = Write-RevisionFile -Dir $destDir -Stem $stem -Ext $ext -Bytes $Bytes -StartAt ([int]$state.max + 1)
+    $safeFile = [System.IO.Path]::GetFileName($destPath)
   }
-  if (-not $duplicate) { [System.IO.File]::WriteAllBytes($destPath, $Bytes) }
 
   # v2.1: the absolute path is what a user pastes into Explorer, so that is what
   # gets stored; the vault-relative one is only for display.
@@ -3755,7 +3890,7 @@ function Invoke-VaultApi {
     $shaAlg = [System.Security.Cryptography.SHA256]::Create()
     try { $sha = ([BitConverter]::ToString($shaAlg.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() } finally { $shaAlg.Dispose() }
     # Keep the name the user gave the file. Only when a DIFFERENT file of the
-    # same name is already there does the new one get a short content suffix.
+    # same name is already there does the new one become <name>_v2, _v3 ...
     $name = $original
     $dest = Join-Path $destDir $name
     $duplicate = $false
@@ -3764,8 +3899,13 @@ function Invoke-VaultApi {
       try { $have = ([BitConverter]::ToString($shaAlg.ComputeHash([System.IO.File]::ReadAllBytes($dest)))).Replace('-', '').ToLowerInvariant() } finally { $shaAlg.Dispose() }
       if ($have -eq $sha) { $duplicate = $true }
       else {
-        $name = [System.IO.Path]::GetFileNameWithoutExtension($original) + '_' + $sha.Substring(0, 8) + [System.IO.Path]::GetExtension($original)
-        $dest = Join-Path $destDir $name
+        $stem0 = [System.IO.Path]::GetFileNameWithoutExtension($original); $ext0 = [System.IO.Path]::GetExtension($original)
+        $stRev = Get-RevisionState -Dir $destDir -Stem $stem0 -Ext $ext0 -Sha $sha -Length $bytes.Length
+        if ($stRev.duplicate) { $duplicate = $true; $name = [string]$stRev.name; $dest = [string]$stRev.path }
+        else {
+          $dest = Write-RevisionFile -Dir $destDir -Stem $stem0 -Ext $ext0 -Bytes $bytes -StartAt ([Math]::Max(2, [int]$stRev.max + 1))
+          $name = [System.IO.Path]::GetFileName($dest)
+        }
       }
     }
     if (-not $duplicate -and -not (Test-Path -LiteralPath $dest)) { [System.IO.File]::WriteAllBytes($dest, $bytes) }
@@ -4067,6 +4207,23 @@ try {
           }
         }
       }
+      elseif (($method -eq 'GET' -or $method -eq 'POST') -and $path -eq '/api/vault/rename-revisions') {
+        # v12.3: files that older versions stored as <name>_<8 hex> become
+        # <name>_v1, _v2 ... GET previews, POST renames (admin only; the file
+        # records are updated with the files).
+        $body = $null
+        if ($method -eq 'POST') { $body = Read-JsonBody -Request $req }
+        if (-not (Test-AdminName $script:ReqUser)) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can rename vault files.' }
+        } elseif ($method -eq 'GET') {
+          $plan = @(Get-HashSuffixPlan)
+          $vr = $EvidenceDir.TrimEnd('\')
+          $sample = @($plan | Select-Object -First 12 | ForEach-Object { @{ from = $_.old.Substring($vr.Length).TrimStart('\'); to = $_.new.Substring($vr.Length).TrimStart('\'); tracked = (@($_.delRows).Count -gt 0) } })
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ files = $plan.Count; sample = $sample }
+        } else {
+          New-JsonResponse -Response $res -StatusCode 200 -Body (Invoke-HashSuffixRename -Actor $script:ReqUser)
+        }
+      }
       elseif ($method -eq 'GET' -and $path -eq '/api/vault/orphans') {
         # v11 R2 (surfaced on the Input tab in v11.1): files in the vault that
         # no tracking row points at - either the "file saved, row never
@@ -4157,15 +4314,22 @@ try {
                            -OriginalName $finalName -Category $partId -ProjectId $projectId -Config (Get-Config)
               $ext = [System.IO.Path]::GetExtension($stdName)
               $stem = [System.IO.Path]::GetFileNameWithoutExtension($stdName)
-              $finalName = (Get-SafeName $stem) + '_' + $sha.Substring(0, [Math]::Min(8, $sha.Length)) + $ext
-              $newPath = Join-Path (Split-Path -Parent $srcPath) $finalName
-              if ($newPath -ne $srcPath) {
-                if (Test-Path -LiteralPath $newPath) {
-                  New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = "A file named '$finalName' already exists there - resolve that by hand first." }
-                  $finalPath = $null
-                } else {
-                  Move-Item -LiteralPath $srcPath -Destination $newPath
-                  $finalPath = $newPath
+              # v12.3: <name>_v<N>, the next free version in this folder (a file
+              # already carrying exactly that kind of name stays as it is)
+              $stem2 = Get-SafeName $stem
+              $dirOf = Split-Path -Parent $srcPath
+              $stRev = Get-RevisionState -Dir $dirOf -Stem $stem2 -Ext $ext -Sha $sha -Length (New-Object System.IO.FileInfo($srcPath)).Length
+              if ($stRev.duplicate -and ([string]$stRev.path) -ieq $srcPath) {
+                $finalName = [System.IO.Path]::GetFileName($srcPath)
+              } else {
+                $finalPath = $null
+                for ($vn = [int]$stRev.max + 1; $vn -lt [int]$stRev.max + 200 -and -not $finalPath; $vn++) {
+                  $cand = Join-Path $dirOf ($stem2 + '_v' + $vn + $ext)
+                  if (Test-Path -LiteralPath $cand) { continue }
+                  try { Move-Item -LiteralPath $srcPath -Destination $cand -ErrorAction Stop; $finalPath = $cand; $finalName = [System.IO.Path]::GetFileName($cand) } catch { }
+                }
+                if (-not $finalPath) {
+                  New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = 'Could not give the file a free version name - resolve that by hand first.' }
                 }
               }
             }
@@ -4323,13 +4487,20 @@ try {
                   if (-not $oldPath -or -not (Test-Path -LiteralPath $oldPath)) { $skipped++; continue }
                   $ext = [System.IO.Path]::GetExtension($oldPath)
                   $stem = [System.IO.Path]::GetFileNameWithoutExtension($newStd)
-                  # the content-hash suffix Save-Evidence appended stays - it is
-                  # what keeps two PCs filing the same bytes from colliding, and
-                  # a rename is not a new upload so nothing re-derives it.
-                  $suffix = if ($r.sha256) { '_' + $r.sha256.Substring(0, [Math]::Min(8, $r.sha256.Length)) } else { '' }
-                  $finalName = (Get-SafeName $stem) + $suffix + $ext
-                  if ($finalName -eq [System.IO.Path]::GetFileName($oldPath)) { $skipped++; continue }
-                  $newPath = Join-Path (Split-Path -Parent $oldPath) $finalName
+                  # v12.3: the new name ends in a version (_v<revision>, or the
+                  # next free number when that one is taken). It used to keep
+                  # the 8-hex content hash instead.
+                  $stem2 = Get-SafeName $stem
+                  $dirOf = Split-Path -Parent $oldPath
+                  $curName = [System.IO.Path]::GetFileName($oldPath)
+                  if ($curName -imatch ('^' + [regex]::Escape($stem2) + '_v\d+' + [regex]::Escape($ext) + '$')) { $skipped++; continue }
+                  $want = 0; [void][int]::TryParse([string]$r.revision_no, [ref]$want)
+                  if ($want -lt 1) { $want = 1 }
+                  $stRev = Get-RevisionState -Dir $dirOf -Stem $stem2 -Ext $ext -Sha '' -Length 0
+                  $vn = $want
+                  if (Test-Path -LiteralPath (Join-Path $dirOf ($stem2 + '_v' + $vn + $ext))) { $vn = [int]$stRev.max + 1 }
+                  $finalName = $stem2 + '_v' + $vn + $ext
+                  $newPath = Join-Path $dirOf $finalName
                   if (Test-Path -LiteralPath $newPath) { $skipped++; continue }
                   Move-Item -LiteralPath $oldPath -Destination $newPath
                   Set-StoreRow -Store 'lb_deliverables' -Row @{ deliverable_id = [string]$r.deliverable_id; file_name = $finalName; file_path = $newPath } -KeyFields @('deliverable_id') | Out-Null

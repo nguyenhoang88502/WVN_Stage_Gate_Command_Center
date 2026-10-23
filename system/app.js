@@ -577,6 +577,32 @@ function vaultDataCard(root) {
     x.appendChild(openB); x.appendChild(upB);
     out.appendChild(x);
     out.appendChild(el('p', 'note', 'Read-only copy, refreshed a few seconds after anything changes. Sheets: Projects, Progress by step, Documents, Approvals, Issues, Bypasses, Comments, Activity log. Edits made in the file are not read back.'));
+    // v12.3: old files named <name>_<8 hex> -> <name>_v1, _v2 ...
+    if (isAdmin()) {
+      const fnBox = el('div'); fnBox.style.cssText = 'margin:10px 0';
+      fnBox.innerHTML = '<p class="note">Checking file names…</p>';
+      out.appendChild(fnBox);
+      API.get('/api/vault/rename-revisions').then(function(rr) {
+        fnBox.innerHTML = '';
+        if (!rr.files) { fnBox.appendChild(el('p', 'note', 'File names: none of the stored files ends in an old hash code. New files are named <name>_v1, _v2 …')); return; }
+        const head = el('p'); head.innerHTML = '<b>' + rr.files + ' file' + (rr.files === 1 ? '' : 's') + '</b> still end in a hash code from an older version (for example <code>' + esc(rr.sample[0].from.split('\\').pop()) + '</code>). They can be renamed to versions — oldest first — and their records are updated with them.';
+        fnBox.appendChild(head);
+        const ul = el('div', 'note'); ul.style.cssText = 'font-family:monospace;white-space:pre-wrap;margin:4px 0';
+        ul.textContent = rr.sample.map(function(s) { return s.from + '  →  ' + s.to.split('\\').pop(); }).join('\n') + (rr.files > rr.sample.length ? '\n… and ' + (rr.files - rr.sample.length) + ' more' : '');
+        fnBox.appendChild(ul);
+        const go = el('button', 'primary sm', 'Rename to _v1, _v2 …');
+        go.onclick = async function() {
+          if (!confirm('Rename ' + rr.files + ' file(s) in the vault to version names? Nothing is deleted; the file records are updated to the new names. Close anything that has these files open first.')) return;
+          go.disabled = true;
+          try {
+            const res = await API.post('/api/vault/rename-revisions', {});
+            alert('Renamed ' + res.renamed + (res.skipped ? ', skipped ' + res.skipped : '') + (res.errors.length ? '\n\nProblems:\n' + res.errors.join('\n') : '') + '.');
+            await redrawAfterWrite();
+          } catch (e) { alert(e.message); go.disabled = false; }
+        };
+        fnBox.appendChild(go);
+      }).catch(function(e) { fnBox.innerHTML = '<p class="note" style="color:var(--bad)">Could not check the file names: ' + esc(e.message) + '</p>'; });
+    }
     const labels = { lb_projects: 'Projects', lb_gates: 'Step records', lb_deliverables: 'Document records', lb_approvals: 'Approvals', lb_issues: 'Issues', lb_audit: 'Activity log entries' };
     const chips = el('div'); chips.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin:6px 0';
     Object.keys(labels).forEach(function(k) { chips.innerHTML += '<span class="badge bg-secondary">' + esc(labels[k]) + ': ' + (d.stores[k] >= 0 ? d.stores[k] : '?') + '</span>'; });

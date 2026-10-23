@@ -95,7 +95,7 @@ $proj = $d.tracking.lb_projects[0]
 $pid0 = $proj.project_id; $sk = 'TEST-S1'; $doc = 'PFMEA'
 $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('revision one'))
 $up1 = Post '/api/upload' @{ fileName = 'pfmea.xlsx'; contentBase64 = $b64; docType = $doc; family = $proj.family; wvnId = ''; wnbId = ''; description = 'PFMEA'; partId = '' }
-Check 'T2 stored file name carries the SHA-256 suffix' ($up1.fileName -match ('_' + $up1.sha256.Substring(0, 8) + '\.xlsx$')) $up1.fileName
+Check 'T2 stored file name ends in a version (v12.3), not a hash' ($up1.fileName -match '_v1\.xlsx$') $up1.fileName
 Check 'T2 file landed in the vault' (Test-Path -LiteralPath $up1.path)
 $r1 = Post '/api/action' @{ store = 'lb_deliverables'; row = @{ project_id = $pid0; step_key = $sk; doc_code = $doc; file_name = $up1.fileName; file_path = $up1.path; sha256 = $up1.sha256; status = 'Filed'; uploaded_by = 'alice'; uploaded_utc = '2026-09-18T01:00:00.000Z'; kind = 'file' } }
 $b64b = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('revision two'))

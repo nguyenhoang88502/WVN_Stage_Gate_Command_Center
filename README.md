@@ -198,7 +198,8 @@ both keep their change, and on the same field the later edit wins. Record IDs ca
 (`DEL-0082-3FA`) so two PCs never mint the same one; a record created by an upsert (a gate row, a claim)
 gets an ID derived from its natural key, so two PCs creating "the same" row offline merge instead of
 duplicating. Paths to vault files are stored vault-relative and resolved on each PC, and stored file
-names end in the first 8 hex of their SHA-256 so two PCs can never collide on a name.
+names end in a version (`_v1`, `_v2` ... since v12.3; v11 to v12.2 used 8 hex of the SHA-256) so a new file never
+overwrites an older one - it is created with CreateNew and takes the next free number.
 
 Nothing is written to `config.json` at startup any more (the deployment path and vault location are
 worked out per PC at runtime). Each PC writes its own log, `system\logs\launcher_<PC>_<user>.log`.
@@ -635,6 +636,20 @@ teams.**
 ## 13. Version history
 
 Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
+
+### v12.3 version names (2026-10-23)
+
+- **Stored file names end in `_v1`, `_v2` ...** instead of 8 hex of the SHA-256 (`PRF_3026452_3026452_PRF_82a06cd1.doc` becomes
+  `PRF_3026452_3026452_PRF_v1.doc`). Byte-identical content already filed under that name (or under an old hash-suffixed
+  name) is still a duplicate; different content takes the next free number. Applies to uploads, categorized stray files,
+  the naming-standard rename and personal vaults (`_v2`, `_v3` only when a different file of that name exists).
+  Two PCs filing the same name inside one OneDrive sync window can still pick the same number; OneDrive then keeps both
+  (one as a conflict copy).
+- **Settings -> Project data in the vault -> File names** (admin): finds files that still end in an old hash code - only
+  when the 8 hex really are the start of the file's own SHA-256 - and renames them to versions, oldest first per folder and
+  name, updating the document records, issue evidence paths and "not a deliverable" records with them. `GET/POST
+  /api/vault/rename-revisions`. Files cited by support-issue or meeting records are left alone.
+- Test: `tests\v12_3\api_revision_names.js`.
 
 ### v12.2 vault data (2026-10-23)
 

@@ -84,7 +84,7 @@ const readJson = f => JSON.parse(fs.readFileSync(f, 'utf8').replace(/^﻿/, ''))
   check('the structure is written to config.json', readJson(cfgPath).deployment_defaults.evidence_folder_pattern === '[ProjectID]\\[Process] docs\\[DocType]\\[PartID]', readJson(cfgPath).deployment_defaults.evidence_folder_pattern);
   const b64 = Buffer.from('hello v12 ' + Date.now()).toString('base64');
   r = await hoang.post('/api/upload', { fileName: 'note.txt', contentBase64: b64, docType: 'DWG', family: '9611', partId: 'Blade', projectId: 'NPI-9611', stepKey: 'NPI-2', keepOriginalName: true });
-  check('an upload follows the new structure', r.s === 200 && /^NPI-9611\\NPI docs\\DWG\\Blade\\note_[0-9a-f]{8}\.txt$/.test(r.j.relPath), r.j && r.j.relPath);
+  check('an upload follows the new structure', r.s === 200 && /^NPI-9611\\NPI docs\\DWG\\Blade\\note_v1\.txt$/.test(r.j.relPath), r.j && r.j.relPath);
   r = await hoang.post('/api/upload', { fileName: 'note2.txt', contentBase64: b64, docType: 'BOM', family: '9611', partId: '', projectId: 'NPI-9611', keepOriginalName: true });
   check('a blank level is dropped', r.s === 200 && /^NPI-9611\\NPI docs\\BOM\\note2_/.test(r.j.relPath), r.j && r.j.relPath);
   r = await hoang.get('/api/vault/orphans'); const og = (r.j.orphans || []).find(o => /Blade\\note_/.test(o.path));
@@ -136,7 +136,7 @@ const readJson = f => JSON.parse(fs.readFileSync(f, 'utf8').replace(/^﻿/, ''))
   r = await hoang.post('/api/vaults/' + vid + '/upload', { project_id: 'P-001', step_index: 0, code: 'A3', fileName: 'A3 báo cáo.txt', contentBase64: b64 });
   check('the same file twice is one entry', r.s === 200 && r.j.duplicate === true && r.j.projects[0].steps[0].docs[0].files.length === 1, r.j.projects[0].steps[0].docs[0]);
   r = await hoang.post('/api/vaults/' + vid + '/upload', { project_id: 'P-001', step_index: 0, code: 'A3', fileName: 'A3 báo cáo.txt', contentBase64: Buffer.from('different').toString('base64') });
-  check('a different file with the same name is kept apart', r.s === 200 && /A3 báo cáo_[0-9a-f]{8}\.txt$/.test(r.j.rel_path) && r.j.projects[0].steps[0].docs[0].files.length === 2, r.j.rel_path);
+  check('a different file with the same name is kept apart', r.s === 200 && /A3 báo cáo_v2\.txt$/.test(r.j.rel_path) && r.j.projects[0].steps[0].docs[0].files.length === 2, r.j.rel_path);
   r = await hoang.post('/api/vaults/' + vid + '/upload', { project_id: 'P-001', step_index: 0, code: 'PHOTO', fileName: 'x.txt', contentBase64: b64 }); check('a document type the step does not expect is refused', r.s === 400, r.j);
   const fileUrl = '/api/vaults/' + vid + '/file?path=' + encodeURIComponent(rel);
   r = await hoang.get(fileUrl); check('the owner can open the file', r.s === 200 && /text\/plain/.test(r.ct), [r.s, r.ct]);

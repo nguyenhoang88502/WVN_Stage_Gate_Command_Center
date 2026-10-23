@@ -164,7 +164,7 @@ async function post(p, body) {
 
     /* ---------------- keep-original-name upload -------------------------- */
     const upKeep = await post('/api/upload', { fileName: 'Weird Name (final) v2.PDF', contentBase64: b64('keep me'), docType: 'PFMEA', family: 'TEST1', keepOriginalName: true });
-    check('keep-name: skips the naming standard and just sanitises the given name', /^Weird Name \(final\) v2_[0-9a-f]{8}\.PDF$/.test(upKeep.body.fileName), upKeep.body.fileName);
+    check('keep-name: skips the naming standard and just sanitises the given name', /^Weird Name \(final\) v2_v1\.PDF$/.test(upKeep.body.fileName), upKeep.body.fileName);
     await post('/api/deliverables/batch', {
       user: 'admin', rows: [{ project_id: projectId, step_key: stepKey, doc_code: 'PFMEA', file_name: upKeep.body.fileName, file_path: upKeep.body.path, sha256: upKeep.body.sha256, status: 'Filed', uploaded_by: 'admin', uploaded_utc: new Date().toISOString(), kind: 'file' }]
     });
