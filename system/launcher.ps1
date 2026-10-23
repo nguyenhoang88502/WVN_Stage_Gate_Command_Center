@@ -1315,7 +1315,7 @@ function Update-InfoWorkbook { param([switch]$Force)
     foreach ($pair in @(
       @('What this is', 'The project register, progress by step, documents, approvals and issues of this vault, as of the time below. The app keeps this file up to date by itself a few seconds after anything changes.'),
       @('Do not edit', 'This is a read-only copy for reading, filtering and printing. Changes made here are NOT read back and are overwritten at the next update. To change data, use the Stage Gate Command Center.'),
-      @('Vault', $EvidenceDir),
+      @('Vault', ([System.IO.Path]::GetFileName($EvidenceDir.TrimEnd('\')) + ' (this folder)')),
       @('Updated', ([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss') + ' (local)  /  ' + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC')),
       @('Rows per sheet', $counts),
       @('File paths', 'Document paths are relative to the vault folder.'),
