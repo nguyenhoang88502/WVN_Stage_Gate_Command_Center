@@ -73,6 +73,9 @@ Write-Host "Staging to $StageDir ..."
   'v12.css',
   'v12-shared.js',
   'launcher.ps1',
+  # v12.1: hidden start/stop (no console window) and the app icon
+  'Start-CommandCenter.ps1',
+  'Stop-CommandCenter.ps1',
   'Stop_WVN_NPI_Command_Center.cmd'
 ) | ForEach-Object {
   $src = Join-Path $ScriptDir $_
@@ -115,6 +118,14 @@ if (Test-Path -LiteralPath $VendorSrc) {
   Write-Host "  system\vendor\ (Tabler assets)"
 }
 else { Write-Warning "  MISSING: system\vendor — packaged app.html will load with no styling" }
+
+# v12.1: the app icon - the desktop shortcut and the browser tab both use it.
+$AssetsSrc = Join-Path $ScriptDir 'assets'
+if (Test-Path -LiteralPath $AssetsSrc) {
+  Copy-Item -LiteralPath $AssetsSrc -Destination (Join-Path $StageDir 'system\assets') -Recurse
+  Write-Host "  system\assets\ (app icon)"
+}
+else { Write-Warning "  MISSING: system\assets — the desktop shortcut will have a generic icon" }
 
 # --- 2. Sanitise config.json — clear machine-specific paths ---
 Write-Host ""

@@ -16,3 +16,4 @@ system/logs/launcher_*.log
 
 # v12: password hashes and the optional recovery key - never committed, never bundled
 system/auth/
+system/logs/start_*.log

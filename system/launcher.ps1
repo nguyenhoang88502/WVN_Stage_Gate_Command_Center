@@ -3462,6 +3462,11 @@ try {
         $ext = [System.IO.Path]::GetExtension($file)
         New-FileResponse -Response $res -Path $file -ContentType $MimeTypes[$ext]
       }
+      # v12.1: the app icon (the same file the desktop shortcut uses), as the
+      # browser-tab icon. Open without a session - the login page shows it too.
+      elseif ($method -eq 'GET' -and $path -eq '/favicon.ico') {
+        New-FileResponse -Response $res -Path (Join-Path $SystemDir 'assets\wvn_stage_gate.ico') -ContentType 'image/x-icon'
+      }
       # Vendored Tabler assets (v3.0) — narrow allowlist, same pattern as the
       # styles.css/app.js route above, not a generic static-file server. Only
       # the two files index.html actually references are reachable.

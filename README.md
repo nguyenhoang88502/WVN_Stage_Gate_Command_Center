@@ -68,15 +68,33 @@ the audit log.
 
 ## 2. How to launch
 
-1. Double-click `Open_WVN_NPI_Command_Center.cmd`. It unblocks the folder (in case it was downloaded
-   as a zip) and starts `system\launcher.ps1` minimized.
-2. The launcher opens your default browser to `http://localhost:8080/` once it is actually listening.
-3. **First launch only**, if `config.json`'s `system_info.deployment_path` is empty, a native folder
-   dialog asks where the tool lives — cancel it to accept the current folder. On every later launch the
-   launcher re-derives its own location automatically and self-heals `deployment_path` if the folder was
-   moved (e.g. copied to a different machine); you're never asked again.
-4. Leave the minimized PowerShell window running — closing it stops the server. Multiple people on the
-   same network can point their browser at the host machine's `http://<hostname>:8080/` at once.
+**First time on a PC** (from the synced SharePoint folder): double-click `Open_WVN_NPI_Command_Center.cmd`.
+Its window only flashes for a moment. It hands over to `system\Start-CommandCenter.ps1`, which:
+
+1. clears the "downloaded from the internet" mark on the folder (a zip download),
+2. creates a desktop shortcut **WVN Stage Gate Command Center** for this PC, pointing at wherever OneDrive
+   synced the folder here, with the app's icon (`system\assets\wvn_stage_gate.ico`),
+3. starts the server; the browser opens at `http://localhost:8080/` once it is listening.
+
+**Every time after:** start from the desktop shortcut. Nothing appears but the browser.
+
+**No terminal window at any point (v12.1).** Everything runs inside `conhost.exe --headless`, a console host
+with no window. `-WindowStyle Hidden` alone was not enough: on Windows 11 the default terminal is Windows
+Terminal, which takes the console over before PowerShell can hide it, so a terminal window stayed open as
+long as the server ran. Without `conhost.exe` (Windows older than 10 1809) the scripts fall back to a hidden,
+minimised PowerShell. If the server cannot start (ports 8080–8082 all busy, a broken file), a message box
+says so; details go to `system\logs\start_<PC>_<user>.log` and `launcher_<PC>_<user>.log`.
+
+**The shortcut:**
+- It is written relative to `%USERPROFILE%` when the folder is inside the user's profile, the usual case for a
+  OneDrive-synced library. A Desktop that OneDrive backs up to the person's other PCs therefore carries a
+  shortcut that still works there.
+- Running the `.cmd` again repairs a shortcut that no longer matches (the folder moved, a new version) and
+  leaves an identical one untouched. Starting from the shortcut never rewrites it.
+- A user who deletes it gets it back by running the `.cmd` once.
+
+**Stopping:** `Stop_Server.cmd` (no window either; a message box confirms). Each PC runs its own server on
+loopback.
 
 If port 8080 is taken, the launcher tries 8081 and 8082 automatically and opens the browser to whichever
 one it bound.
@@ -477,7 +495,9 @@ is replaced by the session's user.
 |---|---|---|
 | CMD window flashes and closes | Folder was downloaded and Windows is blocking it | `Get-ChildItem -Path "<folder>" -Recurse \| Unblock-File` |
 | Browser can't reach `localhost:8080` | Launcher didn't start, or a firewall prompt is waiting | Check `system\logs\launcher.log`; allow PowerShell through the firewall if prompted |
-| "Could not reach the local server" in the page | The PowerShell window was closed | Relaunch the CMD file |
+| "Could not reach the local server" in the page | The server was stopped (Stop_Server, sign-out of Windows, restart) | Start it again from the desktop shortcut |
+| Double-clicking the shortcut does nothing | The folder moved, or the server failed silently before it could show a message | Run `Open_WVN_NPI_Command_Center.cmd` once (repairs the shortcut); read `system\logs\start_*.log` |
+| No desktop shortcut on a new PC | The app was never started there from the `.cmd`, or the user deleted it | Run `Open_WVN_NPI_Command_Center.cmd` once |
 | Approve button stays disabled | Missing evidence, an open issue, warehouse not cleared, or an earlier gate still open | Hover it — the tooltip says which |
 | A step you expected is not listed | The project's change type excludes it | The banner at the top of the tab names every excluded step and why |
 | Evidence filed before v2.1 seems to have vanished | It was migrated out of `system\evidence\` | Look in `..\NPI_EPM_Documents_Control\`; the move is logged in `launcher.log` |
@@ -598,6 +618,22 @@ teams.**
 ## 13. Version history
 
 Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
+
+### v12.1 launcher (2026-10-16)
+
+**Desktop shortcut per PC, and no terminal window anywhere.**
+
+- `Open_WVN_NPI_Command_Center.cmd` now only hands over to `system\Start-CommandCenter.ps1` in a headless
+  console host (`conhost.exe --headless`) and closes. On a PC's first run that script creates the desktop
+  shortcut for the local synced path (§2); the shortcut starts the same script headless.
+- `Stop_Server.cmd` / `system\Stop_WVN_NPI_Command_Center.cmd` run `system\Stop-CommandCenter.ps1` the same
+  way and report with a message box instead of a console that waits for a key.
+- App icon `system\assets\wvn_stage_gate.ico` (16–256 px), also served as the browser favicon. The artwork
+  was generated with OpenAI's image model and cut into icon sizes locally.
+- `config.json` `system_info.version` stays 12.0.0: the live copy of that file holds real settings and was
+  not touched by this change.
+- Test: `tests\v12_1\test_silent_launch.ps1` runs the real `.cmd` and the real shortcut on a copy and checks
+  that no console or Windows Terminal window appears.
 
 ### v12.0.0 (2026-10-13)
 

@@ -41,13 +41,23 @@ their own synced copy.
 1. The admin unzips `WVN_Stage_Gate_Command_Center_ModelOnly_v11.zip` into the
    shared library folder (with `NPI_EPM_Documents_Control` beside it for the
    vault). Every user syncs that library.
-2. If Windows flagged the download, run `WVN_Unblock_Files.cmd` once.
-3. Double-click **`Open_WVN_NPI_Command_Center.cmd`**. A PowerShell window opens
-   (leave it running) and the browser launches at `http://localhost:8080`.
-4. To stop, run **`Stop_Server.cmd`** or close the PowerShell window.
+2. **First time on each PC:** open the synced folder and double-click
+   **`Open_WVN_NPI_Command_Center.cmd`**. A window flashes for a moment and
+   closes; the browser opens at `http://localhost:8080`, and a shortcut
+   **WVN Stage Gate Command Center** (factory icon with a green tick) appears on
+   the desktop, pointing at this PC's copy of the folder.
+3. **Every day after:** start the app from that desktop shortcut. No terminal
+   window opens — the server runs in the background.
+4. To stop, run **`Stop_Server.cmd`** in the folder; a message confirms it.
+   Signing out of Windows or restarting the PC also stops it.
+
+If the shortcut stops working (the folder was moved) or was deleted, run
+`Open_WVN_NPI_Command_Center.cmd` once again — it puts it right.
 
 **Health check:** the pill at the top right must read `connected`. If it reads
-`offline`, the PowerShell window has closed or another process holds port 8080.
+`offline`, the server has been stopped, or another process holds port 8080 —
+start it again from the shortcut. If nothing at all happens, a message box
+usually explains why; otherwise look in `system\logs\start_*.log`.
 
 ### Upgrading to v11 (admin, once)
 
@@ -454,7 +464,8 @@ never deletes a file from disk.
 | "No password has been issued for this account yet" | The admin has not issued your first password | Ask the admin: Settings → Users and passwords → Issue password |
 | "This account is locked" | Five wrong passwords | Wait 5 minutes, or ask the admin for a reset |
 | Admin password forgotten | — | Stop the app, delete `system\auth\u_admin_*.json`, start it: a new temporary admin password is written to `system\auth\ADMIN_FIRST_LOGIN.txt` |
-| `offline` in the top bar | Server window closed, or port 8080 taken | Re-run `Open_WVN_NPI_Command_Center.cmd` |
+| `offline` in the top bar | Server stopped, or port 8080 taken | Start it again from the desktop shortcut |
+| No desktop shortcut, or it does nothing | First run never done on this PC, shortcut deleted, or the folder moved | Run `Open_WVN_NPI_Command_Center.cmd` once |
 | No dropzones on a step | The task is owned by someone else | Claim it, ask the owner, or have an admin reassign |
 | Approve button greyed out | Missing docs, open issue, or a prior step still open | Hover it — the tooltip names the blocker |
 | Uploads fail | Vault path wrong or not writable | Check Settings → evidence vault path |
