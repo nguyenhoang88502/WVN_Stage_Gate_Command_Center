@@ -194,7 +194,9 @@ function toWeek(value) {
   window.fetch = async function(input, init) {
     const r = await realFetch(input, init);
     const url = typeof input === 'string' ? input : (input && input.url) || '';
-    if (r.status === 401 && url.indexOf('/api/') !== -1 && url.indexOf('/api/auth/') === -1) location.href = '/login.html';
+    // Not while signing out: a request still in flight then would start a
+    // second navigation to the login page and abort the first one.
+    if (r.status === 401 && url.indexOf('/api/') !== -1 && url.indexOf('/api/auth/') === -1 && !window._signingOut) location.href = '/login.html';
     return r;
   };
 })();
@@ -539,6 +541,94 @@ async function checkVaultRestoreBanner() {
   const pb = document.querySelector('.page-body');
   if (pb) pb.insertBefore(b, pb.firstChild);
 }
+/* Settings -> "Projects" (admin, v12.4): every project, with Delete and, for a
+   deleted one, Restore. Deleting is soft on purpose: the project gets status
+   "Deleted" and disappears from every tab, report and the Excel copy, but its
+   records and its documents stay in the vault and the admin can bring it back
+   here. The reason is asked for and kept in the activity log. */
+function projectsAdminCard(root) {
+  const card = el('div', 'card');
+  const hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'Projects')); card.appendChild(hdr);
+  const body = el('div', 'card-body');
+  body.appendChild(el('p', 'note', 'Delete a project registered by mistake or no longer needed. It disappears from every tab, report and Project_Information.xlsx; its documents stay in the vault and it can be restored here. Only the admin sees this list.'));
+  const bar = el('div', 'filters');
+  const q = el('input'); q.type = 'search'; q.placeholder = 'Filter by project, model, status…'; q.id = 'projAdminFilter'; q.style.minWidth = '260px';
+  const showDel = el('label', 'note'); showDel.style.margin = '0';
+  showDel.innerHTML = '<input type="checkbox" id="projAdminShowDel"> show deleted projects';
+  bar.appendChild(q); bar.appendChild(showDel);
+  body.appendChild(bar);
+  const out = el('div', 'scroll'); out.innerHTML = '<p class="note" style="padding:8px">Loading…</p>';
+  body.appendChild(out);
+  card.appendChild(body); root.appendChild(card);
+  let all = [];
+  const fmtW = w => esc(w || '—');
+  const draw = function() {
+    const term = q.value.trim().toLowerCase();
+    const withDel = $('#projAdminShowDel', bar).checked;
+    const rows = all.filter(function(p) {
+      if (p.status === 'Deleted' && !withDel) return false;
+      if (!term) return true;
+      return [p.project_id, p.family, p.prod_family, p.process, p.status, p.created_by].join(' ').toLowerCase().indexOf(term) >= 0;
+    });
+    const deletedN = all.filter(p => p.status === 'Deleted').length;
+    $('#projAdminShowDel', bar).parentNode.lastChild.textContent = ' show deleted projects (' + deletedN + ')';
+    if (!rows.length) { out.innerHTML = '<p class="note" style="padding:8px">No project matches.</p>'; return; }
+    const t = el('table', 'proj-admin-table');
+    t.innerHTML = '<thead><tr><th>Project</th><th>Model</th><th>Status</th><th>PRF → target</th><th class="num">Documents</th><th class="num">Open issues</th><th>Registered</th><th></th></tr></thead>';
+    const tb = el('tbody');
+    rows.forEach(function(p) {
+      const tr = el('tr');
+      const del = p.status === 'Deleted';
+      if (del) tr.className = 'proj-deleted';
+      tr.innerHTML = '<td><b>' + esc(p.project_id) + '</b><div class="note" style="margin:0">' + esc(p.process) + (p.prod_family ? ' · ' + esc(p.prod_family) : '') + '</div></td>' +
+        '<td>' + esc(p.family || '—') + '</td>' +
+        '<td>' + (del ? '<span class="badge bg-danger-lt">Deleted</span><div class="note" style="margin:0">' + esc(fmtStamp(p.deleted_utc)) + ' by ' + esc(p.deleted_by || '?') + (p.deleted_reason ? ' — ' + esc(p.deleted_reason) : '') + '</div>' : '<span class="badge bg-secondary">' + esc(p.status || 'Active') + '</span>') + '</td>' +
+        '<td>' + fmtW(p.prf_date) + ' → ' + fmtW(p.target_date) + '</td>' +
+        '<td class="num">' + p.documents + '</td><td class="num">' + (p.open_issues || '') + '</td>' +
+        '<td>' + esc(fmtStamp(p.created_utc)) + '<div class="note" style="margin:0">' + esc(p.created_by || '') + '</div></td><td></td>';
+      const acts = tr.lastChild; acts.style.whiteSpace = 'nowrap';
+      if (del) {
+        const rb = el('button', 'sm', 'Restore');
+        rb.onclick = async function() {
+          rb.disabled = true;
+          try { await API.post('/api/projects/restore', { project_id: p.project_id }); await redrawAfterWrite(); }
+          catch (e) { alert(e.message); rb.disabled = false; }
+        };
+        acts.appendChild(rb);
+      } else {
+        const db = el('button', 'sm danger', 'Delete');
+        db.onclick = function() { deleteProjectModal(p); };
+        acts.appendChild(db);
+      }
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    out.innerHTML = ''; out.appendChild(t);
+  };
+  q.oninput = draw;
+  $('#projAdminShowDel', bar).onchange = draw;
+  API.get('/api/projects/admin').then(function(d) { all = d.projects || []; draw(); })
+    .catch(function(e) { out.innerHTML = '<p class="note" style="padding:8px;color:var(--bad)">Could not load the projects: ' + esc(e.message) + '</p>'; });
+}
+function deleteProjectModal(p) {
+  formModal({
+    title: 'Delete project ' + p.project_id + '?',
+    html: '<p class="note">The project disappears from every tab, report and the Excel copy. ' +
+      (p.documents ? 'Its ' + p.documents + ' document' + (p.documents === 1 ? '' : 's') + ' stay in the vault folder. ' : '') +
+      'You can restore it later from this list.</p>' +
+      '<label class="fld" style="margin-top:10px"><span>Reason (kept in the activity log)</span><input name="reason" style="width:100%" maxlength="300"></label>' +
+      '<label class="fld" style="margin-top:10px"><span>Type <b>' + esc(p.project_id) + '</b> to confirm</span><input name="confirm" style="width:100%" autocomplete="off"></label>',
+    ok: 'Delete project', danger: true,
+    onOk: async function(box) {
+      const reason = box.elements.reason.value.trim();
+      if (!reason) throw new Error('Give a reason.');
+      if (box.elements.confirm.value.trim().toUpperCase() !== p.project_id.toUpperCase()) throw new Error('Type the project ID exactly to confirm.');
+      await API.post('/api/projects/delete', { project_id: p.project_id, reason: reason });
+      await redrawAfterWrite();
+    }
+  });
+}
+
 /* Settings -> "Project data in the vault": what the vault holds, the readable
    Excel copy, and the settings snapshot. */
 function vaultDataCard(root) {
@@ -1318,6 +1408,8 @@ function tempPasswordModal(username, pw, issued) {
 }
 async function signOut() {
   try { await flushOrphanStage(); } catch (e) { }
+  window._signingOut = true;
+  stopAutoReload();
   try { await API.post('/api/auth/logout', {}); } catch (e) { }
   location.href = '/login.html';
 }
@@ -3201,6 +3293,13 @@ function ganttPicLabel(pid, stepKey) {
   return lead.name + (extra > 0 ? ' +' + extra : '');
 }
 
+/* v12.4 Gantt look: a time-window switch (all / 12 / 6 months around today),
+   a legend, a progress column, the planned window as a soft pill with the
+   stage blocks inside it, a target diamond, a labelled "today" marker, arrows
+   for a project that lies outside the window, and the projects that cannot be
+   drawn yet (no PRF / target week) listed under the chart instead of silently
+   missing. Class names the tests read are unchanged. */
+let ganttRange = (function() { try { return localStorage.getItem('wvn_gantt_range') || 'all'; } catch (e) { return 'all'; } })();
 function buildLiveGanttSection() {
   function filteredByProcess(process) {
     // dashFamFilter et al. are multi-select arrays, not scalars — see the
@@ -3225,12 +3324,37 @@ function buildLiveGanttSection() {
   pillarDefs().forEach(function(pd) { projects = projects.concat(filteredByProcess(pd.id)); });
 
   var wrap = el('div', 'card gantt-live-wrap');
-  var hdr = el('div', 'card-header'); hdr.appendChild(el('h3', 'card-title', 'Project Schedule (Gantt) — Planned vs Actual'));
+  var hdr = el('div', 'card-header gantt-head');
+  hdr.appendChild(el('h3', 'card-title', 'Project Schedule (Gantt) — Planned vs Actual'));
+  var rangeBox = el('div', 'gantt-range');
+  rangeBox.setAttribute('role', 'group');
+  rangeBox.setAttribute('aria-label', 'Time window');
+  [['all', 'All'], ['12m', '12 months'], ['6m', '6 months']].forEach(function(opt) {
+    var b = el('button', opt[0] === ganttRange ? 'on' : '', opt[1]);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', opt[0] === ganttRange ? 'true' : 'false');
+    b.onclick = function() {
+      ganttRange = opt[0];
+      try { localStorage.setItem('wvn_gantt_range', ganttRange); } catch (e) { }
+      var host = wrap.parentNode;
+      if (host) host.replaceChild(buildLiveGanttSection(), wrap);
+    };
+    rangeBox.appendChild(b);
+  });
+  hdr.appendChild(rangeBox);
   wrap.appendChild(hdr);
   var body = el('div', 'card-body');
   wrap.appendChild(body);
 
-  var pairs = [];
+  var legend = el('div', 'gantt-legend');
+  [['complete', 'Complete'], ['in_progress', 'In progress'], ['not_started', 'Not started'], ['late', 'Late'], ['bypassed', 'Bypassed']].forEach(function(l) {
+    legend.insertAdjacentHTML('beforeend', '<span><i class="gantt-key gantt-stage-seg-' + l[0] + '"></i>' + l[1] + '</span>');
+  });
+  legend.insertAdjacentHTML('beforeend', '<span><i class="gantt-key gantt-key-planned"></i>Planned window</span>' +
+    '<span><i class="gantt-key gantt-key-target"></i>Target</span><span><i class="gantt-key gantt-key-today"></i>' + esc(i18n('today')) + '</span>');
+  body.appendChild(legend);
+
+  var pairs = [], undated = [];
   projects.forEach(function(p) {
     var sw = toWeek(p.prf_date);
     var ew = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
@@ -3242,36 +3366,56 @@ function buildLiveGanttSection() {
       var allSteps = stepsOf(proc, p);
       var gated = allSteps.filter(function(s) { return isGated(proc, s); });
       pairs.push({
-        project: p, startDate: sd, endDate: ed,
+        project: p, startDate: sd, endDate: ed, targetWeek: ew,
         steps: allSteps, gatedSteps: gated,
-        // Resolved here rather than at render time: the axis has to be sized
-        // against these before the first row is drawn (see below), and the
-        // rows would otherwise recompute them a second time.
         stepRanges: segmentDateRanges(proc, p, allSteps, sd, ed),
         gatedRanges: segmentDateRanges(proc, p, gated, sd, ed)
       });
+    } else {
+      undated.push(p);
     }
   });
+
+  function undatedNote() {
+    if (!undated.length) return null;
+    var box = el('div', 'gantt-undated');
+    box.appendChild(el('span', 'gantt-undated-title', 'Not on the chart yet — no PRF / target week (' + undated.length + '):'));
+    undated.forEach(function(p) {
+      var c = el('button', 'gantt-chip', p.project_id);
+      c.type = 'button';
+      c.title = 'Open ' + p.project_id + ' to set its PRF / target week';
+      c.onclick = function() { var s = stepsOf(p.process, p)[0]; if (s) openDrawer(p, s, null); };
+      box.appendChild(c);
+    });
+    return box;
+  }
+
   if (!pairs.length) {
     body.appendChild(el('p', 'note', 'No projects with valid PRF/target weeks to chart' + (projects.length ? '' : ' for the current filters') + '.'));
+    var un0 = undatedNote(); if (un0) body.appendChild(un0);
     return wrap;
   }
 
-  /* The axis has to span the segments, not just the projects. A gate's
-     target_week can sit past its project's own target date — that is exactly
-     what a slipped gate looks like — and sizing the axis on project dates
-     alone pushed those segments off the right edge, where they rendered as a
-     step row with no bar at all. */
-  var bounds = [];
-  pairs.forEach(function(x) {
-    bounds.push(x.startDate.getTime(), x.endDate.getTime());
-    x.stepRanges.concat(x.gatedRanges).forEach(function(r) {
-      bounds.push(r.start.getTime(), r.end.getTime());
+  /* The axis spans the segments, not just the projects: a gate's target week
+     can sit past its project's own target — that is what a slipped gate looks
+     like. In the 12 / 6 month views the axis is a fixed window around today
+     instead, and whatever falls outside it is clipped by the track. */
+  var DAY = 86400000;
+  var minT, maxT;
+  if (ganttRange === '12m' || ganttRange === '6m') {
+    var nowT = new Date(); nowT.setHours(0, 0, 0, 0);
+    var before = ganttRange === '12m' ? 13 : 8, after = ganttRange === '12m' ? 39 : 18;
+    minT = nowT.getTime() - before * 7 * DAY;
+    maxT = nowT.getTime() + after * 7 * DAY;
+  } else {
+    var bounds = [];
+    pairs.forEach(function(x) {
+      bounds.push(x.startDate.getTime(), x.endDate.getTime());
+      x.stepRanges.concat(x.gatedRanges).forEach(function(r) { bounds.push(r.start.getTime(), r.end.getTime()); });
     });
-  });
-  var pad = 7 * 86400000;
-  var minT = Math.min.apply(null, bounds) - pad;
-  var maxT = Math.max.apply(null, bounds) + pad;
+    minT = Math.min.apply(null, bounds) - 7 * DAY;
+    maxT = Math.max.apply(null, bounds) + 7 * DAY;
+  }
   var spanMs = maxT - minT;
 
   var weekSet = new Map();
@@ -3286,6 +3430,7 @@ function buildLiveGanttSection() {
   weekEntries.sort(function(a, b) { return a.date - b.date; });
 
   function pctForDate(d) { return (d.getTime() - minT) / spanMs * 100; }
+  function clampPct(v) { return Math.max(0, Math.min(100, v)); }
 
   var todayPct = pctForDate(new Date());
   var showTodayLine = todayPct >= 0 && todayPct <= 100;
@@ -3294,88 +3439,80 @@ function buildLiveGanttSection() {
     l.style.left = todayPct + '%';
     return l;
   }
-  // A meta cell whose full text survives as a tooltip — every one of these
-  // columns is narrower than its longest possible value and ellipsises.
   function meta(text, cls) {
     var c = el('div', 'gantt-live-meta-cell' + (cls ? ' ' + cls : ''), text);
     if (text && text !== '—') c.title = text;
     return c;
   }
 
-  // Time maps linearly onto the track, so every ISO week is the same width.
-  var weekPct = 7 * 86400000 / spanMs * 100;
+  var weekPct = 7 * DAY / spanMs * 100;
   var firstWeekPct = weekEntries.length ? pctForDate(weekEntries[0].date) : 0;
 
   var grid = el('div', 'gantt-live-grid');
   body.appendChild(grid);
 
-  /* Vertical week rules, so a bar's end can be read off against a week
-     without tracing back up to the header. Drawn as one repeating-gradient
-     layer per track (see .gantt-live-track::before) rather than a div per
-     week per row: a 60-week portfolio with a dozen projects expanded would
-     otherwise allocate well over a thousand nodes, rebuilt from scratch on
-     every 15s auto-reload. The gradient box starts at the first week
-     boundary rather than at 0, so its period has to be re-expressed as a
-     fraction of that shortened box, not of the track. */
-  var ruleStep = Math.max(1, Math.ceil(1.7 / weekPct));   // keep rules ~1.7%+ apart
+  /* Vertical week rules as one repeating gradient per track (see
+     .gantt-live-track::before) — a div per week per row would allocate
+     thousands of nodes on every 15 s auto-reload. */
+  var ruleStep = Math.max(1, Math.ceil(1.7 / weekPct));
   var ruleSpan = 100 - firstWeekPct;
-  grid.style.setProperty('--gantt-rule-offset', firstWeekPct + '%');
+  grid.style.setProperty('--gantt-rule-offset', Math.max(0, firstWeekPct) + '%');
   grid.style.setProperty('--gantt-rule-period',
     (ruleSpan > 0 ? weekPct * ruleStep / ruleSpan * 100 : 100) + '%');
 
-  /* Upper axis tier: month bands. The single-tier header wrote a full
-     "2026-W28" at every tick, and past ~15 weeks those collided into an
-     unreadable smear. Splitting the year out of the repeated part leaves the
-     lower tier only "W28" to fit. */
+  /* Upper axis tier: month bands (the year only where it changes) and the
+     labelled today marker. */
   var headTop = el('div', 'gantt-live-row gantt-live-header gantt-live-header-top');
-  ['Timeline', '', '', '', ''].forEach(function(h) { headTop.appendChild(meta(h)); });
+  ['', '', '', '', '', ''].forEach(function(h) { headTop.appendChild(meta(h)); });
   var trackBand = el('div', 'gantt-live-track gantt-live-track-band');
+  /* Band size follows the zoom: months when a month is wide enough to carry
+     its name (~640 px track assumed), else quarters, else years — over a
+     two-year portfolio every month label used to be clipped away. */
+  var monthPct = weekPct * 4.35;
+  var unit = monthPct * 6.4 >= 34 ? 'month' : (monthPct * 3 * 6.4 >= 40 ? 'quarter' : 'year');
   var bands = [];
   weekEntries.forEach(function(entry) {
     var y = entry.date.getFullYear(), m = entry.date.getMonth();
+    var k = unit === 'month' ? m : (unit === 'quarter' ? Math.floor(m / 3) : 0);
     var last = bands[bands.length - 1];
-    if (last && last.year === y && last.month === m) last.last = entry;
-    else bands.push({ year: y, month: m, first: entry, last: entry });
+    if (last && last.year === y && last.k === k) last.last = entry;
+    else bands.push({ year: y, k: k, month: m, first: entry, last: entry });
   });
   bands.forEach(function(g, i) {
-    var left = pctForDate(g.first.date);
-    var width = pctForDate(g.last.date) + weekPct - left;
-    var band = el('div', 'gantt-band');
+    var left = clampPct(pctForDate(g.first.date));
+    var right = clampPct(pctForDate(g.last.date) + weekPct);
+    var yearStart = unit === 'year' || g.k === 0;
+    var band = el('div', 'gantt-band' + (yearStart ? ' gantt-band-year' : ''));
     band.style.left = left + '%';
-    band.style.width = Math.max(0, width) + '%';
-    /* The year is a change-marker, not a repeated label — printing it on all
-       twelve bands both wastes the width and buries the one place it
-       actually tells you something. Clipping a month name to a glyph or two
-       reads as noise, so a band too narrow even for the short form keeps its
-       rule and drops its label; its tooltip still carries the full date. */
-    var showYear = i === 0 || g.month === 0;
-    band.textContent = width < 3.2 ? ''
-      : showYear ? MONTH_NAMES_SHORT[g.month] + ' ' + g.year
-      : MONTH_NAMES_SHORT[g.month];
-    band.title = MONTH_NAMES_SHORT[g.month] + ' ' + g.year;
+    band.style.width = Math.max(0, right - left) + '%';
+    var showYear = i === 0 || yearStart;
+    var name = unit === 'month' ? MONTH_NAMES_SHORT[g.month] : (unit === 'quarter' ? 'Q' + (g.k + 1) : '');
+    var label = unit === 'year' ? String(g.year) : (showYear ? name + (unit === 'month' ? " '" + String(g.year).slice(2) : ' ' + g.year) : name);
+    // a band too narrow for its label drops it (container query in CSS); the tooltip keeps the date
+    band.appendChild(el('span', 'gantt-band-label', label));
+    band.title = unit === 'month' ? MONTH_NAMES_SHORT[g.month] + ' ' + g.year : label + (showYear ? '' : ' ' + g.year);
     trackBand.appendChild(band);
   });
-  if (showTodayLine) trackBand.appendChild(todayLine());
+  if (showTodayLine) {
+    var pill = el('div', 'gantt-today-pill' + (todayPct > 94 ? ' at-right' : (todayPct < 6 ? ' at-left' : '')), i18n('today'));
+    pill.style.left = todayPct + '%';
+    pill.title = i18n('today') + ' (' + isoWeek(new Date()) + ')';
+    trackBand.appendChild(pill);
+  }
   headTop.appendChild(trackBand);
   grid.appendChild(headTop);
 
-  /* Lower axis tier: bare week numbers, centred in their own column rather
-     than pinned to the week's Monday, so a label sits over the span it
-     names. */
+  /* Lower axis tier: bare week numbers, centred over the week they name. */
   var headerRow = el('div', 'gantt-live-row gantt-live-header');
-  ['Project', 'Process / Dept', 'Owner PIC', 'Issues', 'Notes'].forEach(function(h) {
-    headerRow.appendChild(meta(h));
-  });
+  ['Project', 'Model · Process', 'Owner PIC', 'Progress', 'Issues', 'Notes'].forEach(function(h) { headerRow.appendChild(meta(h)); });
   var trackHeader = el('div', 'gantt-live-track gantt-live-track-header');
-  /* 4.6% is the narrowest slot a "W28" fits in with a readable gap at the
-     track's own minimum width (440px, from the grid template): 4.6% of that
-     is ~20px against a ~17.5px label. Anything tighter and the labels touch
-     on a 1280px screen, which is what the single-tier header did. */
   var labelInterval = Math.max(1, Math.ceil(4.6 / weekPct));
   weekEntries.forEach(function(entry, i) {
     if (i % labelInterval !== 0) return;
+    var mid = pctForDate(entry.date) + weekPct / 2;
+    if (mid < 1 || mid > 99) return;
     var lbl = el('span', 'gantt-week-label', 'W' + entry.week.slice(-2));
-    lbl.style.left = (pctForDate(entry.date) + weekPct / 2) + '%';
+    lbl.style.left = mid + '%';
     lbl.title = entry.week;
     trackHeader.appendChild(lbl);
   });
@@ -3387,17 +3524,31 @@ function buildLiveGanttSection() {
   headerRow.appendChild(trackHeader);
   grid.appendChild(headerRow);
 
-  pairs.forEach(function(pair) {
+  function edgeHint(track, pair) {
+    // a project entirely outside the current window says where it is
+    if (pair.endDate.getTime() < minT) {
+      track.appendChild(el('span', 'gantt-edge gantt-edge-left', '◀ ended ' + isoWeek(pair.endDate)));
+    } else if (pair.startDate.getTime() > maxT) {
+      track.appendChild(el('span', 'gantt-edge gantt-edge-right', 'starts ' + isoWeek(pair.startDate) + ' ▶'));
+    }
+  }
+  function statusOf(p, proc, s) {
+    var gs = gateState(p, proc, s);
+    var st = gs.status;
+    if (st !== 'COMPLETE' && st !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) st = 'LATE';
+    return { gs: gs, st: st };
+  }
+
+  pairs.forEach(function(pair, rowIdx) {
     var p = pair.project;
     var proc = p.process;
     var pr = progressOf(p);
     var openCount = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
       .filter(function(i) { return i.project_id === p.project_id && i.status !== 'Closed'; }).length;
     var commentCount = stepsOf(proc, p).reduce(function(sum, s) { return sum + cellNoteCount(p, stepKeyOf(proc, s)); }, 0);
-
     var expanded = !!ganttExpanded[p.project_id];
 
-    var row = el('div', 'gantt-live-row');
+    var row = el('div', 'gantt-live-row gantt-proj-row' + (expanded ? ' is-open' : ''));
     row.style.cursor = 'pointer';
     /* The project id stays the cell's only text — the toggle is icon-only so
        that reading a row's identity off .gantt-live-meta-cell:first-child
@@ -3407,15 +3558,11 @@ function buildLiveGanttSection() {
     toggle.type = 'button';
     toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     toggle.title = (expanded ? 'Hide' : 'Show') + ' the step breakdown for ' + p.project_id;
-    toggle.appendChild(icon(expanded ? 'chevron-down' : 'chevron-right'));
+    toggle.appendChild(icon('chevron-right'));
     toggle.onclick = function(e) {
-      // The row opens the drawer; without this the toggle would do both.
       e.stopPropagation();
       if (ganttExpanded[p.project_id]) delete ganttExpanded[p.project_id];
       else ganttExpanded[p.project_id] = true;
-      // Swap just this section rather than re-running show(): a full
-      // dashboard rebuild for a disclosure triangle throws away the user's
-      // scroll position and every other slicer-driven node on the page.
       var host = wrap.parentNode;
       if (host) host.replaceChild(buildLiveGanttSection(), wrap);
       else show(current, true);
@@ -3423,8 +3570,14 @@ function buildLiveGanttSection() {
     projCell.appendChild(toggle);
     projCell.appendChild(el('span', 'gantt-proj-id', p.project_id));
     row.appendChild(projCell);
-    row.appendChild(meta(proc));
+    var model = meta((p.family || '—') + ' · ' + proc, 'gantt-model');
+    model.title = (p.family || '') + (p.prod_family ? ' — ' + p.prod_family : '') + ' (' + proc + ')';
+    row.appendChild(model);
     row.appendChild(meta(p.market_manager || '—'));
+    var progCell = el('div', 'gantt-live-meta-cell gantt-progress-cell');
+    progCell.innerHTML = '<span class="gantt-progress"><i style="width:' + Math.max(0, Math.min(100, pr.pct)) + '%"></i></span><b>' + pr.pct + '%</b>';
+    progCell.title = pr.done + ' of ' + pr.total + ' gates done';
+    row.appendChild(progCell);
     var issuesCell = el('div', 'gantt-live-meta-cell');
     if (openCount) issuesCell.innerHTML = '<span class="matrix-issue-badge">' + iconHtml('alert-triangle') + ' ' + openCount + '</span>';
     row.appendChild(issuesCell);
@@ -3440,20 +3593,13 @@ function buildLiveGanttSection() {
     plannedBar.style.width = plannedWidth + '%';
     track.appendChild(plannedBar);
 
-    // One coloured block per gated step, positioned by per-gate target weeks
-    // (see segmentDateRanges) instead of equal-width division.
-    var gatedSteps = pair.gatedSteps;
-    var ranges = pair.gatedRanges;
-    gatedSteps.forEach(function(s, idx) {
-      var gs = gateState(p, proc, s);
-      var segStatus = gs.status;
-      if (segStatus !== 'COMPLETE' && segStatus !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) segStatus = 'LATE';
-      var r = ranges[idx];
+    pair.gatedSteps.forEach(function(s, idx) {
+      var so = statusOf(p, proc, s), gs = so.gs, segStatus = so.st;
+      var r = pair.gatedRanges[idx];
       var segLeft = pctForDate(r.start);
-      var segWidthPct = pctForDate(r.end) - segLeft;
       var seg = el('div', 'gantt-bar gantt-bar-actual gantt-stage-seg gantt-stage-seg-' + segStatus.toLowerCase());
       seg.style.left = segLeft + '%';
-      seg.style.width = Math.max(0.4, segWidthPct) + '%';
+      seg.style.width = Math.max(0.4, pctForDate(r.end) - segLeft) + '%';
       seg.appendChild(el('span', 'gantt-stage-label', 'S' + s.step_id));
       seg.title = p.project_id + ' — Step ' + s.step_id + ': ' + s.step_name + ' (S' + s.step_id + ')\n' +
         'Start: ' + isoWeek(r.start) + ' | End: ' + isoWeek(r.end) + '\n' +
@@ -3468,15 +3614,22 @@ function buildLiveGanttSection() {
         track.appendChild(sep);
       }
     });
+    var tgtPct = pctForDate(pair.endDate);
+    if (tgtPct >= 0 && tgtPct <= 100) {
+      var dia = el('div', 'gantt-milestone');
+      dia.style.left = tgtPct + '%';
+      dia.title = 'Target ' + pair.targetWeek + (p.target_date ? '' : ' (computed from the change type)');
+      track.appendChild(dia);
+    }
+    edgeHint(track, pair);
     if (showTodayLine) track.appendChild(todayLine());
 
     track.title = p.project_id + ' (' + proc + ')\n' +
-      'Planned: ' + toWeek(pair.startDate) + ' → ' + toWeek(pair.endDate) + '\n' +
+      'Planned: ' + isoWeek(pair.startDate) + ' → ' + isoWeek(pair.endDate) + '\n' +
       'Actual progress: ' + pr.pct + '% (' + pr.done + '/' + pr.total + ' gates)\n' +
       'Open issues: ' + openCount + ' · Comments: ' + commentCount;
     row.title = track.title;
     row.appendChild(track);
-
     row.onclick = function() {
       var target = firstIncompleteStepOf(p, proc) || stepsOf(proc, p)[0];
       if (target) openDrawer(p, target, null);
@@ -3485,20 +3638,12 @@ function buildLiveGanttSection() {
 
     if (!expanded) return;
 
-    /* One sub-row per step, each drawing its own bar on the shared time axis
-       instead of sharing the parent's single strip. Every applicable step,
-       not just the gated ones the parent segments: an ECN's non-gate steps
-       still have a schedule and a department, and dropping them would show a
-       12-step change as four rows. segmentDateRanges takes any step list —
-       steps with a target week anchor to it, the rest interpolate. */
-    var subSteps = pair.steps;
-    var subRanges = pair.stepRanges;
-    subSteps.forEach(function(s, idx) {
+    /* One sub-row per step on the shared time axis — every applicable step,
+       not only the gated ones the parent row segments. */
+    pair.steps.forEach(function(s, idx) {
       var sk = stepKeyOf(proc, s);
-      var gs = gateState(p, proc, s);
-      var st = gs.status;
-      if (st !== 'COMPLETE' && st !== 'BYPASSED' && isOverdueWeek(gs.gate && gs.gate.target_week, gs.done)) st = 'LATE';
-      var r = subRanges[idx];
+      var so = statusOf(p, proc, s), gs = so.gs, st = so.st;
+      var r = pair.stepRanges[idx];
       var stepIssues = ((TRK.lb_issues || []).concat(TRK.lb_sp_issues || []))
         .filter(function(i) { return i.project_id === p.project_id && i.step_key === sk && i.status !== 'Closed'; }).length;
       var stepNotes = cellNoteCount(p, sk);
@@ -3508,6 +3653,9 @@ function buildLiveGanttSection() {
       sub.appendChild(meta('Step ' + s.step_id + ': ' + s.step_name, 'gantt-sub-name'));
       sub.appendChild(meta(stepDeptOf(s)));
       sub.appendChild(meta(ganttPicLabel(p.project_id, sk)));
+      var docs = el('div', 'gantt-live-meta-cell gantt-sub-docs');
+      docs.textContent = gs.req.length ? (gs.req.length - gs.missing.length) + '/' + gs.req.length + ' docs' : '';
+      sub.appendChild(docs);
       var subIssues = el('div', 'gantt-live-meta-cell');
       if (stepIssues) subIssues.innerHTML = '<span class="matrix-issue-badge">' + iconHtml('alert-triangle') + ' ' + stepIssues + '</span>';
       sub.appendChild(subIssues);
@@ -3518,9 +3666,8 @@ function buildLiveGanttSection() {
       var subTrack = el('div', 'gantt-live-track gantt-sub-track');
       var subLeft = pctForDate(r.start);
       /* Colour comes from the same .gantt-stage-seg-<status> classes the
-         parent segments use, but the geometry class differs — the parent's
-         .gantt-stage-seg is what the segmentation tests count, and a sub-row
-         bar is not one of those segments. */
+         parent segments use; the geometry class differs because the tests
+         count .gantt-stage-seg as the parent's segments only. */
       var bar = el('div', 'gantt-bar gantt-sub-bar gantt-stage-seg-' + st.toLowerCase());
       bar.style.left = subLeft + '%';
       bar.style.width = Math.max(0.4, pctForDate(r.end) - subLeft) + '%';
@@ -3537,6 +3684,10 @@ function buildLiveGanttSection() {
       if (gs.stale) bar.classList.add('gantt-stale');
       bar.onclick = function(e) { e.stopPropagation(); openDrawer(p, s, null); };
       subTrack.appendChild(bar);
+      if (tw) {
+        var twPct = pctForDate(r.end);
+        if (twPct >= 0 && twPct <= 100) { var d2 = el('div', 'gantt-milestone gantt-milestone-sm'); d2.style.left = twPct + '%'; d2.title = 'Step target ' + tw; subTrack.appendChild(d2); }
+      }
       if (showTodayLine) subTrack.appendChild(todayLine());
       sub.appendChild(subTrack);
       sub.onclick = function() { openDrawer(p, s, null); };
@@ -3544,6 +3695,7 @@ function buildLiveGanttSection() {
     });
   });
 
+  var un = undatedNote(); if (un) body.appendChild(un);
   return wrap;
 }
 
@@ -8652,6 +8804,7 @@ function viewSettings(root) {
     }).catch(function(e) { avWrap.innerHTML = '<p class="note" style="padding:8px;color:var(--bad)">Could not load vaults: ' + esc(e.message) + '</p>'; });
   }
 
+  if (isAdmin()) projectsAdminCard(root);
   vaultDataCard(root);
 
   /* ---- evidence vault location ---- */

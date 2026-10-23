@@ -637,6 +637,21 @@ teams.**
 
 Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
 
+### v12.4 delete projects, new Gantt look (2026-10-23)
+
+- **Settings -> Projects** (admin): every project with its document and open-issue counts, a filter, **Delete** (reason
+  required, the project ID must be typed to confirm) and, under "show deleted", **Restore**. Deleting is soft: the project
+  gets status `Deleted` and `Read-Store` hides it with every row of every store that belongs to it (the activity log stays
+  complete), so it leaves every tab, report, the Vault search and `Project_Information.xlsx`; its documents stay in the vault
+  and are not reported as uncategorized (`Read-Store -IncludeDeleted` in the vault scans). Restore puts back the status it
+  had. `GET /api/projects/admin`, `POST /api/projects/delete`, `POST /api/projects/restore`.
+- **Dashboard Gantt redesign:** time-window switch (All / 12 months / 6 months around today), legend, Model and Progress
+  columns, the planned window drawn as a soft pill with the stage blocks inside, a target diamond (and per-step diamonds on
+  the step rows), a labelled Today marker, month / quarter / year bands chosen by zoom, "ended W.. / starts W.." hints for a
+  project outside the window, and the projects without PRF / target week listed under the chart. Class names the older
+  tests read are unchanged.
+- Test: `tests\v12_4\e2e_delete_gantt.js`.
+
 ### v12.3 version names (2026-10-23)
 
 - **Stored file names end in `_v1`, `_v2` ...** instead of 8 hex of the SHA-256 (`PRF_3026452_3026452_PRF_82a06cd1.doc` becomes

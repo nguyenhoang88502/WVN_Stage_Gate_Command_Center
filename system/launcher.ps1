@@ -803,12 +803,36 @@ function Set-DerivedRevisions { param($Rows)
 }
 
 # Reads a store as the merged view (same return shape as before v11).
-function Read-Store { param([string]$Store)
+# v12.4: a project the admin deleted (Settings -> Projects) keeps its records -
+# it only gets status 'Deleted' - and Read-Store hides it, with every row of
+# every store that belongs to it, from the whole app. The activity log is
+# history and stays complete. -IncludeDeleted is for the callers that must still
+# see those rows: the vault scans, which would otherwise call the deleted
+# project's documents "uncategorized".
+$script:DeletedCache = @{ sig = $null; ids = @{} }
+function Get-DeletedProjectIds {
+  $pm = Get-MergedStore 'lb_projects'
+  $sigNow = [string]$script:MergeCache['lb_projects'].sig
+  if ($script:DeletedCache.sig -ne $sigNow) {
+    $ids = @{}
+    foreach ($o in $pm.list) { if ([string]$o['status'] -eq 'Deleted') { $ids[[string]$o['project_id']] = $true } }
+    $script:DeletedCache = @{ sig = $sigNow; ids = $ids }
+  }
+  return $script:DeletedCache.ids
+}
+
+function Read-Store { param([string]$Store, [switch]$IncludeDeleted)
   $m = Get-MergedStore $Store
   $cols = $m.cols
   $pcols = $PathColumns[$Store]
+  $hidden = $null
+  if (-not $IncludeDeleted -and $Store -ne 'lb_audit' -and ($cols -contains 'project_id')) {
+    $hidden = Get-DeletedProjectIds
+    if (-not $hidden.Count) { $hidden = $null }
+  }
   $rows = New-Object System.Collections.Generic.List[object]
   foreach ($o in $m.list) {
+    if ($hidden -and $hidden.ContainsKey([string]$o['project_id'])) { continue }
     $x = [ordered]@{}
     foreach ($c in $cols) { $x[$c] = $o[$c] }
     if ($pcols) { foreach ($pc in $pcols) { $x[$pc] = ConvertFrom-StoredPath ([string]$x[$pc]) } }
@@ -1179,10 +1203,10 @@ function Get-HashSuffixPlan {
     try { $k = [System.IO.Path]::GetFullPath([string]$path).ToLowerInvariant(); if (-not $map.ContainsKey($k)) { $map[$k] = New-Object System.Collections.Generic.List[object] }; $map[$k].Add($row) } catch { }
   }
   $delRefs = @{}; $issRefs = @{}; $protect = @{}
-  foreach ($r in @(Read-Store 'lb_deliverables')) { & $addRef $delRefs ([string]$r.file_path) $r }
-  foreach ($r in @(Read-Store 'lb_issues')) { & $addRef $issRefs ([string]$r.evidence_path) $r }
+  foreach ($r in @(Read-Store 'lb_deliverables' -IncludeDeleted)) { & $addRef $delRefs ([string]$r.file_path) $r }
+  foreach ($r in @(Read-Store 'lb_issues' -IncludeDeleted)) { & $addRef $issRefs ([string]$r.evidence_path) $r }
   foreach ($pair in @(@('lb_sp_issues', 'attachment_path'), @('lb_mwer', 'evidence_file'))) {
-    foreach ($r in @(Read-Store $pair[0])) { & $addRef $protect ([string]$r.($pair[1])) $r }
+    foreach ($r in @(Read-Store $pair[0] -IncludeDeleted)) { & $addRef $protect ([string]$r.($pair[1])) $r }
   }
   $ignoredRel = @{}
   foreach ($r in @(Read-Store 'lb_vault_ignored')) { if ($r.file_path) { $ignoredRel[([string]$r.file_path).ToLowerInvariant()] = $r } }
@@ -4134,6 +4158,73 @@ try {
           New-JsonResponse -Response $res -StatusCode 200 -Body @{ results = $results.ToArray() }
         }
       }
+      elseif ($path -eq '/api/projects/admin' -or $path -eq '/api/projects/delete' -or $path -eq '/api/projects/restore') {
+        # v12.4: Settings -> Projects. The admin lists every project (deleted
+        # ones too), deletes one (soft: status 'Deleted', hidden everywhere by
+        # Read-Store, its documents stay in the vault) or brings it back.
+        $body = $null
+        if ($method -eq 'POST') { $body = Read-JsonBody -Request $req }
+        $actor = [string]$script:ReqUser
+        if (-not (Test-AdminName $actor)) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can manage projects here.' }
+        } elseif ($method -eq 'GET' -and $path -eq '/api/projects/admin') {
+          $docCount = @{}
+          foreach ($d in @(Read-Store 'lb_deliverables' -IncludeDeleted)) { if ($d.revision_no) { $k = [string]$d.project_id; $docCount[$k] = 1 + [int]$docCount[$k] } }
+          $issueCount = @{}
+          foreach ($i in @(Read-Store 'lb_issues' -IncludeDeleted)) { if ($i.status -ne 'Closed') { $k = [string]$i.project_id; $issueCount[$k] = 1 + [int]$issueCount[$k] } }
+          $lastDel = @{}
+          foreach ($a in @(Read-Store 'lb_audit')) {
+            if ($a.action -ne 'Delete_Project') { continue }
+            $k = [string]$a.project_id
+            if (-not $lastDel.ContainsKey($k) -or [string]$a.timestamp_utc -gt [string]$lastDel[$k].timestamp_utc) { $lastDel[$k] = $a }
+          }
+          $list = @(Read-Store 'lb_projects' -IncludeDeleted | ForEach-Object {
+            $k = [string]$_.project_id; $dl = $lastDel[$k]; $isDel = ([string]$_.status -eq 'Deleted')
+            @{
+              project_id = $k; process = [string]$_.process; family = [string]$_.family; prod_family = [string]$_.prod_family
+              status = [string]$_.status; prf_date = [string]$_.prf_date; target_date = [string]$_.target_date
+              created_by = [string]$_.created_by; created_utc = [string]$_.created_utc
+              documents = [int]$docCount[$k]; open_issues = [int]$issueCount[$k]
+              deleted_by = $(if ($isDel -and $dl) { [string]$dl.user } else { '' })
+              deleted_utc = $(if ($isDel -and $dl) { [string]$dl.timestamp_utc } else { '' })
+              deleted_reason = $(if ($isDel -and $dl) { [string]$dl.detail } else { '' })
+            }
+          })
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ projects = $list }
+        } elseif ($method -eq 'POST') {
+          $projectId = ([string]$body.project_id).Trim()
+          $proj = @(Read-Store 'lb_projects' -IncludeDeleted | Where-Object { [string]$_.project_id -eq $projectId }) | Select-Object -First 1
+          $now = [DateTime]::UtcNow.ToString('o')
+          if (-not $proj) {
+            New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = "Project '$projectId' not found." }
+          } elseif ($path -eq '/api/projects/delete') {
+            $reason = ([string]$body.reason).Trim()
+            if ([string]$proj.status -eq 'Deleted') { New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = 'That project is already deleted.' } }
+            elseif (-not $reason) { New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'Give a reason for deleting the project.' } }
+            else {
+              [void](Set-StoreRow -Store 'lb_projects' -Row @{ project_id = $projectId; status = 'Deleted'; updated_utc = $now } -KeyFields @('project_id'))
+              Add-Audit -User $actor -Action 'Delete_Project' -ProjectId $projectId -ObjType 'Project' -ObjId $projectId -From ([string]$proj.status) -To 'Deleted' -Detail $reason
+              Write-Log ('Project deleted by ' + $actor + ': ' + $projectId + ' - ' + $reason)
+              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; project_id = $projectId }
+            }
+          } else {
+            if ([string]$proj.status -ne 'Deleted') { New-JsonResponse -Response $res -StatusCode 409 -Body @{ error = 'That project is not deleted.' } }
+            else {
+              # back to the status it had when it was deleted
+              $was = ''
+              foreach ($a in @(Read-Store 'lb_audit')) {
+                if ($a.action -eq 'Delete_Project' -and [string]$a.project_id -eq $projectId) { $was = [string]$a.change_from }
+              }
+              if (-not $was -or $was -eq 'Deleted') { $was = 'Active' }
+              [void](Set-StoreRow -Store 'lb_projects' -Row @{ project_id = $projectId; status = $was; updated_utc = $now } -KeyFields @('project_id'))
+              Add-Audit -User $actor -Action 'Restore_Project' -ProjectId $projectId -ObjType 'Project' -ObjId $projectId -From 'Deleted' -To $was -Detail ''
+              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; project_id = $projectId; status = $was }
+            }
+          }
+        } else {
+          New-JsonResponse -Response $res -StatusCode 405 -Body @{ error = 'Method not allowed.' }
+        }
+      }
       elseif ($method -eq 'GET' -and $path -eq '/api/vault/data') {
         # v12.2: what the vault itself holds (project register, progress,
         # settings), for Settings -> Project data in the vault.
@@ -4236,7 +4327,8 @@ try {
         # a human looked at it and it is not a deliverable.
         $refs = @{}
         foreach ($pair in @(@('lb_deliverables', 'file_path'), @('lb_issues', 'evidence_path'), @('lb_sp_issues', 'attachment_path'), @('lb_mwer', 'evidence_file'))) {
-          foreach ($r in @(Read-Store $pair[0])) {
+          # -IncludeDeleted: a deleted project's documents are still its documents
+          foreach ($r in @(Read-Store $pair[0] -IncludeDeleted)) {
             $v = [string]$r.($pair[1])
             if ($v -and -not ($v -match '^[a-zA-Z][a-zA-Z0-9+.-]*://')) { try { $refs[[System.IO.Path]::GetFullPath((ConvertFrom-StoredPath $v))] = $true } catch { } }
           }

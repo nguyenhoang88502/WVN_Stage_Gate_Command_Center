@@ -120,6 +120,8 @@ function check(name, ok, detail) {
     check('"let the admin view passwords" can be switched on with the admin password', true);
     check('a user who has not signed in since has no viewable copy yet', /after next sign-in/.test(await rowOf('Hoang').innerText()));
 
+    // the table is filled by its own request; wait for it (v12.4 added another card loading at the same time)
+    await card('All vaults').locator('tbody tr').first().waitFor({ timeout: 15000 }).catch(() => { });
     check('the admin sees an "All vaults" card', await card('All vaults').locator('tbody tr').count() === 1);
     await page.locator('#userChip').click();
     await shot('06_user_menu');

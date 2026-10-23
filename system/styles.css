@@ -1216,116 +1216,189 @@ select option { color: #14202c; background: #ffffff; }
 .dz-note-input { flex: 1; height: 28px; min-height: 28px; font-size: 11px }
 
 /* -- live Dashboard Gantt (Section 5) — HTML/CSS bars, not the print SVG --
-   grid-template-columns is repeated identically on header + every row so
-   the metadata columns and the week-axis track stay aligned across rows. */
+   v12.4 look: header with a time-window switch, a legend, a progress column,
+   the planned window as a soft pill with the stage blocks inside it, a target
+   diamond and a labelled today marker. grid-template-columns is repeated on
+   the header, every row and every sub-row so all columns stay aligned. */
 .gantt-live-wrap { margin-top: var(--s5) }
-.gantt-live-grid { overflow-x: auto }
-/* Column 1 carries either a project id or "Step 4: Pilot Run Validation",
-   so it is sized for the step name; the two count columns hold a badge at
-   most. Repeated identically on the sub-rows so a step's cells stay aligned
-   under its parent's. */
+.gantt-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap }
+.gantt-range { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r2); overflow: hidden }
+.gantt-range button {
+  min-height: 0; height: 26px; padding: 0 12px; border: 0; border-radius: 0;
+  background: var(--panel); color: var(--ink2); font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.gantt-range button + button { border-left: 1px solid var(--line-strong) }
+.gantt-range button:hover { background: var(--soft) }
+.gantt-range button.on { background: var(--blue); color: #fff }
+.gantt-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
+  font-size: 11px; color: var(--muted); margin-bottom: var(--s3);
+}
+.gantt-legend span { display: inline-flex; align-items: center; gap: 6px }
+.gantt-key { display: inline-block; width: 18px; height: 10px; border-radius: 3px; position: static }
+.gantt-key-planned { background: var(--neutral2); border: 1px solid var(--line-strong) }
+.gantt-key-target { width: 9px; height: 9px; border-radius: 1px; background: var(--ink2); transform: rotate(45deg) }
+.gantt-key-today { width: 2px; height: 14px; border-radius: 0; background: var(--today-line) }
+
+.gantt-live-grid { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r2) }
+/* Column 1 carries either a project id or "Step 4: Pilot Run Validation". */
 .gantt-live-row, .gantt-sub-row {
   display: grid;
-  grid-template-columns: 184px 100px 108px 52px 52px minmax(440px, 1fr);
-  align-items: center; gap: 4px;
-  border-bottom: 1px solid var(--line); padding: 4px 0;
+  grid-template-columns: 178px 118px 128px 92px 48px 48px minmax(480px, 1fr);
+  align-items: center; column-gap: 8px;
+  border-bottom: 1px solid var(--line); padding: 0 10px; min-height: 38px;
 }
-.gantt-live-row:hover { background: var(--soft) }
-.gantt-live-header { border-bottom: 2px solid var(--line-strong); font-weight: 700; font-size: 11px; color: var(--ink2) }
-.gantt-live-meta-cell { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.gantt-live-track { position: relative; height: 24px }
-.gantt-live-track-header { height: 16px }
-.gantt-week-label { position: absolute; top: 0; font-size: 8.5px; color: var(--muted); transform: translateX(-50%); white-space: nowrap }
+.gantt-live-grid > :last-child { border-bottom: 0 }
+.gantt-proj-row:hover { background: var(--row-hover) }
+.gantt-proj-row.is-open { background: var(--blue2) }
+.gantt-live-header {
+  position: sticky; top: 0; z-index: 4; min-height: 26px;
+  background: var(--panel); font-weight: 700; font-size: 10.5px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .3px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.gantt-live-meta-cell { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink2) }
+.gantt-live-track { position: relative; height: 38px; overflow: hidden }
+.gantt-live-track-header { height: 22px; overflow: visible }
+.gantt-week-label {
+  position: absolute; top: 4px; font-size: 9.5px; font-weight: 600; color: var(--muted);
+  transform: translateX(-50%); white-space: nowrap; text-transform: none; letter-spacing: 0;
+}
 
-/* -- two-tier week axis (v10) -------------------------------------------
-   A single tier wrote the full "2026-W28" at every tick and the labels
-   overlapped into a smear past ~15 weeks. Months band the upper tier, bare
-   week numbers sit below, and the year survives in the band. */
-.gantt-live-header-top {
-  border-bottom: 1px solid var(--line);
-  font-weight: 700; font-size: 10px; color: var(--muted);
-}
-.gantt-live-track-band { height: 15px }
+/* -- two-tier week axis: months above, bare week numbers below ----------- */
+.gantt-live-header-top { min-height: 24px; border-bottom: 1px solid var(--line); top: 0 }
+.gantt-live-header-top + .gantt-live-header { top: 24px }
+.gantt-live-track-band { height: 24px; overflow: hidden }
 .gantt-band {
   position: absolute; top: 0; bottom: 0;
   border-left: 1px solid var(--line-strong);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 9.5px; font-weight: 700; color: var(--ink2);
-  letter-spacing: .2px; overflow: hidden; white-space: nowrap;
-  pointer-events: none;
+  display: flex; align-items: center; padding-left: 6px;
+  font-size: 10.5px; font-weight: 700; color: var(--ink2); text-transform: none; letter-spacing: 0;
+  overflow: hidden; white-space: nowrap; pointer-events: none;
+  container-type: inline-size;
+}
+.gantt-band-year { border-left: 2px solid var(--ink2) }
+.gantt-today-pill.at-right { transform: translateX(-100%) }
+.gantt-today-pill.at-left { transform: none }
+@container (max-width: 30px) { .gantt-band-label { display: none } }
+.gantt-today-pill {
+  position: absolute; top: 4px; transform: translateX(-50%); z-index: 5;
+  padding: 1px 6px; border-radius: 999px; background: var(--today-line); color: #fff;
+  font-size: 9.5px; font-weight: 700; text-transform: none; letter-spacing: 0; white-space: nowrap;
 }
 
-/* Vertical week rules through the header and every row, so a bar's end can
-   be read against a week without tracing back up to the axis. One gradient
-   layer per track rather than a div per week per row — see the comment in
-   buildLiveGanttSection for why. The custom properties are set on
-   .gantt-live-grid and inherit down; the fallbacks make the rules vanish
-   rather than mis-draw if that ever stops happening. */
+/* Vertical week rules through the header and every row — one gradient layer
+   per track, not a div per week per row. The custom properties are set on
+   .gantt-live-grid and inherit down. */
 .gantt-live-track::before {
   content: ''; position: absolute; top: 0; bottom: 0;
   left: var(--gantt-rule-offset, 0); right: 0;
   background-image: repeating-linear-gradient(to right,
     var(--line) 0, var(--line) 1px,
     transparent 1px, transparent var(--gantt-rule-period, 100%));
-  pointer-events: none; z-index: 0;
+  opacity: .7; pointer-events: none; z-index: 0;
 }
 
-/* -- per-step drill-down (v10) ------------------------------------------ */
-.gantt-proj-cell { display: flex; align-items: center; gap: 5px; min-width: 0 }
+/* -- project cell, model, progress ---------------------------------------- */
+.gantt-proj-cell { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 700; color: var(--ink) }
 .gantt-proj-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .gantt-expand {
-  flex: none; width: 17px; height: 17px; padding: 0;
+  flex: none; width: 20px; height: 20px; min-height: 0; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--line-strong); border-radius: var(--r1);
-  background: var(--panel); color: var(--ink2); cursor: pointer;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer;
+  transition: transform var(--t-fast, .12s) ease, background var(--t-fast, .12s) ease;
 }
-.gantt-expand:hover { background: var(--blue); border-color: var(--blue); color: #fff }
+.gantt-expand[aria-expanded="true"] { transform: rotate(90deg); color: var(--blue) }
+.gantt-expand:hover { background: var(--blue2); color: var(--blue) }
 .gantt-expand:focus-visible { outline: none; box-shadow: var(--focus-ring) }
-.gantt-expand .icon { width: 12px; height: 12px }
-.gantt-sub-row { background: var(--soft) }
-.gantt-sub-row:hover { background: var(--row-hover) }
-.gantt-sub-row .gantt-live-track { height: 20px }
-.gantt-sub-name { padding-left: 22px; color: var(--ink2) }
-.gantt-sub-bar {
-  top: 4px; height: 12px; box-sizing: border-box;
-  display: flex; align-items: center; justify-content: center;
-  overflow: hidden; cursor: pointer;
-}
-.gantt-sub-bar:hover { filter: brightness(1.15); outline: 1px solid var(--ink) }
-.gantt-bar {
-  position: absolute; top: 4px; height: 10px; border-radius: 3px;
-  min-width: 3px;
-}
-.gantt-bar-planned { background: var(--line-strong); top: 2px; height: 14px; opacity: .55 }
-.gantt-bar-actual { top: 5px; height: 8px }
+.gantt-expand .icon { width: 14px; height: 14px }
+.gantt-model { color: var(--muted) }
+.gantt-progress-cell { display: flex; align-items: center; gap: 6px }
+.gantt-progress { flex: 1; height: 6px; border-radius: 999px; background: var(--neutral2); overflow: hidden; min-width: 30px }
+.gantt-progress i { display: block; height: 100%; border-radius: 999px; background: var(--good) }
+.gantt-progress-cell b { font-size: 11px; color: var(--ink2); min-width: 30px; text-align: right }
 
-/* -- Gantt stage segmentation (v8.0 Section 4) — one block per gated step -- */
-.gantt-stage-seg {
-  height: 14px; top: 2px; border: none; box-sizing: border-box;
+/* -- per-step drill-down --------------------------------------------------- */
+.gantt-sub-row { background: var(--soft); min-height: 30px }
+.gantt-sub-row:hover { background: var(--row-hover) }
+.gantt-sub-row .gantt-live-track { height: 30px }
+.gantt-sub-name { padding-left: 26px; color: var(--ink2); font-size: 11.5px }
+.gantt-sub-docs { font-size: 11px; color: var(--muted) }
+.gantt-sub-bar {
+  top: 9px; height: 12px; box-sizing: border-box; border-radius: 3px;
   display: flex; align-items: center; justify-content: center;
-  overflow: hidden; cursor: pointer;
+  overflow: hidden; cursor: pointer; container-type: inline-size;
+}
+.gantt-sub-bar:hover { filter: brightness(1.08); box-shadow: 0 0 0 1px var(--ink2) }
+
+/* -- bars ------------------------------------------------------------------ */
+.gantt-bar { position: absolute; top: 10px; height: 18px; border-radius: 5px; min-width: 3px; z-index: 1 }
+/* the planned window: a soft pill the stage blocks sit inside */
+.gantt-bar-planned {
+  top: 7px; height: 24px; border-radius: 7px;
+  background: var(--neutral2); border: 1px solid var(--line-strong); box-sizing: border-box;
+}
+.gantt-bar-actual { top: 11px; height: 16px }
+
+/* -- stage segmentation: one block per gated step -------------------------- */
+.gantt-stage-seg {
+  height: 16px; top: 11px; border: none; border-radius: 4px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: pointer; z-index: 2;
+  container-type: inline-size;
 }
 .gantt-stage-seg-complete { background: var(--good) }
 .gantt-stage-seg-in_progress { background: var(--blue) }
-.gantt-stage-seg-not_started { background: var(--warn); opacity: .5 }
+.gantt-stage-seg-not_started { background: color-mix(in srgb, var(--neutral) 38%, var(--panel)) }
 .gantt-stage-seg-bypassed {
-  background-image: repeating-linear-gradient(45deg, var(--warn), var(--warn) 4px, #fff 4px, #fff 7px);
-  opacity: .85;
+  background-image: repeating-linear-gradient(45deg, var(--warn), var(--warn) 4px, var(--warn2) 4px, var(--warn2) 7px);
 }
 .gantt-stage-seg-late { background: var(--bad) }
-.gantt-stage-seg:hover { filter: brightness(1.15); outline: 1px solid var(--ink) }
+.gantt-stage-seg:hover { filter: brightness(1.08); box-shadow: 0 0 0 1px var(--ink2); z-index: 3 }
 .gantt-stage-label {
-  font-size: 7.5px; font-weight: 700; color: #fff; letter-spacing: .2px;
-  pointer-events: none; white-space: nowrap; text-shadow: 0 0 2px rgba(0,0,0,.55);
+  font-size: 9px; font-weight: 700; color: #fff; letter-spacing: .2px;
+  pointer-events: none; white-space: nowrap; text-shadow: 0 0 2px rgba(0,0,0,.35);
 }
+.gantt-stage-seg-not_started .gantt-stage-label { color: var(--ink2); text-shadow: none }
+@container (max-width: 17px) { .gantt-stage-label { display: none } }
+/* a 2px gap between neighbouring blocks */
 .gantt-stage-separator {
-  position: absolute; top: 1px; bottom: 1px; width: 1px;
-  background: var(--panel); z-index: 1; pointer-events: none;
+  position: absolute; top: 9px; height: 20px; width: 2px; margin-left: -1px;
+  background: var(--neutral2); z-index: 3; pointer-events: none;
 }
+.gantt-milestone {
+  position: absolute; top: 13px; width: 11px; height: 11px; margin-left: -3px;
+  background: var(--ink2); border: 2px solid var(--panel); border-radius: 2px;
+  transform: rotate(45deg); z-index: 4; box-sizing: border-box;
+}
+.gantt-milestone-sm { top: 10px; width: 9px; height: 9px; margin-left: -2px }
+.gantt-edge {
+  position: absolute; top: 11px; font-size: 10.5px; font-weight: 600; color: var(--muted);
+  white-space: nowrap; z-index: 2;
+}
+.gantt-edge-left { left: 6px }
+.gantt-edge-right { right: 6px }
 .gantt-today-line {
-  position: absolute; top: 0; bottom: 0; width: 3px;
-  background: var(--today-line); z-index: 3; pointer-events: none;
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--today-line); opacity: .85; z-index: 5; pointer-events: none;
 }
+.gantt-undated {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: var(--s3); padding: var(--s2) var(--s3);
+  border: 1px dashed var(--line-strong); border-radius: var(--r2); background: var(--soft);
+}
+.gantt-undated-title { font-size: 11.5px; color: var(--muted); margin-right: 4px }
+.gantt-chip {
+  min-height: 0; height: 24px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink2);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.gantt-chip:hover { border-color: var(--blue); color: var(--blue) }
+
+/* Settings -> Projects (v12.4) */
+.proj-admin-table tr.proj-deleted td { color: var(--muted) }
+.proj-admin-table tr.proj-deleted td b { text-decoration: line-through }
+
 .matrix-issue-badge {
   display: inline-block; font-size: 10px; font-weight: 700;
   background: var(--bad2); color: var(--bad);
@@ -1951,3 +2024,5 @@ body.sidebar-collapsed .vault-switch-text { display: none }
   max-height: 160px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r1); padding: 6px 8px;
 }
 .naming-code-list label { display: flex; align-items: center; gap: 4px; font-weight: 400; }
+.proj-admin-table button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad) }
+.proj-admin-table button.danger:hover { background: var(--bad); color: #fff }

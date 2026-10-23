@@ -331,8 +331,15 @@ files them together.
 | Work Matrix | Admin/moderator only: who owns what, across every project |
 | Project Schedule (Gantt) | Planned vs actual per stage, coloured by status |
 
-**The bold red vertical line is today.** It appears on the on-screen Gantt and
+**The red vertical line is today** (labelled "Today" on the axis). It appears on the on-screen Gantt and
 on the exported PDF. If a project's bars sit left of it, that project is behind.
+
+**The Gantt (v12.4).** Each project row shows its planned window as a light pill with one coloured block
+per gated step inside it (colours in the legend above the chart) and a diamond at the target week. **All /
+12 months / 6 months** at the top right changes the time window; a project outside the window shows
+"ended W.." or "starts W.." instead of a bar. The arrow in front of a project opens one row per step.
+Projects that have no PRF or target week yet are listed under the chart — click one to open it and set its
+dates.
 
 **Reading the timeline.** The axis runs in two tiers: months across the top,
 ISO week numbers below. Faint vertical rules mark the weeks so a bar's end can
@@ -419,6 +426,10 @@ work from any row.
   **Restore settings from the vault** (a banner offers it) to bring back the
   processes, document types and folder structure. User passwords are not kept
   in the vault — issue them again under Users and passwords
+- **Projects** (v12.4) — every project with its document and open-issue counts. **Delete** removes a project
+  registered by mistake: give a reason and type the project ID to confirm. It disappears from every tab,
+  report and Project_Information.xlsx, but nothing is erased: its documents stay in the vault and **show
+  deleted projects** → **Restore** brings it back as it was. The deletion and its reason are in the activity log
 - **File version names** (v12.3) — a filed document is stored as
   `<standard name>_v1`, `_v2` … (for example `PRF_3026452_3026452_PRF_v2.doc`): the number goes up each
   time a different file is filed under the same name, and filing the identical file again just points to
