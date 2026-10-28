@@ -661,6 +661,12 @@ Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) an
   one folder set per value; a document is filed under the value named by the caller (`custom` in `/api/upload`) or the project's
   only value; several values with no choice, or none, leave that level out of the path. Hand-dropped files are recognised with or
   without the custom level. Not covered: the CSV batch import has no custom columns.
+- **Long vault paths / other PCs:** a vault path over 259 characters (long OneDrive root + long names) was invisible to Windows
+  PowerShell 5.1, so "Open in Explorer" said the path did not exist and such files were stored with the writer's absolute path.
+  Server now reads/serves/copies through the `\?\` form (`Get-LongPath`, `Test-VaultFile`), stores every path vault-relative
+  (also one written by another PC) and re-roots an old absolute path at the vault folder or the site folder on each PC. Explorer
+  gets the 8.3 short path when the path is too long, else the nearest short folder with an explanation. The browser viewer failed
+  (500) for file names with Chinese characters (Content-Disposition); fixed. Test: `tests/v12_5/api_long_paths.js`.
 - Tests: `tests/v12_5/e2e_folders_claims_names.js`, `tests/v12_5/e2e_custom_levels.js`.
 
 ### v12.4 delete projects, new Gantt look (2026-10-23)

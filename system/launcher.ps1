@@ -731,15 +731,61 @@ function ConvertTo-StoredPath { param([string]$Value)
   if ($Value -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $Value }
   try {
     if (-not [System.IO.Path]::IsPathRooted($Value)) { return $Value }
-    $full = [System.IO.Path]::GetFullPath($Value)
-    $vault = [System.IO.Path]::GetFullPath($EvidenceDir).TrimEnd('\') + '\'
+    $vault = $EvidenceDir.TrimEnd('\') + '\'
+    $full = $Value
+    # v12.5: GetFullPath throws over 259 characters, so only a short path is normalised
+    if ($Value.Length -lt 250 -or $Value.Contains('..')) { try { $full = [System.IO.Path]::GetFullPath($Value); $vault = [System.IO.Path]::GetFullPath($EvidenceDir).TrimEnd('\') + '\' } catch { } }
     if ($full.StartsWith($vault, [StringComparison]::OrdinalIgnoreCase)) { return $full.Substring($vault.Length) }
+    # a path written by another PC: keep what follows this vault's folder name
+    $seg = '\' + (Split-Path -Leaf $EvidenceDir) + '\'
+    $i = $full.IndexOf($seg, [StringComparison]::OrdinalIgnoreCase)
+    if ($i -ge 0) { return $full.Substring($i + $seg.Length) }
   } catch { }
   return $Value
 }
+# v12.5: Windows PowerShell 5.1 cannot see a path over 259 characters (Test-Path
+# says "not found" although the file is there). A vault under a long OneDrive
+# root plus long document names easily gets there - on one laptop the same file
+# can be fine and on another 12 characters too long. These helpers go through
+# the extended-length form (\\?\), which .NET reads at any length.
+function Get-LongPath { param([string]$P)
+  if (-not $P -or $P.Length -lt 240 -or $P.StartsWith('\\?\')) { return $P }
+  if ($P.StartsWith('\\')) { return '\\?\UNC\' + $P.Substring(2) }
+  if ($P -match '^[A-Za-z]:\\') { return '\\?\' + $P }
+  return $P
+}
+function Test-VaultFile { param([string]$P) try { return [System.IO.File]::Exists((Get-LongPath $P)) } catch { return $false } }
+function Test-VaultDir { param([string]$P) try { return [System.IO.Directory]::Exists((Get-LongPath $P)) } catch { return $false } }
+function Get-ShortPath { param([string]$P)
+  try {
+    if (-not ('WvnNative.Short' -as [type])) {
+      Add-Type -Namespace WvnNative -Name Short -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)] public static extern uint GetShortPathName(string longPath, System.Text.StringBuilder shortPath, uint bufferSize);'
+    }
+    $sb = New-Object System.Text.StringBuilder 520
+    $n = [WvnNative.Short]::GetShortPathName((Get-LongPath $P), $sb, 520)
+    if ($n -gt 0 -and $n -lt 520) { $s = $sb.ToString(); if ($s.StartsWith('\\?\')) { $s = $s.Substring(4) }; return $s }
+  } catch { }
+  return ''
+}
+# This PC's copy of the SharePoint / OneDrive site the vault sits in: the folder
+# named like "NPI Information - Documents" above the vault. It differs per laptop
+# ("OneDrive - Wahl Clipper Corporation" vs "... (1)", a different user name).
+function Get-SiteRoot {
+  if ($script:SiteRootCache) { return $script:SiteRootCache }
+  $d = [System.IO.Path]::GetFullPath($EvidenceDir)
+  $marker = ''
+  while ($d -and ($d -ne [System.IO.Path]::GetPathRoot($d))) {
+    $leaf = Split-Path -Leaf $d
+    if ($leaf -match 'Documents$' -and (Test-Path -LiteralPath (Join-Path $d 'General'))) { $marker = $d; break }
+    $d = Split-Path -Parent $d
+  }
+  $script:SiteRootCache = $marker
+  return $marker
+}
 # Relative -> this PC's vault. An absolute path from another PC's replica (or
 # from before v11) that does not exist here is re-rooted at the vault folder
-# name, so 'Open in Explorer' and the transfer ZIP work on every PC.
+# name, or at the site folder, so 'Open in Explorer' and the transfer ZIP work
+# on every PC.
 function ConvertFrom-StoredPath { param([string]$Value)
   if (-not $Value) { return $Value }
   if ($Value -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $Value }
@@ -747,12 +793,23 @@ function ConvertFrom-StoredPath { param([string]$Value)
   $out = $Value
   try {
     if (-not [System.IO.Path]::IsPathRooted($Value)) { $out = Join-Path $EvidenceDir $Value }
-    elseif (-not (Test-Path -LiteralPath $Value)) {
+    elseif (-not (Test-VaultFile $Value) -and -not (Test-VaultDir $Value)) {
       $seg = '\' + (Split-Path -Leaf $EvidenceDir) + '\'
       $i = $Value.IndexOf($seg, [StringComparison]::OrdinalIgnoreCase)
       if ($i -ge 0) {
         $alt = Join-Path $EvidenceDir $Value.Substring($i + $seg.Length)
-        if (Test-Path -LiteralPath $alt) { $out = $alt }
+        if (Test-VaultFile $alt) { $out = $alt }
+      }
+      if ($out -eq $Value) {
+        $site = Get-SiteRoot
+        if ($site) {
+          $mk = '\' + (Split-Path -Leaf $site) + '\'
+          $j = $Value.IndexOf($mk, [StringComparison]::OrdinalIgnoreCase)
+          if ($j -ge 0) {
+            $alt2 = Join-Path $site $Value.Substring($j + $mk.Length)
+            if (Test-VaultFile $alt2) { $out = $alt2 }
+          }
+        }
       }
     }
   } catch { }
@@ -5417,12 +5474,14 @@ try {
         # rendering; it never gets a free pass to be treated as markup.
         $raw = [System.Uri]::UnescapeDataString($path.Substring('/api/vault/view/'.Length))
         $relPath = $raw -replace '/', '\'
+        # v12.5: no GetFullPath here - it throws on a path over 259 characters.
+        # Staying inside the vault is checked on the relative part instead.
         $file = Join-Path $EvidenceDir $relPath
-        $full = [System.IO.Path]::GetFullPath($file)
-        $vaultFull = [System.IO.Path]::GetFullPath($EvidenceDir)
+        $full = $file
+        $traverses = (($relPath -split '[\\/]') -contains '..') -or [System.IO.Path]::IsPathRooted($relPath)
         # v12.2: <vault>\_vault holds the project data (journals, settings), not evidence
-        $inDataDir = $full.StartsWith($vaultFull.TrimEnd('\') + '\_vault\', [StringComparison]::OrdinalIgnoreCase)
-        if (-not $relPath -or $inDataDir -or -not $full.StartsWith($vaultFull, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        $inDataDir = $relPath.TrimStart('\').StartsWith('_vault\', [StringComparison]::OrdinalIgnoreCase)
+        if (-not $relPath -or $inDataDir -or $traverses -or -not (Test-VaultFile $full)) {
           New-JsonResponse -Response $res -StatusCode 404 -Body @{ error = 'evidence file not found' }
         } else {
           $viewExt = [System.IO.Path]::GetExtension($full).ToLowerInvariant()
@@ -5437,13 +5496,16 @@ try {
             '.csv'  { 'text/plain; charset=utf-8' }
             default { 'application/octet-stream' }
           }
-          $bytes = [System.IO.File]::ReadAllBytes($full)
+          $bytes = [System.IO.File]::ReadAllBytes((Get-LongPath $full))
           $res.StatusCode = 200
           $res.ContentType = $viewType
           # inline, not attachment: the point is an in-tab preview, and only
           # the allowlisted types above are ever eligible to render as
           # anything other than a download prompt anyway.
-          $res.AddHeader('Content-Disposition', 'inline; filename="' + [System.IO.Path]::GetFileName($full) + '"')
+          # v12.5: a header holds ASCII only - a Chinese / Vietnamese file name needs the RFC 5987 form
+          $leafName = [System.IO.Path]::GetFileName($full)
+          $asciiName = ([regex]::Replace($leafName, '[^\x20-\x7E]', '_')).Replace('"', '_')
+          $res.AddHeader('Content-Disposition', 'inline; filename="' + $asciiName + '"; filename*=UTF-8''' + [System.Uri]::EscapeDataString($leafName))
           $res.Headers.Add('Cache-Control', 'no-store')
           $res.ContentLength64 = $bytes.Length
           $res.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -5765,11 +5827,27 @@ try {
           $target = [string]$body.path
           if (-not $target) {
             New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'path is required.' }
-          } elseif (-not (Test-Path -LiteralPath $target)) {
-            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'That path does not exist on this machine.' }
+          } elseif (-not (Test-VaultFile $target) -and -not (Test-VaultDir $target)) {
+            $why = ' (path is ' + $target.Length + ' characters; its folder ' + $(if (Test-VaultDir (Split-Path -Parent $target)) { 'exists here, so the file itself has not synced to this PC yet or was removed' } else { 'is not on this PC - OneDrive may not have synced it yet' }) + ')'
+            New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = 'That path does not exist on this machine' + $why + '.' }
           } else {
             try {
-              if (Test-Path -LiteralPath $target -PathType Leaf) {
+              $isFile = Test-VaultFile $target
+              $partial = ''
+              # v12.5: Explorer cannot take a path over 259 characters. Use the
+              # 8.3 short form when the volume has one; otherwise open the
+              # deepest folder that is short enough and say so.
+              if ($target.Length -gt 259) {
+                $short = Get-ShortPath $target
+                if ($short -and $short.Length -le 259) { $target = $short }
+                else {
+                  $dir = $target
+                  while ($dir.Length -gt 259 -and $dir -ne [System.IO.Path]::GetPathRoot($dir)) { $dir = Split-Path -Parent $dir }
+                  $partial = 'This file''s full path is ' + $target.Length + ' characters, longer than Windows Explorer accepts (259). Its folder is too deep to open as well, so the nearest folder was opened instead. Shorten the document or folder names, or ask IT to enable long paths on this PC.'
+                  $target = $dir; $isFile = $false
+                }
+              }
+              if ($isFile) {
                 # /select, has no space after the comma - Explorer's undocumented
                 # switch parser treats "/select, C:\..." (with the space) as two
                 # separate malformed arguments instead of one.
@@ -5777,7 +5855,7 @@ try {
               } else {
                 Start-Process explorer.exe -ArgumentList "`"$target`""
               }
-              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true }
+              New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; message = $partial }
             } catch {
               New-JsonResponse -Response $res -StatusCode 500 -Body @{ error = 'Could not launch Explorer: ' + $_.Exception.Message }
             }
@@ -5825,12 +5903,12 @@ try {
               continue
             }
             $src = [string]$r.file_path
-            if ($src -and (Test-Path -LiteralPath $src -PathType Leaf)) {
+            if ($src -and (Test-VaultFile $src)) {
               $sub = Join-Path $stage (ConvertTo-NamePart $r.step_key)
               if ($revState -eq 'superseded') { $sub = Join-Path $sub '_superseded'; $superseded++ }
               if (-not (Test-Path -LiteralPath $sub)) { New-Item -ItemType Directory -Path $sub -Force | Out-Null }
               $dest = Join-Path $sub ([System.IO.Path]::GetFileName($src))
-              if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $src -Destination $dest -Force }
+              if (-not (Test-Path -LiteralPath $dest)) { [System.IO.File]::Copy((Get-LongPath $src), $dest, $true) }
               $copied++
               $manifest.Add(($r.step_key + "`t" + $r.doc_code + "`t" + $revCols + [System.IO.Path]::GetFileName($src) + "`t" + $r.uploaded_by + "`t" + $r.approved + "`t" + $r.sha256))
             } else {

@@ -217,7 +217,7 @@ async issueHeaders(headers, user) { return API.post('/api/config/issue-headers',
   async changeTypes(changeTypes, user) { return API.post('/api/config/changetypes', { change_types: changeTypes, user }); },
   async importIssues(csv, user) { return API.post('/api/issues/import', { csv, user }); },
   async batchProjects(csv, user) { return API.post('/api/projects/batch', { csv, user }); },
-  async openPath(path) { return API.post('/api/open-path', { path }); },
+  async openPath(path) { const r = await API.post('/api/open-path', { path }); if (r && r.message) alert(r.message); return r; },
   async post(path, body) {
     // charset spelled out: without it the server used to decode as cp1252 (v11 fix).
     const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify(body) });
