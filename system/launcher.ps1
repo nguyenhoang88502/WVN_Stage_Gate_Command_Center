@@ -291,7 +291,7 @@ $Stores = [ordered]@{
   # doc_code are independent "active" slots instead of one superseding the
   # other. Blank (the default for every pre-v11.1 row) means "the one part",
   # which reproduces today's behaviour exactly.
-  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week','revision_no','is_active','change_reason','superseded_utc','part_id')
+  lb_deliverables = @('deliverable_id','project_id','step_key','doc_code','file_name','file_path','sha256','status','approved','suspect_template','uploaded_by','uploaded_utc','notes','kind','original_name','wvn_id','wnb_id','description','link_url','custom_doc','owner_pic','claimed_by','claimed_utc','supporter_pic','supporter_by','supporter_utc','assigned_by','assigned_utc','target_week','revision_no','is_active','change_reason','superseded_utc','part_id','name_status')
   lb_doc_comments = @('comment_id','project_id','deliverable_id','doc_code','step_key','author','comment','created_utc')
   # v2.3 — shared with the standalone WVN_Ticketing_Center, which points at
   # this same tracking folder. lb_ticket_events is append-only by convention:
@@ -3509,6 +3509,32 @@ function Test-EvidenceLevels { param($Levels)
   if (-not $anyToken) { $errs += 'Use at least one token such as [Model] or [DocType], or every file lands in the same folder.' }
   return $errs
 }
+# v12.5: a new project gets its folders in the vault straight away - one per
+# document the process asks for, laid out by Settings -> Common vault folder
+# structure - so people can drop files in with File Explorer without first
+# filing something through the app. Failure never blocks a registration.
+function New-ProjectFolders { param($Project)
+  $made = 0
+  try {
+    $cfg = Get-Config
+    $def = Get-ProcessDef -Config $cfg -ProcessId ([string]$Project.process)
+    if (-not $def) { return 0 }
+    foreach ($s in @($def.steps)) {
+      $codes = @(@($s.required_evidence_doctypes) + @($s.conditional_evidence_doctypes) | Where-Object { $_ } | Select-Object -Unique)
+      foreach ($code in $codes) {
+        $lv = @(Resolve-EvidenceLevels -Config $cfg -Values @{
+          Model = [string]$Project.family; DocType = [string]$code; PartID = ''
+          ProjectID = [string]$Project.project_id; Process = [string]$Project.process
+          Step = ([string]$Project.process + '-' + [string]$s.step_id)
+        })
+        if (-not $lv.Count) { continue }
+        $dir = (@($EvidenceDir) + $lv) -join '\'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null; $made++ }
+      }
+    }
+  } catch { Write-Log ('Project folders not created for ' + [string]$Project.project_id + ' - ' + $_.Exception.Message) 'WARN' }
+  return $made
+}
 function Resolve-EvidenceLevels { param($Config, [hashtable]$Values)
   $out = New-Object System.Collections.Generic.List[string]
   foreach ($l in (Get-EvidenceLevels $Config)) {
@@ -4429,6 +4455,8 @@ try {
               $row = @{
                 project_id = $projectId; step_key = $stepKey; doc_code = $docCode; part_id = $partId
                 file_name = $finalName; file_path = $finalPath; sha256 = $sha; status = 'Filed'; kind = 'file'
+                original_name = [System.IO.Path]::GetFileName($srcPath)
+                name_status = $(if ($body.standardize -and $finalName -cne [System.IO.Path]::GetFileName($srcPath)) { 'Pending' } else { '' })
                 uploaded_by = $who; uploaded_utc = (Get-Date).ToUniversalTime().ToString('o')
                 notes = 'Found already in the vault, not filed through this app - categorized' + $(if ($body.standardize) { ' and renamed to the naming standard.' } else { ' in place.' })
               }
@@ -5029,8 +5057,23 @@ try {
           created_utc = $now; updated_utc = $now; notes = $body.notes
         }
         $saved = Add-StoreRow -Store 'lb_projects' -IdField 'project_id' -IdCandidate $candidate -Row $row
+        $null = New-ProjectFolders -Project ([pscustomobject]@{ process = [string]$body.process; family = $famId; project_id = [string]$saved.project_id })
         Add-Audit -User $body.created_by -Action 'Create_Project' -ProjectId $saved.project_id -ObjType 'Project' -ObjId $saved.project_id -From '' -To 'Active' -Detail ('Type ' + $body.class_abcde + ' · target ' + $target_date)
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved
+      }
+      elseif ($method -eq 'POST' -and $path -eq '/api/projects/provision') {
+        # v12.5: creates the vault folders every active project should have but
+        # does not (projects registered before v12.5, or after a folder
+        # structure change). Only adds folders; never touches files.
+        $pvUser = [string]$script:ReqUser
+        if (-not (Test-AdminName $pvUser)) {
+          New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin can do this.' }
+        } else {
+          $pvMade = 0; $pvN = 0
+          foreach ($pp in @(Read-Store 'lb_projects')) { $pvN++; $pvMade += [int](New-ProjectFolders -Project $pp) }
+          Add-Audit -User $pvUser -Action 'Provision_Folders' -ProjectId '' -ObjType 'Vault' -ObjId '' -From '' -To ([string]$pvMade) -Detail ([string]$pvN + ' project(s)')
+          New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; projects = $pvN; folders_created = $pvMade }
+        }
       }
       elseif ($method -eq 'POST' -and $path -eq '/api/projects/batch') {
         # Batch project registration (v3.1). Same field semantics and the same
@@ -5224,6 +5267,9 @@ try {
         if ($accepted.Count) {
           $createdIds = @(Add-StoreRowsBatch -Store 'lb_projects' -Rows $accepted `
                                              -IdField 'project_id' -IdCandidates $idCandidates)
+          for ($pi = 0; $pi -lt $createdIds.Count -and $pi -lt $accepted.Count; $pi++) {
+            $null = New-ProjectFolders -Project ([pscustomobject]@{ process = [string]$accepted[$pi]['process']; family = [string]$accepted[$pi]['family']; project_id = [string]$createdIds[$pi] })
+          }
           foreach ($newId in $createdIds) {
             try {
               Add-Audit -User $body.user -Action 'Create_Project_Batch' -ProjectId $newId `

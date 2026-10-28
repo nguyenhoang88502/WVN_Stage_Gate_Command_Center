@@ -637,6 +637,24 @@ teams.**
 
 Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) and were not re-listed here.
 
+### v12.5 folders, name confirmation, unassigned work, Gantt density (2026-10-28)
+
+- **Project folders:** registering a project (form or CSV batch) creates its folders in the vault at once - one per document the
+  process asks for, laid out by Settings -> Common vault folder structure (`New-ProjectFolders`). Settings -> Projects has
+  **Create missing folders** (`POST /api/projects/provision`, admin) for projects registered earlier. Only folders are added.
+- **Auto-categorize files dropped in with File Explorer:** a document type now has **Keywords** (any of them in the file name
+  matches, e.g. `WI`, `Work Instruction`, `装配`) and **File types** (blank = any). Saving a document type in Settings used to drop
+  keywords not shown in the form; now both fields are in it. Input -> C: a file in a project's folder or named for its model is
+  recognised by keywords + file type, and **Auto-categorize all N suggested** stages every sure one (saved with Save changes).
+- **Name-change notice:** a file renamed to the naming standard by categorizing gets `name_status = Pending` and the original name
+  kept; its stage-matrix cell shows an orange **Name Changed - Pending Confirmation** badge (tooltip: original -> standardized).
+  The item's owner, a moderator or the admin clicks it to confirm (`Confirm_Name` in the activity log).
+- **Claimed Work (admin / moderator):** summary tiles and **Priority Unassigned Items** - every required document with no file and
+  no owner, overdue first, then nearest - with a person picker + Assign per row and tick boxes + **Assign selected** for one person.
+- **Gantt week width:** Compact / Normal / Wide / Extra-wide (remembered per browser); the chart scrolls sideways when wide, and the
+  month / quarter / year header follows the width.
+- Test: `tests/v12_5/e2e_folders_claims_names.js`.
+
 ### v12.4 delete projects, new Gantt look (2026-10-23)
 
 - **Settings -> Projects** (admin): every project with its document and open-issue counts, a filter, **Delete** (reason

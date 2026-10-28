@@ -556,6 +556,15 @@ function projectsAdminCard(root) {
   const showDel = el('label', 'note'); showDel.style.margin = '0';
   showDel.innerHTML = '<input type="checkbox" id="projAdminShowDel"> show deleted projects';
   bar.appendChild(q); bar.appendChild(showDel);
+  const provBtn = el('button', 'sm', 'Create missing folders');
+  provBtn.title = 'Make the vault folders of every project (one per required document). Only adds folders, never touches files.';
+  provBtn.onclick = async function() {
+    provBtn.disabled = true;
+    try { const r = await API.post('/api/projects/provision', {}); alert(r.folders_created + ' folder(s) created for ' + r.projects + ' project(s).'); }
+    catch (e) { alert('Could not create folders: ' + e.message); }
+    provBtn.disabled = false;
+  };
+  bar.appendChild(provBtn);
   body.appendChild(bar);
   const out = el('div', 'scroll'); out.innerHTML = '<p class="note" style="padding:8px">Loading…</p>';
   body.appendChild(out);
@@ -2014,11 +2023,39 @@ function matchesAsWord(hay, rawNeedle) {
   const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp('(?<![a-z0-9])' + esc + '(?![a-z0-9])').test(hay);
 }
+/* v12.5: the server's guess comes from the folder a file sits in. When that
+   finds nothing, a file pasted into a project's folder (or named for its
+   model) is matched on its name: the model / project in the path, plus the
+   document type's keywords and allowed file types. Only a single, clear match
+   counts as confident. */
+function orphanGuessOf(o) {
+  if (o.guess && o.guess.confident) return o.guess;
+  if (o._cg !== undefined) return o._cg || o.guess || null;
+  let out = null;
+  try {
+    const name = o.path.split(/[\\/]/).pop();
+    const hay = o.path.toLowerCase().replace(/[_\-.\\/]+/g, ' ');
+    const hits = (TRK.lb_projects || []).filter(p => (!p.status || p.status === 'Active') &&
+      (matchesAsWord(hay, p.family) || matchesAsWord(hay, p.project_id)));
+    if (hits.length === 1) {
+      const prj = hits[0], gs = guessFromName(name);
+      const step = gs.confident && gs.doc ? stepsOf(prj.process, prj).find(s =>
+        (s.required_evidence_doctypes || []).concat(s.conditional_evidence_doctypes || []).indexOf(gs.doc) >= 0) : null;
+      if (step) out = { project_id: prj.project_id, family: prj.family, step_key: stepKeyOf(prj.process, step), doc_code: gs.doc,
+        part_id: '', doc_name: docTypeById(gs.doc).name || gs.doc, confident: true, ambiguous_projects: [] };
+    }
+  } catch (e) { out = null; }
+  o._cg = out;
+  return out || o.guess || null;
+}
 function guessFromName(fileName) {
   const stem = fileName.replace(/\.[^.]+$/, '');
   const hay = stem.toLowerCase().replace(/[_\-.]+/g, ' ');
   let best = null, bestScore = 0;
+  const fext = (fileName.match(/\.([^.]+)$/) || ['', ''])[1].toLowerCase();
   allDocTypes().forEach(d => {
+    // v12.5: a document type may limit itself to certain file types
+    if ((d.extensions || []).length && d.extensions.map(e => String(e).replace(/^\./, '').toLowerCase()).indexOf(fext) < 0) return;
     let score = 0;
     const code = String(d.form_code || '').toLowerCase();
     const id = String(d.doctype_id || '').toLowerCase();
@@ -2350,6 +2387,24 @@ function cellStateFor(project, step) {
   };
 }
 
+/* v12.5: confirm the standardized name of a file the vault scan renamed. The
+   project's owner or a moderator / admin may do it. */
+async function confirmNameChange(deliverableId, project) {
+  const row = (TRK.lb_deliverables || []).find(x => x.deliverable_id === deliverableId);
+  const who = getUser();
+  if (!row || !who) return;
+  const owners = [project && project.created_by, row.owner_pic, row.claimed_by, row.uploaded_by];
+  if (!isPrivileged() && owners.indexOf(who) < 0) { alert('Only the owner of this item, a moderator or the admin can confirm the new name.'); return; }
+  if (!confirm('Confirm the new file name?\n\nOriginal:    ' + (row.original_name || '?') + '\nStandardized: ' + (row.file_name || '?'))) return;
+  try {
+    await API.action('lb_deliverables', Object.assign({}, row, { name_status: 'Confirmed' }), {
+      upsertKeys: ['deliverable_id'],
+      audit: { user: who, action: 'Confirm_Name', projectId: row.project_id, objType: 'Deliverable', objId: row.doc_code, from: row.original_name || '', to: row.file_name || '', detail: '' }
+    });
+    row.name_status = 'Confirmed';
+    await redrawAfterWrite();
+  } catch (e) { alert('Could not confirm: ' + e.message); }
+}
 function matrixCell(project, step) {
   const c = cellStateFor(project, step);
   const td = el('td', 'mcell');
@@ -2370,6 +2425,12 @@ function matrixCell(project, step) {
   // to render as a single unreadable comma-joined line.
   c.done.forEach(code => bits.push('<span class="' + badgeClass('COMPLETE') + '" title="approved">Done: ' + esc(code) + '</span>'));
   c.filed.forEach(code => bits.push('<span class="' + badgeClass('FILED') + '" title="filed, not signed">Filed: ' + esc(code) + '</span>'));
+  // v12.5: a file the vault scan renamed to the naming standard waits for a
+  // person to confirm the new name (orange) before it counts as verified.
+  const pendingNames = (TRK.lb_deliverables || []).filter(x => x.project_id === project.project_id &&
+    x.step_key === stepKeyOf(project.process, step) && x.name_status === 'Pending' && x.is_active !== 'NO');
+  pendingNames.forEach(x => bits.push('<span class="badge name-pending" data-del-id="' + esc(x.deliverable_id) + '" title="' +
+    esc((x.original_name || '?') + ' ➔ ' + (x.file_name || '?') + ' — click to confirm the new name') + '">Name Changed - Pending Confirmation: ' + esc(x.doc_code) + '</span>'));
   c.ongoing.forEach(code => bits.push('<span class="' + badgeClass('ON_GOING') + ' mcell-doc-badge" data-doc-code="' + esc(code) + '" title="claimed or assigned, no file yet — click to open">On Going: ' + esc(code) + '</span>'));
   c.missing.forEach(code => bits.push('<span class="' + badgeClass('MISSING') + ' mcell-doc-badge" data-doc-code="' + esc(code) + '" title="required, nothing filed — click to open">Missing: ' + esc(code) + '</span>'));
   c.removed.forEach(code => bits.push('<span class="matrix-removed ' + badgeClass('NO_DATA') + '" title="removed from requirements">Removed: ' + esc(code) + '</span>'));
@@ -2396,6 +2457,10 @@ function matrixCell(project, step) {
       e.stopPropagation();
       openDrawer(project, step, badge.getAttribute('data-doc-code'));
     };
+  });
+  td.querySelectorAll('.name-pending').forEach(function(badge) {
+    badge.style.cursor = 'pointer';
+    badge.onclick = function(e) { e.stopPropagation(); confirmNameChange(badge.getAttribute('data-del-id'), project); };
   });
   return { td, c };
 }
@@ -3300,6 +3365,11 @@ function ganttPicLabel(pid, stepKey) {
    drawn yet (no PRF / target week) listed under the chart instead of silently
    missing. Class names the tests read are unchanged. */
 let ganttRange = (function() { try { return localStorage.getItem('wvn_gantt_range') || 'all'; } catch (e) { return 'all'; } })();
+/* v12.5: timeline density = the width the time track gets (px). The chart
+   scrolls sideways when the track is wider than the page. */
+var GANTT_DENSITY = [['compact', 'Compact', 480], ['normal', 'Normal', 720], ['wide', 'Wide', 1100], ['xwide', 'Extra-wide', 1700]];
+let ganttDensity = (function() { try { var v = localStorage.getItem('wvn_gantt_density'); return GANTT_DENSITY.some(function(d) { return d[0] === v; }) ? v : 'normal'; } catch (e) { return 'normal'; } })();
+function ganttTrackPx() { return GANTT_DENSITY.filter(function(d) { return d[0] === ganttDensity; })[0][2]; }
 function buildLiveGanttSection() {
   function filteredByProcess(process) {
     // dashFamFilter et al. are multi-select arrays, not scalars — see the
@@ -3341,7 +3411,25 @@ function buildLiveGanttSection() {
     };
     rangeBox.appendChild(b);
   });
-  hdr.appendChild(rangeBox);
+  var densBox = el('div', 'gantt-range');
+  densBox.setAttribute('role', 'group');
+  densBox.setAttribute('aria-label', 'Week width');
+  GANTT_DENSITY.forEach(function(opt) {
+    var b = el('button', opt[0] === ganttDensity ? 'on' : '', opt[1]);
+    b.type = 'button';
+    b.title = 'Timeline width ' + opt[2] + ' px';
+    b.setAttribute('aria-pressed', opt[0] === ganttDensity ? 'true' : 'false');
+    b.onclick = function() {
+      ganttDensity = opt[0];
+      try { localStorage.setItem('wvn_gantt_density', ganttDensity); } catch (e) { }
+      var host = wrap.parentNode;
+      if (host) host.replaceChild(buildLiveGanttSection(), wrap);
+    };
+    densBox.appendChild(b);
+  });
+  var ctl = el('div', 'gantt-ctl');
+  ctl.appendChild(densBox); ctl.appendChild(rangeBox);
+  hdr.appendChild(ctl);
   wrap.appendChild(hdr);
   var body = el('div', 'card-body');
   wrap.appendChild(body);
@@ -3449,6 +3537,7 @@ function buildLiveGanttSection() {
   var firstWeekPct = weekEntries.length ? pctForDate(weekEntries[0].date) : 0;
 
   var grid = el('div', 'gantt-live-grid');
+  grid.style.setProperty('--gantt-track-min', ganttTrackPx() + 'px');
   body.appendChild(grid);
 
   /* Vertical week rules as one repeating gradient per track (see
@@ -3469,7 +3558,8 @@ function buildLiveGanttSection() {
      its name (~640 px track assumed), else quarters, else years — over a
      two-year portfolio every month label used to be clipped away. */
   var monthPct = weekPct * 4.35;
-  var unit = monthPct * 6.4 >= 34 ? 'month' : (monthPct * 3 * 6.4 >= 40 ? 'quarter' : 'year');
+  var pxPerPct = ganttTrackPx() / 100;
+  var unit = monthPct * pxPerPct >= 34 ? 'month' : (monthPct * 3 * pxPerPct >= 40 ? 'quarter' : 'year');
   var bands = [];
   weekEntries.forEach(function(entry) {
     var y = entry.date.getFullYear(), m = entry.date.getMonth();
@@ -5218,6 +5308,135 @@ var PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 // does not get thrown back to "All Personnel" every refresh.
 var claimedUserSel = '';
 
+/* v12.5: what nobody owns yet, for admins and moderators. Every document a
+   step still requires that has no file and no owner, most urgent first (an
+   overdue target week, then the nearest), with a person picker per row and a
+   batch assign for ticked rows. */
+function claimedUnassignedSection(root) {
+  const registry = (CFG && CFG.user_registry) || [];
+  const nw = nowWeek();
+  const items = [];
+  (TRK.lb_projects || []).forEach(function(p) {
+    if (p.status && p.status !== 'Active') return;
+    const projTw = toWeek(p.target_date) || targetDateFor(p.class_abcde, p.prf_date) || '';
+    stepsOf(p.process, p).forEach(function(s) {
+      const c = cellStateFor(p, s);
+      if (!c.missing.length) return;
+      const sk = stepKeyOf(p.process, s);
+      const gate = (TRK.lb_gates || []).find(function(g) { return g.project_id === p.project_id && g.step_key === sk; });
+      c.missing.forEach(function(code) {
+        const dr = (TRK.lb_deliverables || []).find(function(x) { return x.project_id === p.project_id && x.step_key === sk && x.doc_code === code; });
+        if (dr && (dr.owner_pic || dr.claimed_by || dr.supporter_pic || dr.supporter_by)) return;
+        items.push({ p: p, s: s, sk: sk, code: code, row: dr || { project_id: p.project_id, step_key: sk, doc_code: code },
+          week: (dr && dr.target_week) || (gate && gate.target_week) || projTw });
+      });
+    });
+  });
+  items.sort(function(a, b) {
+    if (a.week !== b.week) return !a.week ? 1 : !b.week ? -1 : (a.week < b.week ? -1 : 1);
+    return a.p.project_id < b.p.project_id ? -1 : a.p.project_id > b.p.project_id ? 1 : (a.s.step_id - b.s.step_id);
+  });
+  const overdue = items.filter(function(i) { return isOverdueWeek(i.week, false); }).length;
+  let assigned = 0;
+  (TRK.lb_gates || []).forEach(function(g) { if (g.status !== 'Approved' && (g.owner_pic || g.claimed_by)) assigned++; });
+  (TRK.lb_deliverables || []).forEach(function(d) { if (d.approved !== 'YES' && d.doc_code && (d.owner_pic || d.claimed_by)) assigned++; });
+
+  const tiles = el('div', 'claim-tiles');
+  [['Unassigned Tasks', items.length + (items.length === 1 ? ' Item' : ' Items'), 'warn'],
+   ['Overdue Unassigned', overdue + (overdue === 1 ? ' Item' : ' Items'), overdue ? 'bad' : ''],
+   ['Active Assigned Tasks', assigned + (assigned === 1 ? ' Item' : ' Items'), '']].forEach(function(t) {
+    tiles.insertAdjacentHTML('beforeend', '<div class="claim-tile ' + t[2] + '"><div class="lbl">' + t[0] + '</div><div class="val">' + t[1] + '</div></div>');
+  });
+  root.appendChild(tiles);
+
+  const card = el('div', 'card claim-unassigned');
+  const hdr = el('div', 'card-header');
+  hdr.appendChild(el('h3', 'card-title', 'Priority Unassigned Items'));
+  hdr.appendChild(el('span', 'note', 'Sorted strictly by due date urgency'));
+  card.appendChild(hdr);
+  const body = el('div', 'card-body');
+  card.appendChild(body); root.appendChild(card);
+  if (!items.length) { body.appendChild(el('p', 'note', 'Every required document has an owner or a file.')); return; }
+
+  const personSel = function() {
+    const sel = el('select');
+    sel.appendChild(new Option('-- Select Person --', ''));
+    registry.forEach(function(u) { sel.appendChild(new Option(u.username + (u.role ? ' (' + u.role + ')' : ''), u.username)); });
+    return sel;
+  };
+  async function assign(item, who) {
+    const admin = getUser(), now = new Date().toISOString();
+    const rowData = Object.assign({}, item.row, { owner_pic: who, claimed_by: who, claimed_utc: now, assigned_by: admin, assigned_utc: now });
+    await API.action('lb_deliverables', rowData, {
+      upsertKeys: ['project_id', 'step_key', 'doc_code'],
+      audit: { user: admin, action: 'Assign_Task_Admin', projectId: item.p.project_id, objType: 'Deliverable', objId: item.code, from: '', to: who, detail: 'Primary Owner' }
+    });
+  }
+  const batch = el('div', 'claim-batch');
+  const bsel = personSel();
+  const bbtn = el('button', 'primary sm', 'Assign selected');
+  bbtn.disabled = true;
+  batch.appendChild(el('span', 'note', 'Selected items:')); batch.appendChild(bsel); batch.appendChild(bbtn);
+  body.appendChild(batch);
+
+  const t = el('table');
+  t.innerHTML = '<thead><tr><th><input type="checkbox" class="cu-all" title="Select all shown"></th><th>Urgency / Due Date</th><th>Project / Step</th><th>Deliverable Document</th><th>Status</th><th>Moderator Action (Quick Assign)</th></tr></thead>';
+  const tb = el('tbody'); t.appendChild(tb);
+  const LIMIT = 40;
+  let showAll = false;
+  const checks = [];
+  const syncBatch = function() { bbtn.disabled = !bsel.value || !checks.some(function(c) { return c.cb.checked; }); };
+  const weeksTo = function(w) { const d = weekToDate(w), n = weekToDate(nw); return d && n ? Math.round((d - n) / 604800000) : null; };
+  const draw = function() {
+    tb.innerHTML = ''; checks.length = 0;
+    items.slice(0, showAll ? items.length : LIMIT).forEach(function(it) {
+      const tr = el('tr');
+      const od = isOverdueWeek(it.week, false), wt = it.week ? weeksTo(it.week) : null;
+      if (od) tr.className = 'overdue'; else if (wt !== null && wt <= 3) tr.className = 'soon';
+      const urg = !it.week ? '<span class="note">no target week</span>'
+        : (od ? '<span class="badge bg-danger">Overdue (' + esc(it.week) + ')</span>'
+              : '<b>' + esc(it.week) + '</b> <span class="note">(' + (wt === 0 ? 'this week' : 'Due in ' + wt + (wt === 1 ? ' wk' : ' wks')) + ')</span>');
+      const dt = docTypeById(it.code);
+      tr.innerHTML = '<td><input type="checkbox"></td><td>' + urg + '</td>' +
+        '<td><b>' + esc(it.p.project_id) + '</b><div class="note">Step ' + esc(it.s.step_id) + ': ' + esc(it.s.step_name) + '</div></td>' +
+        '<td><b>' + esc(dt.name || it.code) + '</b><div class="note">' + esc(it.code) + '</div></td>' +
+        '<td><span class="badge bg-warning">Unassigned</span></td><td></td>';
+      const cb = tr.querySelector('input'); cb.onchange = syncBatch;
+      checks.push({ cb: cb, it: it });
+      const sel = personSel(), btn = el('button', 'primary sm', 'Assign');
+      btn.style.marginLeft = '6px';
+      btn.onclick = async function() {
+        if (!sel.value) { alert('Pick a person first.'); return; }
+        btn.disabled = true;
+        try { await assign(it, sel.value); await redrawAfterWrite(); } catch (e) { alert('Assignment failed: ' + e.message); btn.disabled = false; }
+      };
+      tr.lastChild.appendChild(sel); tr.lastChild.appendChild(btn);
+      tb.appendChild(tr);
+    });
+    syncBatch();
+  };
+  t.querySelector('.cu-all').onchange = function(e) { checks.forEach(function(c) { c.cb.checked = e.target.checked; }); syncBatch(); };
+  bsel.onchange = syncBatch;
+  bbtn.onclick = async function() {
+    const picked = checks.filter(function(c) { return c.cb.checked; });
+    if (!picked.length || !bsel.value) return;
+    if (!confirm('Assign ' + picked.length + ' item(s) to ' + bsel.value + '?')) return;
+    bbtn.disabled = true;
+    let failed = 0;
+    for (let i = 0; i < picked.length; i++) { try { await assign(picked[i].it, bsel.value); } catch (e) { failed++; } }
+    if (failed) alert(failed + ' of ' + picked.length + ' could not be assigned.');
+    await redrawAfterWrite();
+  };
+  draw();
+  const sc = el('div', 'scroll'); sc.appendChild(t); body.appendChild(sc);
+  if (items.length > LIMIT) {
+    const more = el('button', 'sm', 'Show all ' + items.length + ' unassigned items');
+    more.style.marginTop = '8px';
+    more.onclick = function() { showAll = true; more.remove(); draw(); };
+    body.appendChild(more);
+  }
+}
+
 function viewClaimed(root) {
   root.appendChild(pageHeader(i18n('claimedTitle'), i18n('claimedSub')));
   var who = getUser();
@@ -5234,6 +5453,7 @@ function viewClaimed(root) {
     ? '<b>All claimed and assigned work across every user.</b> Only open items appear here — approved or closed items drop off the list. Filter by person below.'
     : '<b>Tasks claimed by or assigned to ' + esc(who) + '.</b> Only open items appear here — approved or closed items drop off the list.';
   root.appendChild(b);
+  if (privileged) claimedUnassignedSection(root);
 
   var nw = nowWeek();
   var items = [];
@@ -6255,6 +6475,26 @@ function viewInput(root) {
     const sbarDrop = el('button', 'sm', 'Discard');
     sbar.appendChild(sbarText); sbar.appendChild(sbarSave); sbar.appendChild(sbarDrop);
     orphBody.appendChild(sbar);
+    /* v12.5: every file the app is sure about (folder or keywords + file type)
+       in one go - still staged, still saved with Save changes. */
+    const sure = list.filter(o => { const gg = orphanGuessOf(o); return gg && gg.confident; });
+    if (sure.length) {
+      const allBtn = el('button', 'sm', 'Auto-categorize all ' + sure.length + ' suggested');
+      allBtn.style.margin = '0 0 8px';
+      allBtn.title = 'Stage every file whose project and document type were recognised; nothing is saved until you press Save changes';
+      allBtn.onclick = () => {
+        sure.forEach(o => {
+          if (orphanStage()[o.path]) return;
+          const gg = orphanGuessOf(o);
+          stageOrphan(o.path, {
+            action: 'adopt', label: 'will be filed as ' + gg.project_id + ' / ' + gg.doc_code + ' and renamed to the naming standard',
+            body: { path: o.path, sha256: o.sha256, standardize: true, project_id: gg.project_id, step_key: gg.step_key, doc_code: gg.doc_code, part_id: gg.part_id || '' }
+          });
+        });
+        repaintAll();
+      };
+      orphBody.appendChild(allBtn);
+    }
     const paintBar = () => {
       const n = orphanStageCount();
       sbar.classList.toggle('hide', !n);
@@ -6285,7 +6525,7 @@ function viewInput(root) {
       const restage = () => { draw(); paintBar(); };
       const buildRow = () => {
       const tr = el('tr');
-      const g = o.guess;
+      const g = orphanGuessOf(o);
       const staged = orphanStage()[o.path];
       // v11.1: if the file already sits where the app itself would have put
       // it ([Family]\[DocType]\[Part]\file), say so plainly instead of a
@@ -8378,6 +8618,8 @@ function viewSettings(root) {
       $('#sdStage').value = d.stage_required || '';
       $('#sdSource').value = d.source || '';
       $('#sdDesc').value = d.description || '';
+      $('#sdKeys').value = (d.keywords || []).join(', ');
+      $('#sdExt').value = (d.extensions || []).join(', ');
       $('#sdTemplate').value = d.template_file || '';
       daddBtn.textContent = 'Save document type (update)';
       daddBtn.dataset.editing = d.doctype_id;
@@ -8423,6 +8665,8 @@ function viewSettings(root) {
     '<div class="fld"><span>Stage required</span><input id="sdStage" placeholder="e.g. NPI 3, ECN 10 — or leave blank"></div>' +
     '<div class="fld"><span>Source</span><input id="sdSource"></div>' +
     '<div class="fld"><span>Description</span><input id="sdDesc"></div>' +
+    '<div class="fld"><span>Keywords (comma separated)</span><input id="sdKeys" placeholder="e.g. WI, Work Instruction, 装配"></div>' +
+    '<div class="fld"><span>File types (blank = any)</span><input id="sdExt" placeholder="e.g. xlsx, pdf"></div>' +
     '<div class="fld"><span>Template file</span><select id="sdTemplate" style="min-width:200px">' +
       '<option value="">(none)</option>' +
       TEMPLATES.map(function(t) { return '<option value="' + esc(t.name) + '">' + esc(t.name) + '</option>'; }).join('') + '</select></div>';
@@ -8434,7 +8678,7 @@ function viewSettings(root) {
   function resetDoctypeForm() {
     $('#sdId').value = ''; $('#sdId').readOnly = false;
     $('#sdName').value = ''; $('#sdForm').value = ''; $('#sdOwner').value = ''; $('#sdStage').value = ''; $('#sdSource').value = ''; $('#sdDesc').value = '';
-    $('#sdTemplate').value = '';
+    $('#sdTemplate').value = ''; $('#sdKeys').value = ''; $('#sdExt').value = '';
     daddBtn.textContent = 'Add document type'; delete daddBtn.dataset.editing;
     dCancelBtn.className = 'hide';
   }
@@ -8446,7 +8690,9 @@ function viewSettings(root) {
         doctype_id: id, name, form_code: $('#sdForm').value.trim() || null, owner_dept: $('#sdOwner').value.trim(),
         source: $('#sdSource').value.trim(), description: $('#sdDesc').value.trim(),
         stage_required: $('#sdStage').value.trim() || 'not gated',
-        template_file: $('#sdTemplate').value || null
+        template_file: $('#sdTemplate').value || null,
+        keywords: $('#sdKeys').value.split(',').map(s => s.trim()).filter(Boolean),
+        extensions: $('#sdExt').value.split(',').map(s => s.trim().replace(/^\./, '').toLowerCase()).filter(Boolean)
       }, null, requireName() || '');
       await redrawAfterWrite();
     } catch (e) { alert('Could not save: ' + e.message); }

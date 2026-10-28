@@ -1244,7 +1244,7 @@ select option { color: #14202c; background: #ffffff; }
 /* Column 1 carries either a project id or "Step 4: Pilot Run Validation". */
 .gantt-live-row, .gantt-sub-row {
   display: grid;
-  grid-template-columns: 178px 118px 128px 92px 48px 48px minmax(480px, 1fr);
+  grid-template-columns: 178px 118px 128px 92px 48px 48px minmax(var(--gantt-track-min, 720px), 1fr);
   align-items: center; column-gap: 8px;
   border-bottom: 1px solid var(--line); padding: 0 10px; min-height: 38px;
 }
@@ -2026,3 +2026,19 @@ body.sidebar-collapsed .vault-switch-text { display: none }
 .naming-code-list label { display: flex; align-items: center; gap: 4px; font-weight: 400; }
 .proj-admin-table button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad) }
 .proj-admin-table button.danger:hover { background: var(--bad); color: #fff }
+
+/* v12.5 -- Gantt controls, name-change notice, Claimed Work moderator view */
+.gantt-ctl { display: flex; gap: 10px; flex-wrap: wrap; align-items: center }
+.name-pending { background: #fff1e0; color: #a14a00; border: 1px solid #f0a64d; white-space: normal; line-height: 1.25 }
+.name-pending:hover { background: #ffe3c2 }
+:root[data-theme="dark"] .name-pending { background: #4a2d0c; color: #ffcf99; border-color: #a86a21 }
+.claim-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--s3); margin-bottom: var(--s4) }
+.claim-tile { border: 1px solid var(--line); border-radius: var(--r2); padding: 12px 16px; background: var(--panel) }
+.claim-tile .lbl { font-size: 12px; color: var(--muted) }
+.claim-tile .val { font-size: 24px; font-weight: 800; margin-top: 2px }
+.claim-tile.warn .val { color: #e07a00 }
+.claim-tile.bad .val { color: var(--bad, #c62828) }
+.claim-unassigned { border-left: 4px solid #e8a33d }
+.claim-unassigned tr.overdue td { background: rgba(198, 40, 40, .08) }
+.claim-unassigned tr.soon td { background: rgba(232, 163, 61, .10) }
+.claim-batch { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 }
