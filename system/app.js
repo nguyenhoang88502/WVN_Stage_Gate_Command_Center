@@ -251,7 +251,7 @@ function isPrivileged() { return isAdmin() || isModerator(); }
 function takeData(d) {
   CFG = d.config; TRK = d.tracking; PATHS = d.paths || {};
   if (d.session && d.session.user) SESSION = d.session;
-  FOLDER = { levels: d.folder_levels || [], tokens: d.folder_tokens || [] };
+  FOLDER = { levels: d.folder_levels || [], tokens: d.folder_tokens || [], custom: d.folder_custom || [] };
 }
 async function refresh() {
   takeData(await API.data());
@@ -5748,6 +5748,12 @@ function viewInput(root) {
   g.appendChild(fld('Market manager / originator', '<input id="npMm">'));
   g.appendChild(fld('Country', '<input id="npCountry">'));
   g.appendChild(fld('Scope / reason', '<input id="npNotes">'));
+  // v12.5: one input per custom folder field the admin defined (Settings ->
+  // Common vault folder structure), several values separated by commas.
+  (FOLDER.custom || []).forEach(function(c) {
+    const f = fld(c.label + ' (comma separated)', '<input class="npCustom" data-key="' + esc(c.key) + '" placeholder="optional - a blank value skips the [' + esc(c.key) + '] folder level">');
+    g.appendChild(f);
+  });
   regBody.appendChild(g);
 
   // certifications — the long-lead item nobody remembers until it blocks a launch
@@ -5846,7 +5852,15 @@ function viewInput(root) {
         target_date: ov || targetDateFor(cls, $('#npPrf').value),
         prf_date: $('#npPrf').value, market_manager: $('#npMm').value.trim(), country: $('#npCountry').value.trim(),
         customer_number: $('#npCust').value.trim(), notes: $('#npNotes').value.trim(), created_by: who,
-        certifications: certUI.value()
+        certifications: certUI.value(),
+        custom: (function() {
+          const o = {};
+          document.querySelectorAll('.npCustom').forEach(function(inp) {
+            const vals = inp.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+            if (vals.length) o[inp.getAttribute('data-key')] = vals;
+          });
+          return o;
+        })()
       });
       alert('Registered as ' + saved.project_id + '.');
       await redrawAfterWrite();
@@ -8949,7 +8963,12 @@ function viewSettings(root) {
   const fsList = el('div');
   const fsTree = el('div', 'folder-tree');
   const fsExample = { Model: '9649LP', Process: 'NPI', ProjectID: 'NPI-9649LP', Step: 'NPI-3', DocType: 'DWG', PartID: 'Blade' };
+  /* v12.5: custom metadata levels, e.g. [FG_ID]. Each is a token for the folder
+     levels and an input on the Register a Project form. */
+  let fsCustom = (FOLDER.custom || []).map(function(c) { return { key: c.key, label: c.label }; });
+  const fsBuiltIn = ['Model', 'Process', 'ProjectID', 'Step', 'DocType', 'PartID'];
   const drawFsTree = function() {
+    fsCustom.forEach(function(c) { fsExample[c.key] = c.key.replace(/_/g, '-') + '-001'; });
     const names = fsLevels.map(function(l) { return String(l).replace(/\[([^\]]*)\]/g, function(m, k) { return fsExample[k] != null ? fsExample[k] : m; }).trim(); }).filter(Boolean);
     fsTree.innerHTML = '<span class="lv">' + iconHtml('folder-open', 'icon-sm') + esc(String(PATHS.vault || '').split('\\').pop() || 'vault') + '</span>' +
       names.map(function(n, i) { return '<span class="lv" style="padding-left:' + ((i + 1) * 16) + 'px">' + iconHtml('folder-open', 'icon-sm') + esc(n) + '</span>'; }).join('') +
@@ -8982,17 +9001,58 @@ function viewSettings(root) {
   fsLeft.appendChild(fsList);
   if (isAdmin()) {
     const tokRow = el('div', 'taglist');
-    tokRow.appendChild(el('span', 'note', 'Add a level:'));
-    (FOLDER.tokens || []).forEach(function(t) {
-      const tb = el('button', 'btn-sm', '+ [' + t + ']'); tb.type = 'button';
-      tb.onclick = function() { fsLevels.push('[' + t + ']'); drawFsList(); };
-      tokRow.appendChild(tb);
-    });
+    const drawTokens = function() {
+      tokRow.innerHTML = '';
+      tokRow.appendChild(el('span', 'note', 'Add a level:'));
+      fsBuiltIn.concat(fsCustom.map(function(c) { return c.key; })).forEach(function(t) {
+        const tb = el('button', 'btn-sm', '+ [' + t + ']'); tb.type = 'button';
+        tb.onclick = function() { fsLevels.push('[' + t + ']'); drawFsList(); };
+        tokRow.appendChild(tb);
+      });
+    };
+    drawTokens();
     fsLeft.appendChild(tokRow);
+    // custom metadata fields
+    const cfBox = el('div', 'fs-custom');
+    const cfList = el('div', 'taglist');
+    const drawCf = function() {
+      cfList.innerHTML = '';
+      if (!fsCustom.length) cfList.appendChild(el('span', 'note', 'No custom fields yet.'));
+      fsCustom.forEach(function(c, i) {
+        const chip = el('span', 'tagrow');
+        chip.innerHTML = '<span><b>[' + esc(c.key) + ']</b> ' + esc(c.label) + '</span>';
+        const x = el('button', 'btn-sm', '×'); x.type = 'button'; x.title = 'Remove this field and its folder level';
+        x.onclick = function() {
+          const tok = '[' + c.key + ']';
+          fsLevels = fsLevels.filter(function(l) { return String(l).trim() !== tok; });
+          fsCustom.splice(i, 1); drawCf(); drawTokens(); drawFsList();
+        };
+        chip.appendChild(x); cfList.appendChild(chip);
+      });
+    };
+    cfBox.appendChild(el('p', 'note', 'Custom fields: extra details of a project (for example the Finished Goods IDs of a family) that become their own folder level. Each one adds an input to Register a project; a project with no value for it simply skips that level.'));
+    cfBox.appendChild(cfList);
+    const cfRow = el('div', 'filters');
+    const cfKey = el('input'); cfKey.placeholder = 'Key, e.g. FG_ID'; cfKey.style.maxWidth = '150px'; cfKey.setAttribute('aria-label', 'Custom field key');
+    const cfLabel = el('input'); cfLabel.placeholder = 'Label, e.g. Finished Goods IDs'; cfLabel.style.minWidth = '210px'; cfLabel.setAttribute('aria-label', 'Custom field label');
+    const cfAdd = el('button', 'btn-sm', '+ Add custom field'); cfAdd.type = 'button';
+    cfAdd.onclick = function() {
+      const k = cfKey.value.trim();
+      if (!/^[A-Za-z][A-Za-z0-9_]{0,23}$/.test(k)) { alert('The key must start with a letter and use only letters, digits and _ (max 24).'); return; }
+      if (fsBuiltIn.concat(fsCustom.map(function(c) { return c.key; })).some(function(t) { return t.toLowerCase() === k.toLowerCase(); })) { alert('[' + k + '] already exists.'); return; }
+      fsCustom.push({ key: k, label: cfLabel.value.trim() || k });
+      fsLevels.push('[' + k + ']');
+      cfKey.value = ''; cfLabel.value = '';
+      drawCf(); drawTokens(); drawFsList();
+    };
+    cfRow.appendChild(cfKey); cfRow.appendChild(cfLabel); cfRow.appendChild(cfAdd);
+    cfBox.appendChild(cfRow);
+    drawCf();
+    fsLeft.appendChild(cfBox);
     const fsSave = el('button', 'primary', 'Save folder structure');
     fsSave.style.marginTop = '8px';
     fsSave.onclick = async function() {
-      try { await API.post('/api/config/folder-structure', { user: getUser(), levels: fsLevels }); await redrawAfterWrite(); }
+      try { await API.post('/api/config/folder-structure', { user: getUser(), levels: fsLevels, custom_fields: fsCustom }); await redrawAfterWrite(); }
       catch (e) { alert('Could not save: ' + e.message); }
     };
     fsLeft.appendChild(fsSave);

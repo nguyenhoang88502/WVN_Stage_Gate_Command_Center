@@ -272,7 +272,7 @@ $Stores = [ordered]@{
   # entirely: this app has never tracked individual finished-good/child SKUs,
   # only the Family (model) level, and the column had held nothing but an
   # empty string since v3.5.
-  lb_projects     = @('project_id','process','prod_family','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family','target_date','certifications')
+  lb_projects     = @('project_id','process','prod_family','class_abcde','prf_date','market_manager','country','customer_number','status','created_by','created_utc','updated_utc','notes','family','target_date','certifications','custom_fields')
   # v3.6 dropped warehouse_ready: dead since the Warehouse readiness tab and
   # its lb_warehouse store were removed - nothing read or wrote it any more.
   # v4.0 appended supporter_pic/supporter_by/supporter_utc (second-claimer,
@@ -2710,10 +2710,17 @@ function Get-OrphanGuess {
   $levels = @(Get-EvidenceLevels $Config)
   $dirs = @(if ($parts.Count -gt 1) { $parts[0..($parts.Count - 2)] })
   $map = $null
-  foreach ($cand in @(, $levels) + @(, @($levels | Where-Object { $_ -ne '[PartID]' }))) {
+  $customLv = @(Get-CustomFieldDefs $Config | ForEach-Object { '[' + $_.key + ']' })
+  $variants = New-Object System.Collections.Generic.List[object]
+  $variants.Add($levels)
+  $variants.Add(@($levels | Where-Object { $_ -ne '[PartID]' }))
+  $variants.Add(@($levels | Where-Object { $customLv -notcontains $_ }))
+  $variants.Add(@($levels | Where-Object { $_ -ne '[PartID]' -and $customLv -notcontains $_ }))
+  foreach ($cand in $variants) {
+    $cand = @($cand)
     if ($cand.Count -ne $dirs.Count -or -not $cand.Count) { continue }
     $map = @{}
-    for ($i = 0; $i -lt $cand.Count; $i++) { if ($cand[$i] -match '^\[([A-Za-z]+)\]$') { $map[$Matches[1]] = $dirs[$i] } }
+    for ($i = 0; $i -lt $cand.Count; $i++) { if ($cand[$i] -match '^\[([A-Za-z][A-Za-z0-9_]*)\]$') { $map[$Matches[1]] = $dirs[$i] } }
     break
   }
   if (-not $map -or -not $map.ContainsKey('DocType')) { return $null }
@@ -3485,12 +3492,39 @@ function Invoke-AuthApi {
 # the levels in Settings; that default is what an install with no setting gets,
 # so nothing moves on upgrade. A level may mix tokens and plain text.
 $EvidenceLevelTokens = @('Model', 'Process', 'ProjectID', 'Step', 'DocType', 'PartID')
+# v12.5: custom metadata levels. config.folder_structure.custom_fields =
+# [{ key = 'FG_ID'; label = 'Finished Goods IDs' }]; a project keeps its values in
+# lb_projects.custom_fields as JSON {"FG_ID":["FG1","FG2"]}.
+function Get-CustomFieldDefs { param($Config)
+  $out = @()
+  $fs = $Config.folder_structure
+  if ($fs -and $fs.custom_fields) {
+    foreach ($f in @(ConvertTo-List $fs.custom_fields)) {
+      $k = ([string]$f.key).Trim()
+      if ($k) { $out += [pscustomobject]@{ key = $k; label = $(if ([string]$f.label) { [string]$f.label } else { $k }) } }
+    }
+  }
+  return $out
+}
+function Get-EvidenceTokens { param($Config) return @($EvidenceLevelTokens) + @(Get-CustomFieldDefs $Config | ForEach-Object { $_.key }) }
+function Get-ProjectCustomValues { param($Project)
+  $out = @{}
+  try {
+    $raw = [string]$Project.custom_fields
+    if ($raw) {
+      $o = $raw | ConvertFrom-Json
+      foreach ($p in $o.PSObject.Properties) { $out[$p.Name] = @(@($p.Value) | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ }) }
+    }
+  } catch { }
+  return $out
+}
 function Get-EvidenceLevels { param($Config)
   $lv = @(ConvertTo-List $Config.deployment_defaults.evidence_folder_levels | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
   if (-not $lv.Count) { return @('[Model]', '[DocType]', '[PartID]') }
   return $lv
 }
-function Test-EvidenceLevels { param($Levels)
+function Test-EvidenceLevels { param($Levels, $Tokens)
+  if (-not $Tokens) { $Tokens = $EvidenceLevelTokens }
   $errs = @()
   $lv = @(ConvertTo-List $Levels | ForEach-Object { ([string]$_).Trim() })
   if (-not $lv.Count) { return @('At least one folder level is required.') }
@@ -3503,7 +3537,7 @@ function Test-EvidenceLevels { param($Levels)
     if ($i -eq 0 -and $l.ToLowerInvariant() -eq '_vault') { $errs += 'The first level cannot be "_vault": that folder holds the vault''s project data.' }
     foreach ($m in [regex]::Matches($l, '\[([^\]]*)\]')) {
       $anyToken = $true
-      if ($EvidenceLevelTokens -notcontains $m.Groups[1].Value) { $errs += ('Level ' + ($i + 1) + ': [' + $m.Groups[1].Value + '] is not a known token. Use ' + (($EvidenceLevelTokens | ForEach-Object { '[' + $_ + ']' }) -join ', ') + '.') }
+      if ($Tokens -notcontains $m.Groups[1].Value) { $errs += ('Level ' + ($i + 1) + ': [' + $m.Groups[1].Value + '] is not a known token. Use ' + (($Tokens | ForEach-Object { '[' + $_ + ']' }) -join ', ') + '.') }
     }
   }
   if (-not $anyToken) { $errs += 'Use at least one token such as [Model] or [DocType], or every file lands in the same folder.' }
@@ -3519,17 +3553,32 @@ function New-ProjectFolders { param($Project)
     $cfg = Get-Config
     $def = Get-ProcessDef -Config $cfg -ProcessId ([string]$Project.process)
     if (-not $def) { return 0 }
+    # v12.5: a custom level ([FG_ID]) with several values on the project gets a
+    # folder set per value; with none, the level is simply left out of the path.
+    $combos = @(@{})
+    $pv = Get-ProjectCustomValues $Project
+    foreach ($cd in (Get-CustomFieldDefs $cfg)) {
+      $vv = @(); if ($pv.ContainsKey([string]$cd.key)) { $vv = @($pv[[string]$cd.key]) }
+      if (-not $vv.Count) { continue }
+      $next = @()
+      foreach ($c in $combos) { foreach ($v in $vv) { $h = @{} + $c; $h[[string]$cd.key] = $v; $next += $h } }
+      $combos = $next
+    }
     foreach ($s in @($def.steps)) {
       $codes = @(@($s.required_evidence_doctypes) + @($s.conditional_evidence_doctypes) | Where-Object { $_ } | Select-Object -Unique)
       foreach ($code in $codes) {
-        $lv = @(Resolve-EvidenceLevels -Config $cfg -Values @{
-          Model = [string]$Project.family; DocType = [string]$code; PartID = ''
-          ProjectID = [string]$Project.project_id; Process = [string]$Project.process
-          Step = ([string]$Project.process + '-' + [string]$s.step_id)
-        })
-        if (-not $lv.Count) { continue }
-        $dir = (@($EvidenceDir) + $lv) -join '\'
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null; $made++ }
+        foreach ($cv in $combos) {
+          $vals = @{
+            Model = [string]$Project.family; DocType = [string]$code; PartID = ''
+            ProjectID = [string]$Project.project_id; Process = [string]$Project.process
+            Step = ([string]$Project.process + '-' + [string]$s.step_id)
+          }
+          foreach ($ck in $cv.Keys) { $vals[$ck] = [string]$cv[$ck] }
+          $lv = @(Resolve-EvidenceLevels -Config $cfg -Values $vals)
+          if (-not $lv.Count) { continue }
+          $dir = (@($EvidenceDir) + $lv) -join '\'
+          if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null; $made++ }
+        }
       }
     }
   } catch { Write-Log ('Project folders not created for ' + [string]$Project.project_id + ' - ' + $_.Exception.Message) 'WARN' }
@@ -4095,7 +4144,7 @@ try {
         New-JsonResponse -Response $res -StatusCode 200 -Body @{
           config = $cfg; tracking = (Get-AllTracking)
           session = (Get-SessionInfo $sess)
-          folder_levels = @(Get-EvidenceLevels $cfg); folder_tokens = $EvidenceLevelTokens
+          folder_levels = @(Get-EvidenceLevels $cfg); folder_tokens = @(Get-EvidenceTokens $cfg); folder_custom = @(Get-CustomFieldDefs $cfg)
           paths = @{ root = $RootDir; vault = $EvidenceDir; templates = $TemplatesDir }
           storage = @{ mode = 'journal'; writer = $WriterId; tag = $WriterTag; warnings = @($script:StorageWarnings.Values) }
         }
@@ -4816,7 +4865,21 @@ try {
           New-JsonResponse -Response $res -StatusCode 403 -Body @{ error = 'Only the admin user can change the folder structure.' }
         } else {
           $levels = @(ConvertTo-List $body.levels | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-          $errs = @(Test-EvidenceLevels $levels)
+          # v12.5: custom metadata levels - [FG_ID] and the like - are fields the
+          # admin defines here; each becomes a token and an input on the Register
+          # a Project form (value kept in lb_projects.custom_fields).
+          $cfDefs = New-Object System.Collections.Generic.List[object]
+          $cfErrs = @()
+          foreach ($cf in @(ConvertTo-List $body.custom_fields)) {
+            $ck = ([string]$cf.key).Trim(); $cl = ([string]$cf.label).Trim()
+            if ($ck -notmatch '^[A-Za-z][A-Za-z0-9_]{0,23}$') { $cfErrs += ("Custom field key '" + $ck + "' must start with a letter and use only letters, digits and _ (max 24).") ; continue }
+            if ($EvidenceLevelTokens -contains $ck -or @($cfDefs | Where-Object { $_.key -ieq $ck }).Count) { $cfErrs += ("Custom field '" + $ck + "' is already a token.") ; continue }
+            if (-not $cl) { $cl = $ck }
+            $cfDefs.Add([pscustomobject]@{ key = $ck; label = $cl })
+          }
+          if ($cfDefs.Count -gt 6) { $cfErrs += 'Use at most 6 custom fields.' }
+          $tokensNow = @($EvidenceLevelTokens) + @($cfDefs | ForEach-Object { $_.key })
+          $errs = @($cfErrs) + @(Test-EvidenceLevels $levels $tokensNow)
           if ($errs.Count) {
             New-JsonResponse -Response $res -StatusCode 400 -Body @{ error = ($errs -join ' '); errors = $errs }
           } else {
@@ -4824,6 +4887,7 @@ try {
             $before = (Get-EvidenceLevels $cfg) -join '\'
             $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_folder_levels -NotePropertyValue $levels -Force
             $cfg.deployment_defaults | Add-Member -NotePropertyName evidence_folder_pattern -NotePropertyValue ($levels -join '\') -Force
+            $cfg | Add-Member -NotePropertyName folder_structure -NotePropertyValue ([pscustomobject]@{ levels = $levels; custom_fields = $cfDefs.ToArray() }) -Force
             Save-Config $cfg
             Add-Audit -User $actor -Action 'Config_FolderStructure_Update' -ProjectId '' -ObjType 'Config' -ObjId 'evidence_folder_levels' -From $before -To ($levels -join '\') -Detail 'Applies to new uploads'
             New-JsonResponse -Response $res -StatusCode 200 -Body @{ ok = $true; levels = $levels }
@@ -5049,7 +5113,20 @@ try {
                                         -PrfDate $body.prf_date -Config (Get-Config)
         }
 
+        # v12.5: values of the admin's custom folder fields ([FG_ID] ...), kept
+        # as JSON {"KEY":["v1","v2"]} - only keys the admin has defined.
+        $cfJson = ''
+        $cfVals = [ordered]@{}
+        foreach ($cd in (Get-CustomFieldDefs (Get-Config))) {
+          $k = [string]$cd.key
+          if ($body.custom -and $body.custom.PSObject.Properties[$k]) {
+            $vv = @(@($body.custom.$k) | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+            if ($vv.Count) { $cfVals[$k] = $vv }
+          }
+        }
+        if ($cfVals.Count) { $cfJson = ($cfVals | ConvertTo-Json -Compress -Depth 4) }
         $row = @{
+          custom_fields = $cfJson
           process = $body.process; prod_family = $body.prod_family; family = $famId
           class_abcde = $body.class_abcde; target_date = $target_date; certifications = $certs
           prf_date = $body.prf_date; market_manager = $body.market_manager; country = $body.country
@@ -5057,7 +5134,7 @@ try {
           created_utc = $now; updated_utc = $now; notes = $body.notes
         }
         $saved = Add-StoreRow -Store 'lb_projects' -IdField 'project_id' -IdCandidate $candidate -Row $row
-        $null = New-ProjectFolders -Project ([pscustomobject]@{ process = [string]$body.process; family = $famId; project_id = [string]$saved.project_id })
+        $null = New-ProjectFolders -Project ([pscustomobject]@{ process = [string]$body.process; family = $famId; project_id = [string]$saved.project_id; custom_fields = $cfJson })
         Add-Audit -User $body.created_by -Action 'Create_Project' -ProjectId $saved.project_id -ObjType 'Project' -ObjId $saved.project_id -From '' -To 'Active' -Detail ('Type ' + $body.class_abcde + ' · target ' + $target_date)
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved
       }
@@ -5589,10 +5666,21 @@ try {
           $upProj = @(Read-Store 'lb_projects' | Where-Object { $_.project_id -eq [string]$body.projectId }) | Select-Object -First 1
           if ($upProj) { $procId = [string]$upProj.process }
         }
-        $levelNames = @(Resolve-EvidenceLevels -Config $upCfg -Values @{
+        $upVals = @{
           Model = [string]$body.family; DocType = [string]$body.docType; PartID = [string]$body.partId
           ProjectID = [string]$body.projectId; Process = $procId; Step = [string]$body.stepKey
-        })
+        }
+        # v12.5: custom levels. The browser may name the value (body.custom);
+        # otherwise the project's own value when it has exactly one. Several
+        # values and no choice, or none at all, leave the level out of the path.
+        $upPv = if ($upProj) { Get-ProjectCustomValues $upProj } else { @{} }
+        foreach ($cd in (Get-CustomFieldDefs $upCfg)) {
+          $ck = [string]$cd.key; $cv = ''
+          if ($body.custom -and $body.custom.PSObject.Properties[$ck] -and ([string]$body.custom.$ck).Trim()) { $cv = ([string]$body.custom.$ck).Trim() }
+          elseif (@($upPv[$ck]).Count -eq 1) { $cv = [string]@($upPv[$ck])[0] }
+          $upVals[$ck] = $cv
+        }
+        $levelNames = @(Resolve-EvidenceLevels -Config $upCfg -Values $upVals)
         $saved = Save-Evidence -DocType $body.docType -Family $body.family -PartId $body.partId -FileName $stdName -Bytes $bytes -LevelNames $levelNames
         $saved | Add-Member -NotePropertyName originalName -NotePropertyValue $original -Force
         New-JsonResponse -Response $res -StatusCode 200 -Body $saved

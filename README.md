@@ -653,7 +653,15 @@ Versions v3.6 – v10 are recorded in `git log` (commit subjects start `vX:`) an
   no owner, overdue first, then nearest - with a person picker + Assign per row and tick boxes + **Assign selected** for one person.
 - **Gantt week width:** Compact / Normal / Wide / Extra-wide (remembered per browser); the chart scrolls sideways when wide, and the
   month / quarter / year header follows the width.
-- Test: `tests/v12_5/e2e_folders_claims_names.js`.
+- **Custom folder levels:** Settings -> Common vault folder structure lets the admin define extra fields (key such as `FG_ID`,
+  label such as "Finished Goods IDs"; max 6) next to `[Model] [Process] [ProjectID] [Step] [DocType] [PartID]`. They are saved in
+  `config.folder_structure.custom_fields` (levels mirrored in `folder_structure.levels`), appear as `+ [FG_ID]` buttons, and the
+  folder preview redraws as levels are added, removed or reordered. Register a project then shows one input per custom field (comma
+  separated for several values); the values are kept in the project record (`lb_projects.custom_fields`, JSON). Provisioning builds
+  one folder set per value; a document is filed under the value named by the caller (`custom` in `/api/upload`) or the project's
+  only value; several values with no choice, or none, leave that level out of the path. Hand-dropped files are recognised with or
+  without the custom level. Not covered: the CSV batch import has no custom columns.
+- Tests: `tests/v12_5/e2e_folders_claims_names.js`, `tests/v12_5/e2e_custom_levels.js`.
 
 ### v12.4 delete projects, new Gantt look (2026-10-23)
 
